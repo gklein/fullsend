@@ -206,6 +206,41 @@ Any intent system needs to survive attack:
 - **Tier gaming** — attacker frames a strategic change as a tactical bug fix to avoid the higher approval bar. The review agent must independently assess change scope.
 - **Intent composition** — three small "tactical" changes that individually look innocuous but together constitute an unauthorized feature. Detection requires cross-change awareness.
 
+## The tier escalation problem
+
+Tiering is necessary, but it introduces a specific weakness: low-tier changes have lightweight intent requirements, which creates an incentive to disguise high-impact changes as low-impact ones.
+
+### How this happens today (without agents)
+
+This is already a common pattern in human-driven development. A user expects the system to behave a certain way and reports the gap as a "bug" when — to the system owners — it's actually a feature request. The system never intended to do that thing. The user frames it as "this is broken" when the real ask is "please add this capability."
+
+Experienced maintainers catch this: "That's not a bug, that's a feature request — let's discuss whether we actually want that." But this judgment requires understanding the system's intended behavior, not just its current behavior.
+
+### How it gets worse with agents
+
+An agent processing a "bug report" at Tier 1 (lightweight intent, just needs an issue) might:
+
+- Implement a significant behavioral change because the issue describes it as a fix
+- Add new API surface under the guise of "fixing" missing functionality
+- Change security-relevant behavior because the reporter framed a policy decision as a defect
+
+The agent is technically responsive to the issue, but it's implementing something that should have gone through Tier 2 authorization.
+
+### Defense: independent tier classification by review agents
+
+Review agents must independently assess what tier a change *actually* represents, regardless of how the author or issue classifies it. This means:
+
+- **Scope analysis** — does this change add new behavior, or fix existing behavior? Adding new API endpoints is not a bug fix, even if the issue says "bug."
+- **Impact analysis** — does this change affect security, UX, or API surface? If so, it's at least Tier 2 regardless of the issue label.
+- **Intent verification** — does the linked issue actually describe what this PR does? A PR that goes beyond its linked issue is suspect.
+- **Pattern detection** — multiple "small" changes from the same source that collectively add up to a feature should trigger escalation.
+
+This applies equally to review agents looking at code PRs *and* to agents evaluating intent changes in the intent repo itself. A low-tier intent statement that describes something high-impact should be flagged and escalated.
+
+### The philosophical question
+
+This is really about who defines "bug" vs. "feature." Today, human maintainers hold that authority through institutional knowledge of what the system is *supposed* to do. In an agentic system, this knowledge needs to be explicitly represented somewhere — which circles back to the declarative intent approach (Approach 4) as a complement to the tiered model. Standing descriptions of intended system behavior give review agents a baseline to evaluate whether a "bug fix" is really adding new behavior.
+
 ## Most promising direction
 
 The combination of **Approach 1 (git as intent ledger) + Approach 2 (tiered intent)** appears strongest:
