@@ -53,8 +53,9 @@ Test coverage is necessary but not sufficient. For agents to merge autonomously,
 - **Integration and e2e tests** — unit tests catch local bugs; integration tests catch system-level regressions
 - **Linting and formatting in CI** — prevents agent style drift
 - **Clear CI signals** — tests must be reliable (no flaky tests that train agents to ignore failures)
-- **CLAUDE.md or equivalent** — agents need codebase context to work effectively
+- **CLAUDE.md or equivalent** — agents need codebase context to work effectively (see [codebase-context.md](codebase-context.md) for what makes context files effective)
 - **CODEOWNERS** — defines the human-required approval paths
+- **Language properties** — type safety, tooling ecosystem, and deployment simplicity affect how effectively agents can operate (see [agent-compatible-code.md](agent-compatible-code.md))
 
 ## Diagnostic tooling
 
