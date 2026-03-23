@@ -170,7 +170,13 @@ Analogous to mutation testing for code: systematically introduce small changes t
 
 The approaches above aren't purely theoretical — an emerging class of LLM evaluation tools already implements parts of them. None covers the full problem space, but they provide a starting point and avoid building everything from scratch.
 
-### promptfoo
+An important distinction surfaced by [Experiment 004](../../experiments/promptfoo-eval/README.md): **most eval frameworks test prompts, not agents.** They send a single prompt to a model API, get a single response, and score it. They do not run an agent loop with tool calls, multi-turn reasoning, or environment interaction. Testing prompts in isolation is necessary but not sufficient — an agent can pass every prompt-level test and still fail in practice when its prompt interacts with real tool outputs, long context, or multi-agent composition. The framework landscape splits accordingly into prompt testers, agent runners, and input generators.
+
+### Prompt evaluation (unit-test layer)
+
+These tools test single prompt/response pairs. They are useful for regression testing agent instructions — catching cases where a prompt edit breaks a known capability — but they do not test agents as agents.
+
+#### promptfoo
 
 [promptfoo](https://www.promptfoo.dev/) is an open-source eval framework built around YAML-defined test cases, assertions, and comparison reports. It's the closest match to the golden-set and CI pipeline patterns described above:
 
@@ -179,19 +185,22 @@ The approaches above aren't purely theoretical — an emerging class of LLM eval
 - Has a red-teaming mode that generates adversarial inputs, relevant to the adversarial evaluation step in the CI pipeline
 - Designed for CI integration, producing machine-readable output
 
-The main gap: promptfoo evaluates single prompts against single outputs. It doesn't natively model multi-agent composition or cross-agent interaction effects. Testing whether the Intent Alignment Agent and Correctness Agent together produce correct outcomes would require custom harness code on top.
+Under the hood, promptfoo makes direct HTTP calls to model provider APIs. Each test case is a single prompt-in, response-out API call. There is no agent loop, no tool use, no multi-turn conversation. See [Experiment 004](../../experiments/promptfoo-eval/README.md) for detailed findings from running promptfoo against a PR scope classifier.
 
-### deepeval
+**Note:** promptfoo has been acquired by OpenAI. Implications for the open-source project's future are unclear.
+
+#### deepeval
 
 [deepeval](https://docs.confident-ai.com/) is a Python-native eval library with built-in metrics (answer relevancy, faithfulness, hallucination, bias) and a pytest integration. Its distinguishing feature is statistical rigor:
 
 - Supports confidence intervals and minimum-sample-size calculations, directly addressing the non-determinism problem — instead of picking an arbitrary "run it 100 times" threshold, deepeval can compute how many runs are needed for a given confidence level
 - Metrics are composable, so you can define multi-dimensional pass criteria (e.g., "must be relevant AND must not hallucinate file paths")
 - The pytest integration means eval suites look like normal test suites, which lowers the adoption barrier for teams already testing in Python
+- Has explicit "Agentic Metrics" (Task Completion, Tool Correctness, Goal Accuracy, Step Efficiency, Plan Adherence) — but these score agent *traces*, they don't run agents
 
 The main gap: deepeval's built-in metrics are oriented toward conversational AI (relevancy, faithfulness to a source document). Evaluating whether a review agent correctly detected tier escalation requires custom metrics — the framework supports this, but the useful metrics would need to be written.
 
-### lightspeed-evaluation
+#### lightspeed-evaluation
 
 [lightspeed-evaluation](https://github.com/instructlab/lightspeed-evaluation) is an evaluation framework from the InstructLab project, focused on validating AI assistant behavior against expected task completions. It's worth noting because of its proximity to the Red Hat ecosystem that konflux-ci operates in:
 
@@ -200,22 +209,77 @@ The main gap: deepeval's built-in metrics are oriented toward conversational AI 
 
 The main gap: lightspeed-evaluation is oriented toward conversational assistants rather than code review agents. Adapting it to evaluate PR review decisions would require significant extension. Its relevance is more as a reference for evaluation methodology than a drop-in tool.
 
-### Input expansion from seed sets
+### Agent evaluation (integration-test layer)
 
-A shared capability across these tools — and arguably their most practical one for bootstrapping agent testing — is automated input mutation. Given a small set of (input, expected output) pairs, the tools can generate dozens or hundreds of variations: rephrased inputs, edge-case perturbations, adversarial rewrites. The agent is scored against the full expanded corpus, not just the originals.
+These tools actually run agents — including tool-calling, multi-turn agents — and evaluate their end-to-end outcomes. This is the layer that prompt evaluation tools cannot reach.
 
-This directly addresses the golden-set bootstrapping problem. Instead of hand-crafting hundreds of test cases, a team writes 10–20 seed cases per capability and lets the framework expand them. The expansion can be deterministic (template-based substitution) or LLM-generated (semantic paraphrasing, adversarial mutation). promptfoo's red-teaming mode and deepeval's synthetic data generation both support this pattern.
+#### Inspect AI (UK AISI)
 
-The CI integration is natural: establish a minimum passing score (e.g., "the agent must score ≥ 90% on the expanded tier-escalation corpus") and gate instruction changes on meeting that threshold. This is more robust than binary pass/fail on a handful of golden cases — a score-based gate absorbs non-determinism by treating occasional failures as acceptable within a statistical envelope, while still catching systematic regressions that push the score below the threshold.
+[Inspect AI](https://inspect.ai-safety-institute.org.uk/) is an open-source framework from the UK AI Safety Institute. It is the only framework we found that can run an arbitrary CLI-based agent inside a sandboxed container and evaluate its outcomes:
+
+- **Agent Bridge.** `sandbox_agent_bridge()` runs CLI agents (Claude Code, Codex CLI, and by extension OpenCode) inside Docker/K8s containers. The agent talks to an intercepted API on localhost. You configure a Dockerfile for your agent, point it at the bridge, and run it. This is designed exactly for testing opaque agent runtimes.
+- **LLM-as-judge.** Built-in `model_graded_fact()`, `model_graded_qa()`, and custom model-graded scorers. First-class feature, not bolted on.
+- **Statistical evaluation.** Run evaluations over datasets with many samples, parallel execution, dataframe extraction for analysis.
+- **CI-native.** CLI-driven (`inspect eval`), produces structured logs, configurable parallelism. Designed to run headlessly.
+- **Community momentum.** METR (the leading AI safety evaluation org) is migrating from their own Vivaria platform to Inspect.
+- MIT license, actively maintained.
+
+The main gap: Inspect does not generate test inputs. It only consumes datasets. You bring your own test cases.
+
+#### METR Vivaria
+
+[Vivaria](https://github.com/METR/vivaria) is METR's own tool for running agent evaluations. It runs agents inside Docker containers against METR Task Standard tasks. However, METR explicitly recommends new projects use Inspect AI instead, and is transitioning their own work to Inspect. Heavy infrastructure (PostgreSQL, Docker, web UI), designed for safety research rather than CI.
+
+### Input mutation (test generation layer)
+
+These tools generate test case variations from seeds or produce adversarial inputs. They address the golden-set bootstrapping problem: instead of hand-crafting hundreds of test cases, write 10-20 seed cases per capability and let the framework expand them.
+
+#### DeepEval Synthesizer
+
+DeepEval's `Synthesizer` class is the strongest tool for functional test expansion from seeds:
+
+- `generate_goldens_from_goldens()` takes existing test cases and produces variations using an Evol-Instruct technique with 7 evolution types: add reasoning complexity, add constraints, broaden scope, make abstract questions specific, add comparisons, introduce hypotheticals, require multi-context reasoning
+- Configurable via `EvolutionConfig` with evolution rounds and weighted distribution across types
+- Quality filtering via `FiltrationConfig` (self-containment + clarity scoring)
+- LLM-generated (not deterministic). Output can be exported as JSON/CSV for use with other frameworks
+
+#### DeepTeam
+
+[DeepTeam](https://docs.confident-ai.com/docs/red-teaming-introduction) (separate package from DeepEval) is a red-teaming framework with agent-specific vulnerability types:
+
+- 40+ vulnerability types including agent-specific ones: goal theft, recursive hijacking, excessive agency, autonomous agent drift, tool orchestration abuse, inter-agent communication compromise
+- 10+ attack methods: prompt injection, ROT13, jailbreaking, multi-turn attacks
+- Can generate and evaluate in one workflow, but only for security/adversarial testing
+
+#### promptfoo red-teaming
+
+promptfoo's `redteam generate` command is the strongest tool for adversarial input generation specifically:
+
+- 50+ vulnerability plugins, sophisticated attack strategy composition (jailbreak + encoding + multi-turn layering)
+- Compliance framework presets (OWASP LLM Top 10, NIST AI RMF, MITRE ATLAS)
+- Only generates security/adversarial test cases, not functional variations
 
 ### What the tools don't cover
 
-All three frameworks operate at the single-agent level — they evaluate one prompt against one output. The harder problems identified in this document remain open:
+The harder problems identified in this document remain open:
 
-- **Cross-agent composition testing** — no framework models the interaction between multiple agents reviewing the same PR
-- **Mutation testing for natural language** — no framework generates instruction mutations and checks whether the eval suite catches them (though an LLM could generate mutations and promptfoo or deepeval could run the evals)
+- **Cross-agent composition testing** — no framework models the interaction between multiple agents reviewing the same PR. Inspect AI can run one agent at a time; testing whether the Intent Alignment Agent and Correctness Agent together produce correct outcomes would require a custom harness.
+- **Mutation testing for natural language** — no framework generates instruction mutations and checks whether the eval suite catches them (though an LLM could generate mutations and the eval frameworks could run the evals)
 - **Absence detection** — the tools can verify that an agent does something correctly, but detecting that it silently stopped doing something requires the test author to have anticipated that capability in the first place
-- **LLM-as-judge trust** — all three rely on LLM-graded assertions at some level, which circles back to the open question of whether that just moves the trust problem rather than solving it
+- **LLM-as-judge trust** — all frameworks rely on LLM-graded assertions at some level, which circles back to the open question of whether that just moves the trust problem rather than solving it
+- **Environment mutation** — all existing mutation tools only mutate user inputs. None mutates the environment the agent operates in (tool responses, file contents, API responses). Agent failures in practice are often caused by unexpected tool outputs, not unusual user inputs. The equivalent of property-based testing (like Python's [Hypothesis](https://hypothesis.readthedocs.io/)) for agents — define properties, generate both inputs and environment states, shrink failing cases to minimal reproductions — does not exist.
+
+### Practical architecture
+
+No single tool covers the full workflow. The pragmatic answer is a pipeline:
+
+1. **Generate** functional test variations from seed cases — DeepEval Synthesizer
+2. **Generate** adversarial inputs — promptfoo `redteam generate` or DeepTeam
+3. **Transform** generated data into Inspect AI `Sample` format (simple JSON mapping)
+4. **Execute** using Inspect AI with `sandbox_agent_bridge()` (runs the actual agent in a container)
+5. **Score** using Inspect AI's model-graded scorers
+
+Prompt-level regression testing (via promptfoo or deepeval) remains useful as a fast, cheap unit-test layer that runs on every instruction change. But it is not sufficient for testing agents. The integration-test layer — actually running agents against controlled tasks and evaluating their behavior — is a separate concern that requires a separate tool (Inspect AI being the current best candidate).
 
 The tooling is maturing quickly — what's available today may look different in six months. Any choice should be held lightly and re-evaluated periodically.
 
