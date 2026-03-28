@@ -73,7 +73,7 @@ Repos may extend this set; names below are **semantic**, not prescriptive string
 | `not-reproducible` | Triage: enough information was available to attempt reproduction, but the reported bug **could not be reproduced** in the triage sandbox; **human intervention** is required. **No further automated processing** (no PR agent, no implementation/review pipeline) while this label is present. Applying this label **must** be accompanied by a **triage-output comment on the issue** that records **what was tried** (commands, versions, environment assumptions) and **how it failed** to match the report (e.g. expected symptom absent, wrong error, tests green, timeouts)—**do not** set **`not-reproducible`** without that comment |
 | `ready-for-coding` | Triage passed; implementation may proceed |
 | `ready-for-review` | PR agent finished implementation + checks; awaiting multi-agent review |
-| `ready-for-merge` | Review coordinator: **all** reviewers **unanimously** approved merge for this round (subject to branch protection / humans) |
+| `ready-for-merge` | Review coordinator: **all** reviewers **unanimously** approved merge **for the PR head SHA at the end of that review round** (subject to branch protection / humans). The label **must not** remain set across a **new** review round or a **new** PR head without a **fresh** unanimous round—see Phase C (**When a review run starts**). Downstream automation and humans should treat **`ready-for-merge`** as **invalid** unless it reflects the **current** head after the **latest** completed review round |
 | `requires-manual-review` | Review coordinator: reviewers **did not** unanimously agree to merge (split vote, conflicting conclusions, or conflicting **security severities**); **humans** must decide next steps |
 
 **Mutual exclusion:** Implementation should enforce consistent label sets (e.g. removing `ready-for-coding` when setting `ready-for-review`). An issue marked **`duplicate`** must **not** carry **`ready-for-coding`**, **`ready-for-review`**, **`ready-for-merge`**, or **`requires-manual-review`**. An issue marked **`not-reproducible`** must **not** carry **`ready-for-coding`**, **`ready-for-review`**, **`ready-for-merge`**, or **`requires-manual-review`** — automation stops until humans resolve the situation or triage runs again (see Phase A). **`not-reproducible`** and **`not-ready`** should **not** be applied together (triage picks one outcome per pass). **`ready-for-merge`** and **`requires-manual-review`** must **not** be applied together on the same issue/PR.
@@ -157,7 +157,7 @@ It **does not** read the **issue comment thread** for intake decisions—no scan
 2. **`/review`** in a comment.
 3. **PR synchronize** (push to the PR branch)—**re-review** per policy below.
 
-**When a review run starts:** **remove** **`ready-for-review`**. Reviewers evaluate the current PR head; the coordinator applies outcomes using the algorithm below.
+**When a review run starts** (initial review, **`/review`**, or **push-triggered re-review**): **remove** **`ready-for-review`** **and** **`ready-for-merge`**. A new round **supersedes** any prior merge verdict until the coordinator finishes this round—otherwise **`ready-for-merge`** could describe an **old** head after the author **pushed** new commits, which is **unsafe** for bots and humans. Reviewers evaluate the **current** PR head; the coordinator applies outcomes using the algorithm below. (**`requires-manual-review`** is **not** removed here by default—humans may still need to resolve an earlier split verdict unless **repo policy** clears it when enqueueing a new round.)
 
 **Review swarm:**
 
@@ -175,13 +175,13 @@ It **does not** read the **issue comment thread** for intake decisions—no scan
 **Outcomes:**
 
 - **Changes requested** (coordinator maps to unanimous rework): Coordinator comment documents issues; remove **`ready-for-review`**, add **`ready-for-coding`** so the PR agent can resume; clear **`requires-manual-review`** if set.
-- **Unanimous merge:** Add **`ready-for-merge`** (and remove **`ready-for-review`**). Actual merge may still require **human approval**, merge queue, or bot merge permission per [governance](../problems/governance.md) — this ADR only defines **agent-visible** labels.
+- **Unanimous merge:** Add **`ready-for-merge`** (and remove **`ready-for-review`**). This label applies **only** to the **PR head SHA** the reviewers just evaluated in **this** round. Actual merge may still require **human approval**, merge queue, or bot merge permission per [governance](../problems/governance.md) — this ADR only defines **agent-visible** labels.
 - **Requires manual review:** Add **`requires-manual-review`** (and remove **`ready-for-review`**); do **not** add **`ready-for-merge`**.
 
 **Re-review policy:**
 
-- **On every push** to the PR head while the change is **in the review stage** (implementation has handed off to review; automation tracks round state—the **`ready-for-review`** label may already have been **cleared** when the current round **started**): **automatically** enqueue a **new** multi-agent review round (same N, new coordinator selection). This keeps review aligned with the latest diff without waiting for humans.
-- **On demand:** **`/review`** in a comment **also** enqueues a review round (re-run or extra pass). **Both** apply: pushes trigger re-review **and** maintainers can force a round via **`/review`** even without a new push.
+- **On every push** to the PR head while the change is **in the review stage** (implementation has handed off to review; automation tracks round state—the **`ready-for-review`** label may already have been **cleared** when the current round **started**): **automatically** enqueue a **new** multi-agent review round (same N, new coordinator selection). **When that round starts**, **`ready-for-merge`** is cleared together with **`ready-for-review`** (see **When a review run starts**), so merge approval is **never** left pointing at a **superseded** head SHA. This keeps review aligned with the latest diff without waiting for humans.
+- **On demand:** **`/review`** in a comment **also** enqueues a review round (re-run or extra pass). **Both** apply: pushes trigger re-review **and** maintainers can force a round via **`/review`** even without a new push. A **`/review`**-triggered round **also** clears **`ready-for-merge`** at **start**, so an extra review pass invalidates the previous unanimous verdict until the new round completes.
 
 ### Phase D — Post-merge flow trace
 
@@ -263,7 +263,7 @@ Static/dynamic analysis hooks, policy packs, output schema. ([Architecture](../a
 
 ### 12. Coordinator merge algorithm
 
-Random coordinator selection; **unanimous** approve-merge → **`ready-for-merge`**; **unanimous** rework → **`ready-for-coding`**; **split or conflicting severities** → **`requires-manual-review`**; consolidated comment schema. ([Architecture](../architecture.md#12-coordinator-merge-algorithm))
+Random coordinator selection; **unanimous** approve-merge → **`ready-for-merge`** (scoped to **current** PR head for that round); **review run start** clears **`ready-for-merge`** with **`ready-for-review`** so pushes do not leave stale merge approval; **unanimous** rework → **`ready-for-coding`**; **split or conflicting severities** → **`requires-manual-review`**; consolidated comment schema. ([Architecture](../architecture.md#12-coordinator-merge-algorithm))
 
 ### 13. Observability
 
