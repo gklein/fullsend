@@ -32,7 +32,7 @@ Model Armor only detected the crude, obvious injection ("ignore all previous ins
 
 **Payload:** `hidden-injection.txt` — injection buried in `<!-- HTML comment -->`
 
-Model Armor does not parse HTML or Markdown structure. Instructions hidden in comments, collapsed sections, or other markup constructs are invisible to the classifier. In the GitHub issue context, HTML comments are a natural hiding place since they render as invisible in the UI.
+Model Armor's classifier does not preprocess HTML or Markdown structure — demonstrated by this payload, where instructions placed inside `<!-- -->` HTML comments passed the scan as `CLEAN` but were successfully processed by the LLM. Google's [API reference](https://cloud.google.com/security-command-center/docs/reference/model-armor/rest/v1/projects.locations.templates/sanitizeUserPrompt) accepts a plain text `DataItem` and lists explicit parsing support for PDFs, DOCX, XLSX, etc., but does not list HTML or Markdown as supported formats. In the GitHub issue context, HTML comments are a natural hiding place since they render as invisible in the UI.
 
 ### Limitation 2: No semantic intent analysis
 

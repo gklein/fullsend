@@ -78,7 +78,7 @@ Results are written to `results/` with timestamped directories containing:
 
 **Model Armor limitations (25% detection rate):**
 
-- **Missed HTML comment injection** — no HTML/Markdown-aware preprocessing; instructions hidden in `<!-- -->` are invisible to the classifier
+- **Missed HTML comment injection** — classifier does not preprocess HTML/Markdown structure; instructions inside `<!-- -->` passed as `CLEAN` but were processed by the LLM
 - **Missed social engineering** — no semantic intent analysis; the fake "security audit" framing contained no explicit injection language
 - **Missed multi-stage attack** — no task-boundary detection; an adversarial task appended to a legitimate request passes as clean
 - **Already at max sensitivity** (`LOW_AND_ABOVE`) — no additional knobs to improve coverage; the misses are architectural
