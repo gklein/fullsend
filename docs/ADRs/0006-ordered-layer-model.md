@@ -1,5 +1,5 @@
 ---
-title: "5. Ordered layer model for install, uninstall, and analyze"
+title: "6. Ordered layer model for install, uninstall, and analyze"
 status: Accepted
 relates_to:
   - agent-infrastructure
@@ -9,7 +9,7 @@ topics:
   - idempotency
 ---
 
-# 5. Ordered layer model for install, uninstall, and analyze
+# 6. Ordered layer model for install, uninstall, and analyze
 
 Date: 2026-04-02
 

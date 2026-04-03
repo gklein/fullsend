@@ -1,5 +1,5 @@
 ---
-title: "4. Forge abstraction layer"
+title: "5. Forge abstraction layer"
 status: Accepted
 relates_to:
   - agent-infrastructure
@@ -10,7 +10,7 @@ topics:
   - interfaces
 ---
 
-# 4. Forge abstraction layer
+# 5. Forge abstraction layer
 
 Date: 2026-04-02
 

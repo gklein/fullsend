@@ -1,5 +1,5 @@
 ---
-title: "8. Use pull_request_target in shim workflows"
+title: "9. Use pull_request_target in shim workflows"
 status: Accepted
 relates_to:
   - security-threat-model

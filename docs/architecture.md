@@ -16,10 +16,10 @@ Infrastructure platform choice and configuration are specified in the adopting o
 
 **Decided:**
 
-- Forge abstraction: all forge operations go through the `forge.Client` interface, keeping the rest of the codebase forge-agnostic ([ADR 0004](ADRs/0004-forge-abstraction-layer.md)).
-- Installation model: ordered layer stack (install forward, uninstall reverse, analyze for status reporting) with idempotent operations ([ADR 0005](ADRs/0005-ordered-layer-model.md)).
-- Cross-repo dispatch: `workflow_dispatch` with an org-level dispatch token replaces `workflow_call`, keeping App PEM secrets in the config repo ([ADR 0007](ADRs/0007-workflow-dispatch-for-cross-repo-dispatch.md)).
-- Shim workflow security: `pull_request_target` prevents PR authors from modifying the shim to exfiltrate the dispatch token ([ADR 0008](ADRs/0008-pull-request-target-in-shim-workflows.md)).
+- Forge abstraction: all forge operations go through the `forge.Client` interface, keeping the rest of the codebase forge-agnostic ([ADR 0005](ADRs/0005-forge-abstraction-layer.md)).
+- Installation model: ordered layer stack (install forward, uninstall reverse, analyze for status reporting) with idempotent operations ([ADR 0006](ADRs/0006-ordered-layer-model.md)).
+- Cross-repo dispatch: `workflow_dispatch` with an org-level dispatch token replaces `workflow_call`, keeping App PEM secrets in the config repo ([ADR 0008](ADRs/0008-workflow-dispatch-for-cross-repo-dispatch.md)).
+- Shim workflow security: `pull_request_target` prevents PR authors from modifying the shim to exfiltrate the dispatch token ([ADR 0009](ADRs/0009-pull-request-target-in-shim-workflows.md)).
 
 **Open questions:**
 
@@ -77,11 +77,11 @@ Identity is not the same as trust. An agent's identity lets it authenticate to e
 
 **Decided:**
 
-- Per-role GitHub Apps with manifest-based creation. Each agent role gets its own app with scoped permissions. PEMs stored as repo secrets on `.fullsend` ([ADR 0006](ADRs/0006-per-role-github-apps.md)).
+- Per-role GitHub Apps with manifest-based creation. Each agent role gets its own app with scoped permissions. PEMs stored as repo secrets on `.fullsend` ([ADR 0007](ADRs/0007-per-role-github-apps.md)).
 
 **Open questions:**
 
-- ~~What identity model fits best — separate bot accounts per agent role, a single bot account with role metadata, GitHub App installations, or something else?~~ Decided in [ADR 0006](ADRs/0006-per-role-github-apps.md).
+- ~~What identity model fits best — separate bot accounts per agent role, a single bot account with role metadata, GitHub App installations, or something else?~~ Decided in [ADR 0007](ADRs/0007-per-role-github-apps.md).
 - How are credentials rotated and revoked, and who has authority to do that?
 - Does the identity provider integrate with existing secrets management, or is it a new system?
 - How will per-role identity work on GitLab and Forgejo, which lack GitHub's app manifest flow?

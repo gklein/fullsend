@@ -1,5 +1,5 @@
 ---
-title: "6. Per-role GitHub Apps with manifest-based creation"
+title: "7. Per-role GitHub Apps with manifest-based creation"
 status: Accepted
 relates_to:
   - agent-architecture
@@ -10,7 +10,7 @@ topics:
   - least-privilege
 ---
 
-# 6. Per-role GitHub Apps with manifest-based creation
+# 7. Per-role GitHub Apps with manifest-based creation
 
 Date: 2026-04-02
 

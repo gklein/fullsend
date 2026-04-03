@@ -1,5 +1,5 @@
 ---
-title: "7. workflow_dispatch for cross-repo agent dispatch"
+title: "8. workflow_dispatch for cross-repo agent dispatch"
 status: Accepted
 relates_to:
   - agent-infrastructure
@@ -10,7 +10,7 @@ topics:
   - workflows
 ---
 
-# 7. workflow_dispatch for cross-repo agent dispatch
+# 8. workflow_dispatch for cross-repo agent dispatch
 
 Date: 2026-04-02
 
