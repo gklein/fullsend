@@ -17,8 +17,8 @@ inputs:
     default: github
   version:
     description: >-
-      Release tag for https://github.com/fullsend-ai/fullsend/releases/download/<version>/…,
-      or latest for …/releases/latest/download/….
+      Release tag or version: use latest, v0.0.1, or 0.0.1. Download URLs use a leading v; asset
+      names use the version without v (fullsend_0.0.1_linux_amd64.tar.gz).
     default: latest
 
 runs:
@@ -32,31 +32,54 @@ runs:
         RUNNER_ARCH: ${{ runner.arch }}
       run: |
         set -euo pipefail
+        VERSION="$(printf '%s' "${VERSION:-latest}" | tr -d '[:space:]')"
+        VERSION="${VERSION:-latest}"
+
         os="$(echo "${RUNNER_OS}" | tr '[:upper:]' '[:lower:]')"
         case "${os}" in
           macos) os=darwin ;;
         esac
+
         arch="$(echo "${RUNNER_ARCH}" | tr '[:upper:]' '[:lower:]')"
         case "${arch}" in
           x64) arch=amd64 ;;
           x86) arch=386 ;;
-          arm) arch=arm ;;
+          arm64|aarch64) arch=arm64 ;;
         esac
-        ASSET_NAME="fullsend-cli-${os}-${arch}.tgz"
-        VERSION="$(printf '%s' "${VERSION:-latest}" | tr -d '[:space:]')"
-        VERSION="${VERSION:-latest}"
+
         if [[ "${VERSION}" == "latest" ]]; then
-          # Note the extra /download/ in the latest redirect path
-          BASE_URL="https://github.com/fullsend-ai/fullsend/releases/latest/download"
+          TAG="$(curl -fsSL -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/fullsend-ai/fullsend/releases/latest" | jq -r '.tag_name')"
+          if [[ -z "${TAG}" || "${TAG}" == "null" ]]; then
+            echo "::error::Could not resolve latest release tag"
+            exit 1
+          fi
+          if [[ "${TAG}" == v* ]]; then
+            VERSION_URL="${TAG}"
+            VERSION_ASSET="${TAG#v}"
+          else
+            VERSION_URL="v${TAG}"
+            VERSION_ASSET="${TAG}"
+          fi
+          BASE_URL="https://github.com/fullsend-ai/fullsend/releases/download/${VERSION_URL}"
         else
-          BASE_URL="https://github.com/fullsend-ai/fullsend/releases/download/${VERSION}"
+          if [[ "${VERSION}" == v* ]]; then
+            VERSION_URL="${VERSION}"
+            VERSION_ASSET="${VERSION#v}"
+          else
+            VERSION_URL="v${VERSION}"
+            VERSION_ASSET="${VERSION}"
+          fi
+          BASE_URL="https://github.com/fullsend-ai/fullsend/releases/download/${VERSION_URL}"
         fi
+
+        ASSET_NAME="fullsend_${VERSION_ASSET}_${os}_${arch}.tar.gz"
         URL="${BASE_URL}/${ASSET_NAME}"
 
         echo "Downloading from: ${URL}"
-        curl -fsSL "$URL" -o /tmp/${ASSET_NAME}
+        curl -fsSL "$URL" -o "/tmp/${ASSET_NAME}"
         mkdir -p "${RUNNER_TEMP}/fullsend"
-        tar -xzf /tmp/${ASSET_NAME} -C "${RUNNER_TEMP}/fullsend"
+        tar -xzf "/tmp/${ASSET_NAME}" -C "${RUNNER_TEMP}/fullsend"
         echo "${RUNNER_TEMP}/fullsend" >> "${GITHUB_PATH}"
 
     - name: Run fullsend
