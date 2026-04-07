@@ -163,6 +163,8 @@ No agent orchestrates other agents. Each agent independently observes the state 
 
 The "coordination logic" is the repository's branch protection configuration — not an LLM making judgment calls about when to proceed.
 
+This principle aligns with what Yegge's Gas City project calls "Zero Framework Cognition" (ZFC): the orchestration layer should handle mechanics only, while all judgment is deferred to the LLM via prompts. Gas City enforces this with a testable invariant — "does any line of Go contain a judgment call? If yes, it's a violation" — and extends it with the Bitter Lesson test: anything a smarter model would handle better from the prompt doesn't belong in the framework. (See [landscape.md](../landscape.md#gas-town--gas-city).) Fullsend's repo-as-coordinator model naturally satisfies ZFC: branch protection rules, CODEOWNERS, and status checks are deterministic infrastructure. The judgment happens in the review and implementation agents, mediated through GitHub's existing mechanisms. Note the architectural distinction: Gas City *does* have a controller process (reconciliation, health patrol), but enforces that it contain zero cognition. Fullsend's model goes further by eliminating the controller entirely and using the forge's native mechanisms instead.
+
 ### How agents communicate
 
 Agents interact through GitHub's existing mechanisms:

@@ -121,15 +121,34 @@ One-shot coding agents that merge over 1,300 pull requests per week at Stripe. A
 
 **Relevance to fullsend:** Stripe's deterministic-then-agentic pipeline pattern ("blueprints") is a concrete implementation of the hybrid approach we've been exploring. Their context prefetching (deterministic orchestrator before LLM invocation) and tool curation (subset of 500 tools per task) are practical solutions to the context management problem discussed in [codebase-context.md](problems/codebase-context.md). The bounded retry model provides a production-validated answer to our open question about stopping conditions. However, Minions are built for Stripe's proprietary codebase (hundreds of millions of lines of Ruby with internal libraries) — the approach requires significant internal tooling investment.
 
-### Gas Town
+### Gas Town / Gas City
 
-[GitHub](https://github.com/steveyegge/gastown) | [Architecture overview](https://cloudnativenow.com/features/gas-town-what-kubernetes-for-ai-coding-agents-actually-looks-like/)
+[Gas Town GitHub](https://github.com/steveyegge/gastown) | [Gas City GitHub](https://github.com/gastownhall/gascity) | [Architecture overview](https://cloudnativenow.com/features/gas-town-what-kubernetes-for-ai-coding-agents-actually-looks-like/)
 
-Steve Yegge's open-source multi-agent orchestration system, described as "Kubernetes for AI coding agents." Coordinates 20-30 parallel coding agents working on feature branches simultaneously.
+Steve Yegge's multi-agent orchestration system, evolved from Gas Town (the original monolith) to Gas City (an orchestration-builder SDK, v0.13, Go, 1,600+ commits). Gas Town coordinates 20-30 parallel coding agents working on feature branches simultaneously. Gas City extracts the reusable infrastructure into composable primitives.
 
-**Architecture:** A "Mayor" agent acts as the coordinator, dispatching work to parallel coding agents called "Polecats." A "Refinery" manages the merge queue so parallel work doesn't collide. Git is the persistence layer — if the system crashes, it reads the git history and resumes. This is a concrete implementation of the repo-as-coordination-layer pattern, though with a coordinator agent (which fullsend's model avoids).
+**Architecture:** Gas Town uses a "Mayor" agent as coordinator, dispatching work to parallel coding agents ("Polecats"). A "Refinery" manages the merge queue. Git is the persistence layer — if the system crashes, it reads git history and resumes.
 
-**Relevance to fullsend:** Gas Town's use of git as crash-recovery persistence validates the "repo is the coordinator" principle — all state is in git, not in ephemeral coordinator memory. However, it uses a coordinator agent (the Mayor), which conflicts with fullsend's position that coordination should happen through branch protection, CODEOWNERS, and status checks rather than through a coordinator agent. The Refinery merge queue concept is relevant to how we'd sequence autonomous merges.
+Gas City refactors this into 5 irreducible primitives (agent protocol, bead store, event bus, config, prompt templates) and 4 derived mechanisms (messaging, formulas/molecules, dispatch, health patrol). Each derived mechanism is provably composable from the primitives — no new infrastructure required. Strict layering invariant: Layer N never imports Layer N+1. The SDK contains zero hardcoded role names; all role behavior is user-supplied prompt configuration.
+
+**Zero Framework Cognition (ZFC):** The most distinctive design principle. The framework handles mechanics only (lifecycle, routing, persistence); ALL judgment is deferred to the LLM via prompts. Enforced through a [primitive test](https://github.com/gastownhall/gascity/blob/main/engdocs/contributors/primitive-test.md) with three conditions: (1) Atomicity — can it be decomposed into existing primitives? (2) Bitter Lesson — does it become MORE useful as models improve? If a smarter model would do it better from the prompt, it fails. (3) ZFC — does Go handle transport only, with no judgment calls? This leads to permanent exclusions: no skills system (the model IS the skill system), no capability flags (a prompt sentence suffices), no MCP/tool registration, no decision logic in Go. See also [ZFC article](https://steve-yegge.medium.com/zero-framework-cognition-a-way-to-build-resilient-ai-applications-56b090ed3e69).
+
+**Progressive capability model:** Capabilities activate based on config section presence — 8 levels from minimal (agent + tasks) to full orchestration. Config IS the feature flag. An empty `city.toml` gives Level 0-1; adding sections incrementally activates capabilities. No feature flags, no capability toggles.
+
+**Convergence loops:** Bounded iterative refinement with gate evaluation — an agent does work, a gate (shell script, human approval, or hybrid) evaluates it, the system iterates up to N times or terminates. This is Gas City's answer to "how do you know when an agent's work is good enough?" and maps directly to the stopping-condition questions in [production-feedback.md](problems/production-feedback.md).
+
+**Reliability model (NDI):** "Nondeterministic Idempotence" — the system converges to correct outcomes through persistent state (beads survive session crashes) plus idempotent observers, not deterministic execution. The controller follows Erlang/OTP supervision patterns: let sessions crash, restart with backoff, quarantine crash loops. Multiple runtime providers: tmux (production), subprocess, exec (script-backed), Kubernetes.
+
+**Relevance to fullsend:** Gas City's approach contains several important lessons for fullsend:
+
+- *Coordinator nuance:* Fullsend says "the repo is the coordinator" with no coordinator agent. Gas City *does* have a controller process driving reconciliation and health patrol — but enforces that it contains zero cognition (ZFC). The distinction is not "coordinator vs. no coordinator" but "cognitive coordinator vs. infrastructure-only coordinator." Fullsend's repo-level coordination (branch protection, CODEOWNERS, status checks) naturally satisfies ZFC because these mechanisms are deterministic infrastructure, not judgment calls.
+- *The Bitter Lesson test* is a useful design discipline for fullsend's own tooling: anything a smarter model would handle from the prompt doesn't belong in the orchestration layer. As models improve, framework intelligence becomes technical debt.
+- *Convergence loops* address the stopping-condition problem that [production-feedback.md](problems/production-feedback.md) and [agent-architecture.md](problems/agent-architecture.md) flag as open questions. Gas City's gate-evaluated bounded iteration is a concrete implementation.
+- *Progressive capability* is relevant to the [autonomy spectrum](problems/autonomy-spectrum.md) — graduated activation without binary on/off decisions.
+- *Beads as universal substrate* is a different design choice from fullsend's git-as-substrate. Beads offer more flexible work tracking (everything is a bead: tasks, mail, molecules, convoys) but require additional infrastructure (Dolt database). Git-as-substrate requires less infrastructure but is less flexible for non-code work units.
+- *Exec providers across all seams* (beads, events, runtime, mail each accept script-backed implementations) make the system extensible without code changes — a pattern relevant to [agent infrastructure](problems/agent-infrastructure.md).
+
+**Vibe Maintainer workflow:** Yegge's ["Vibe Maintainer" (2026-03-31)](https://steve-yegge.medium.com/vibe-maintainer-a2273a841040) describes the maintainer-side problem: handling ~50 community PRs/day across Beads and Gas Town, most AI-generated by external contributors. His approach uses worker agents to triage and salvage incoming PRs rather than gatekeeping quality — he calls this "optimizing for community throughput." This is agents used defensively (processing incoming contributions), complementing fullsend's focus on agents used offensively (generating and merging internal contributions). See [contribution-volume.md](problems/contribution-volume.md) for the broader problem.
 
 ### Ambient Code Platform (ACP)
 
@@ -202,6 +221,7 @@ None of these tools address:
 - **Autonomous merge with security-focused confidence** — the judgment problem of "should this change exist?" as distinct from "is this change correct?"
 - **Tier-based autonomy** — different levels of agent authority for different types of changes.
 - **Agent governance** — who controls the agents' policies and permissions.
+- **Contribution volume management** — how maintainers handle the flood of AI-generated external contributions. See [contribution-volume.md](problems/contribution-volume.md).
 
 These gaps define the novel problem space for fullsend.
 
