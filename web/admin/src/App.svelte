@@ -17,6 +17,9 @@
   let oauthStatus = $state<string | null>(null);
 
   onMount(() => {
+    const onGithub401 = () => signOut();
+    window.addEventListener("fullsend:github-unauthorized", onGithub401);
+
     void (async () => {
       const hadOAuthReturn = consumeOAuthParamsFromDocumentUrl();
       if (hadOAuthReturn) {
@@ -30,12 +33,15 @@
       }
       await refreshSession();
     })();
+
+    return () =>
+      window.removeEventListener("fullsend:github-unauthorized", onGithub401);
   });
 </script>
 
 <header class="bar">
   <strong>Fullsend Admin</strong>
-  <span class="tag">local dev</span>
+  <span class="tag">{import.meta.env.DEV ? "local dev" : "production"}</span>
   <span class="spacer"></span>
   {#if $githubLogin}
     <span class="user">{$githubLogin}</span>

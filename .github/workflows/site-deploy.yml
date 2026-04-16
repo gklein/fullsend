@@ -118,6 +118,11 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --name="${{ vars.CLOUDFLARE_PROJECT_NAME }}"
+          vars: GITHUB_APP_CLIENT_ID
+          secrets: GITHUB_APP_CLIENT_SECRET
+        env:
+          GITHUB_APP_CLIENT_ID: ${{ vars.FULLSEND_GITHUB_APP_CLIENT_ID }}
+          GITHUB_APP_CLIENT_SECRET: ${{ secrets.FULLSEND_GITHUB_APP_CLIENT_SECRET }}
 
       - name: Upload preview version (Workers + static assets)
         id: cf-preview
@@ -132,6 +137,11 @@ jobs:
             versions upload
             --name="${{ vars.CLOUDFLARE_PROJECT_NAME }}"
             --preview-alias ${{ steps.preview-context.outputs.preview_alias }}
+          vars: GITHUB_APP_CLIENT_ID
+          secrets: GITHUB_APP_CLIENT_SECRET
+        env:
+          GITHUB_APP_CLIENT_ID: ${{ vars.FULLSEND_GITHUB_APP_CLIENT_ID }}
+          GITHUB_APP_CLIENT_SECRET: ${{ secrets.FULLSEND_GITHUB_APP_CLIENT_SECRET }}
 
       - name: Resolve deployment URL
         id: meta

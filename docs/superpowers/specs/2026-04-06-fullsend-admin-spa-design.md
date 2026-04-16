@@ -159,6 +159,8 @@ During implementation, add a **row per GitHub capability** the SPA uses (REST pa
 | Capability | HTTP | Notes |
 |------------|------|-------|
 | User access token exchange (GitHub App web application flow) | `POST https://github.com/login/oauth/access_token` | Form body / query parameters per GitHub: `client_id`, **`client_secret`** (required in official docs), `code`, optional `redirect_uri` (must match a registered callback URL), optional PKCE `code_verifier` when `code_challenge` was used at authorize time. JSON response includes `access_token` (user tokens use the `ghu_` prefix), `token_type` (`bearer`), and optionally `expires_in` / `refresh_token` (`ghr_`) when expiring tokens are enabled. See [Generating a user access token for a GitHub App](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app#using-the-web-application-flow-to-generate-a-user-access-token). |
+| SPA to Worker token exchange (same origin) | `POST /api/oauth/token` (site Worker) | JSON body: `code`, `redirect_uri`, `code_verifier`. Worker checks browser `Origin` matches `redirect_uri`, then calls GitHub `POST https://github.com/login/oauth/access_token` with `client_secret` from Worker secrets only. |
+| Current user profile (browser, no GitHub CORS) | `GET https://api.github.com/user` via same-origin `GET /api/github/user` | Bearer user token; site Worker proxies to GitHub. GitHub App user token defaults are usually sufficient for login. |
 
 ## Appendix B — Related code references
 

@@ -37,6 +37,12 @@ Vite only injects the **client id** into the client bundle.
 
 The committed **`sample.env.local`** at the repository root documents variable names and the GitHub App checklist; copy it to **`.env.local`** if you want a file-based workflow (and keep it gitignored).
 
+## Production and CI (Cloudflare Workers)
+
+For **`main`** (and PR previews that use the same deploy path), the **Build Site** workflow injects the public id from the repository variable **`FULLSEND_GITHUB_APP_CLIENT_ID`**. **Deploy Site** passes it to the Worker as **`GITHUB_APP_CLIENT_ID`** and sets **`GITHUB_APP_CLIENT_SECRET`** from the repository secret **`FULLSEND_GITHUB_APP_CLIENT_SECRET`** (Wrangler production `deploy` and PR `versions upload`).
+
+On the GitHub App, add a **Callback URL** that matches your deployed admin entry, for example `https://<your-project>.<account>.workers.dev/admin/` (use the exact URL your users open; trailing slash must match what the SPA sends as `redirect_uri`).
+
 ## Run the site locally
 
 From the **repository root**:

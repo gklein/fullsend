@@ -1,8 +1,9 @@
 /// <reference types="@cloudflare/workers-types" />
 
 /**
- * Site Worker: static assets via `[assets]` plus optional localhost-only OAuth BFF
- * routes for the admin SPA (`/api/oauth/token`, `/api/github/user`).
+ * Site Worker: static assets via `[assets]` plus OAuth BFF + `/user` proxy for the admin SPA.
+ * Local: loopback origins. Deployed: same-origin as this Worker (`Origin` matches request URL)
+ * and OAuth `redirect_uri` must match that origin (GitHub App callback list is the other guard).
  */
 export interface Env {
   ASSETS?: Fetcher;
@@ -21,8 +22,16 @@ function isAdminApiPath(pathname: string): boolean {
   );
 }
 
-/** Dev-only: any localhost / 127.0.0.1 HTTP port (Vite may not use 5173). */
-function isLocalhostDevOrigin(origin: string): boolean {
+function adminSpaCallbackPath(pathname: string): boolean {
+  return (
+    pathname === "/admin/" ||
+    pathname === "/admin" ||
+    pathname === "/admin/oauth/callback.html"
+  );
+}
+
+/** Dev: any localhost / 127.0.0.1 HTTP port (Vite may not use 5173). */
+function isLocalhostHttpOrigin(origin: string): boolean {
   if (!origin) return false;
   try {
     const u = new URL(origin);
@@ -38,57 +47,86 @@ function isLocalhostDevOrigin(origin: string): boolean {
 }
 
 /**
- * Dev-only: redirect_uri must target the admin SPA entry (or legacy static callback)
- * on loopback, matching the GitHub App registration.
+ * `redirect_uri` for the GitHub App web flow: SPA entry under `/admin/` on loopback (dev)
+ * or HTTPS (production / Workers previews).
  */
-function isLocalhostDevRedirectUri(redirectUri: string): boolean {
-  if (!redirectUri) return false;
+function isAllowedOAuthRedirectUri(redirectUri: string): boolean {
+  let u: URL;
   try {
-    const u = new URL(redirectUri);
-    const p = u.pathname;
-    const allowedPath =
-      p === "/admin/" ||
-      p === "/admin" ||
-      p === "/admin/oauth/callback.html";
-    return (
-      u.protocol === "http:" &&
-      (u.hostname === "localhost" ||
-        u.hostname === "127.0.0.1" ||
-        u.hostname === "[::1]") &&
-      allowedPath
-    );
+    u = new URL(redirectUri);
   } catch {
     return false;
   }
+  if (!adminSpaCallbackPath(u.pathname)) return false;
+  if (u.protocol === "http:") {
+    return (
+      u.hostname === "localhost" ||
+      u.hostname === "127.0.0.1" ||
+      u.hostname === "[::1]"
+    );
+  }
+  return u.protocol === "https:";
 }
 
-/**
- * Browsers often omit `Origin` on same-origin GET `fetch()`, but the dev Worker still
- * needs a loopback origin for CORS + allowlisting. Fall back to `Referer` when safe.
- */
-function getEffectiveLoopbackOrigin(request: Request): string | null {
+function getBrowserOrigin(request: Request): string | null {
   const originHeader = request.headers.get("Origin") ?? "";
-  if (isLocalhostDevOrigin(originHeader)) return originHeader;
-
-  if (!originHeader) {
-    const ref = request.headers.get("Referer") ?? "";
+  if (originHeader) {
     try {
-      const o = new URL(ref).origin;
-      if (isLocalhostDevOrigin(o)) return o;
+      return new URL(originHeader).origin;
     } catch {
-      /* ignore */
+      return null;
+    }
+  }
+  const ref = request.headers.get("Referer") ?? "";
+  if (ref) {
+    try {
+      return new URL(ref).origin;
+    } catch {
+      return null;
     }
   }
   return null;
 }
 
-function corsHeaders(request: Request): HeadersInit {
-  const origin = getEffectiveLoopbackOrigin(request);
-  if (!origin) {
-    return {};
+function workerPublicOrigin(request: Request): string | null {
+  try {
+    return new URL(request.url).origin;
+  } catch {
+    return null;
   }
+}
+
+/**
+ * CORS for `/api/*`: loopback (dev), or browser origin equals this Worker’s origin (deployed).
+ */
+function effectiveCorsOrigin(request: Request): string | null {
+  const browser = getBrowserOrigin(request);
+  if (!browser) return null;
+  if (isLocalhostHttpOrigin(browser)) return browser;
+  const site = workerPublicOrigin(request);
+  if (site && browser === site) return browser;
+  return null;
+}
+
+/** OAuth token exchange: tab origin must match `redirect_uri` origin (binds `code` to the SPA). */
+function browserOriginMatchesRedirectUri(
+  request: Request,
+  redirectUri: string,
+): boolean {
+  let redirectOrigin: string;
+  try {
+    redirectOrigin = new URL(redirectUri).origin;
+  } catch {
+    return false;
+  }
+  const browser = getBrowserOrigin(request);
+  if (!browser) return false;
+  return browser === redirectOrigin;
+}
+
+function corsHeaders(allowOrigin: string): HeadersInit {
   return {
-    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers":
       "Content-Type, Authorization, Accept, X-GitHub-Api-Version",
@@ -102,15 +140,13 @@ type ExchangeBody = {
   code_verifier?: string;
 };
 
-function requireAllowedOrigin(request: Request): string | null {
-  return getEffectiveLoopbackOrigin(request);
-}
-
 async function handleOAuthToken(
   request: Request,
   env: Env,
-  cors: HeadersInit,
+  corsOrigin: string,
 ): Promise<Response> {
+  const cors = corsHeaders(corsOrigin);
+
   if (request.method !== "POST") {
     return new Response(JSON.stringify({ error: "method_not_allowed" }), {
       status: 405,
@@ -149,9 +185,16 @@ async function handleOAuthToken(
     });
   }
 
-  if (!isLocalhostDevRedirectUri(redirect_uri)) {
+  if (!isAllowedOAuthRedirectUri(redirect_uri)) {
     return new Response(JSON.stringify({ error: "invalid_redirect_uri" }), {
       status: 400,
+      headers: { "content-type": "application/json", ...cors },
+    });
+  }
+
+  if (!browserOriginMatchesRedirectUri(request, redirect_uri)) {
+    return new Response(JSON.stringify({ error: "forbidden_origin" }), {
+      status: 403,
       headers: { "content-type": "application/json", ...cors },
     });
   }
@@ -226,8 +269,10 @@ async function handleOAuthToken(
 /** Server-side GitHub /user so the browser never hits api.github.com (no CORS). */
 async function handleGithubUser(
   request: Request,
-  cors: HeadersInit,
+  corsOrigin: string,
 ): Promise<Response> {
+  const cors = corsHeaders(corsOrigin);
+
   if (request.method !== "GET") {
     return new Response(JSON.stringify({ error: "method_not_allowed" }), {
       status: 405,
@@ -243,8 +288,10 @@ async function handleGithubUser(
     });
   }
 
-  const accept = request.headers.get("Accept") ?? "application/vnd.github+json";
-  const apiVersion = request.headers.get("X-GitHub-Api-Version") ?? "2022-11-28";
+  const accept =
+    request.headers.get("Accept") ?? "application/vnd.github+json";
+  const apiVersion =
+    request.headers.get("X-GitHub-Api-Version") ?? "2022-11-28";
 
   const ghRes = await fetch(GITHUB_USER_URL, {
     headers: {
@@ -274,16 +321,19 @@ async function handleAdminApi(
     console.log("[worker]", request.method, url.pathname);
   }
 
-  const cors = corsHeaders(request);
+  const corsOrigin = effectiveCorsOrigin(request);
 
   if (request.method === "OPTIONS") {
-    if (!requireAllowedOrigin(request)) {
+    if (!corsOrigin) {
       return new Response(null, { status: 403 });
     }
-    return new Response(null, { status: 204, headers: cors });
+    return new Response(null, {
+      status: 204,
+      headers: corsHeaders(corsOrigin),
+    });
   }
 
-  if (!requireAllowedOrigin(request)) {
+  if (!corsOrigin) {
     return new Response(JSON.stringify({ error: "forbidden_origin" }), {
       status: 403,
       headers: { "content-type": "application/json" },
@@ -291,11 +341,11 @@ async function handleAdminApi(
   }
 
   if (url.pathname === "/api/oauth/token") {
-    return handleOAuthToken(request, env, cors);
+    return handleOAuthToken(request, env, corsOrigin);
   }
 
   if (url.pathname === "/api/github/user") {
-    return handleGithubUser(request, cors);
+    return handleGithubUser(request, corsOrigin);
   }
 
   return new Response(JSON.stringify({ error: "not_found" }), {
