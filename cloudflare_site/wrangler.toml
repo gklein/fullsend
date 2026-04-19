@@ -16,8 +16,10 @@ preview_urls = true
 directory = "./public"
 not_found_handling = "single-page-application"
 
-# Native rate limits (Wrangler ≥ 4.36). namespace_id values are account-unique integers (see Cloudflare docs).
-# Limits are per key per Cloudflare location (see Workers rate limit docs). Keys are path + IP.
+# Native rate limits (Wrangler ≥ 4.36). namespace_id must be a string of a positive integer (Cloudflare docs).
+# Local dev: bases below. CI (site-deploy.yml): patch-wrangler-rate-limit-namespace-ids.mjs sets
+# namespace_id = base + offset(sha256(CLOUDFLARE_PROJECT_NAME)) so different Worker names get different namespaces.
+# Limits are per key per Cloudflare location. Keys are path + IP.
 [[ratelimits]]
 name = "OAUTH_TOKEN_RATE_LIMITER"
 namespace_id = "482401"
