@@ -3,6 +3,16 @@ export type GitHubUser = {
   name: string | null;
 };
 
+export class GitHubUserRequestError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "GitHubUserRequestError";
+    this.status = status;
+  }
+}
+
 /** Same-origin BFF (Vite → Wrangler) — GitHub REST does not allow browser CORS for /user. */
 export async function fetchGitHubUser(
   accessToken: string,
@@ -16,7 +26,10 @@ export async function fetchGitHubUser(
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`GitHub /user failed: ${res.status} ${text.slice(0, 200)}`);
+    throw new GitHubUserRequestError(
+      res.status,
+      `GitHub /user failed: ${res.status} ${text.slice(0, 200)}`,
+    );
   }
   const data = (await res.json()) as Record<string, unknown>;
   const login = typeof data.login === "string" ? data.login : "";
