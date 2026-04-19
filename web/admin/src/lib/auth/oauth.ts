@@ -247,7 +247,7 @@ export async function completeGithubOAuthFromHandoff(): Promise<OAuthCompleteRes
   const expires_in =
     typeof body.expires_in === "number" ? body.expires_in : null;
   const expiresAt =
-    expires_in != null ? Date.now() + expires_in * 1000 : 0;
+    expires_in != null ? Date.now() + expires_in * 1000 : null;
 
   saveToken({
     accessToken: access_token,

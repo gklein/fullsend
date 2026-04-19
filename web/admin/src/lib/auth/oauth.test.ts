@@ -173,4 +173,33 @@ describe("completeGithubOAuthFromHandoff", () => {
     });
     expect(typeof body.redirect_uri).toBe("string");
   });
+
+  it("persists null expiresAt when token response omits expires_in", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          access_token: "no-expiry",
+          token_type: "Bearer",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const nonce = "33333333-3333-3333-3333-333333333333";
+    const expanded = workerExpandedStateB64(nonce);
+    sessionStorage.setItem(
+      OAUTH_DOC_HANDOFF_KEY,
+      JSON.stringify({ code: "code-no-exp", state: expanded }),
+    );
+    sessionStorage.setItem(OAUTH_STATE_KEY, nonce);
+    sessionStorage.setItem(PKCE_VERIFIER_KEY, "verifier");
+
+    const r = await completeGithubOAuthFromHandoff();
+
+    expect(r).toEqual({ ok: true });
+    expect(loadToken()).toEqual({
+      accessToken: "no-expiry",
+      tokenType: "Bearer",
+      expiresAt: null,
+    });
+  });
 });
