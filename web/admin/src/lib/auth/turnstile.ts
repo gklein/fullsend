@@ -1,5 +1,4 @@
 type TurnstileApi = {
-  ready?: (cb: () => void) => void;
   render: (
     container: string | HTMLElement,
     params: Record<string, unknown>,
@@ -33,8 +32,9 @@ function loadTurnstileScript(): Promise<void> {
     const s = document.createElement("script");
     s.src =
       "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-    s.async = true;
-    s.defer = true;
+    // Dynamically appended scripts default to async=true; Turnstile errors if async/defer is set
+    // when using turnstile.ready(). We use onload + render/execute instead and force async off.
+    s.async = false;
     s.dataset.fullsendTurnstile = "1";
     s.onload = () => {
       s.dataset.loaded = "1";
@@ -104,10 +104,6 @@ export async function obtainTurnstileToken(siteKey: string): Promise<string> {
       }
     };
 
-    if (turnstile.ready) {
-      turnstile.ready(run);
-    } else {
-      run();
-    }
+    run();
   });
 }

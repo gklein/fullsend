@@ -17,16 +17,17 @@ directory = "./public"
 not_found_handling = "single-page-application"
 
 # Native rate limits (Wrangler ≥ 4.36). namespace_id values are account-unique integers (see Cloudflare docs).
+# Limits are per key per Cloudflare location (see Workers rate limit docs). Keys are path + IP.
 [[ratelimits]]
 name = "OAUTH_TOKEN_RATE_LIMITER"
 namespace_id = "482401"
   [ratelimits.simple]
-  limit = 5
+  limit = 30
   period = 60
 
 [[ratelimits]]
 name = "GITHUB_USER_RATE_LIMITER"
 namespace_id = "482402"
   [ratelimits.simple]
-  limit = 5
+  limit = 120
   period = 60

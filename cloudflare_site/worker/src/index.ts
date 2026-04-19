@@ -155,6 +155,32 @@ function effectiveCorsOrigin(request: Request, url: URL): string | null {
     if (authorizeNavigationWithoutOriginAllowed(request, redirect_uri)) return ro;
   }
 
+  // `GET /api/github/user` (and its CORS preflight) may omit `Origin` for same-origin fetches or
+  // after some dev proxies. OAuth tab-binding does not apply (Bearer only). Infer ACAO from
+  // Fetch Metadata + `Referer` origin only for this path — not used for token exchange.
+  if (
+    (request.method === "GET" || request.method === "OPTIONS") &&
+    url.pathname === "/api/github/user"
+  ) {
+    const sec = (request.headers.get("Sec-Fetch-Site") ?? "").toLowerCase();
+    if (sec === "same-origin" || sec === "same-site") {
+      const ref = request.headers.get("Referer")?.trim() ?? "";
+      if (ref) {
+        try {
+          const refOrigin = new URL(ref).origin;
+          const site = workerPublicOrigin(request);
+          if (!site) return null;
+          if (refOrigin === site) return refOrigin;
+          if (isLocalhostHttpOrigin(refOrigin) && isLocalhostHttpOrigin(site)) {
+            return refOrigin;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
   return null;
 }
 
