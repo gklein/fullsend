@@ -28,7 +28,7 @@ describe("refreshSession", () => {
     saveToken({
       accessToken: "tok",
       tokenType: "bearer",
-      expiresAt: 9999999999999,
+      expiresAt: Date.now() + 60_000,
     });
     vi.mocked(fetchGitHubUser).mockResolvedValue({
       login: "alice",
@@ -49,7 +49,7 @@ describe("refreshSession", () => {
     saveToken({
       accessToken: "bad",
       tokenType: "bearer",
-      expiresAt: 9999999999999,
+      expiresAt: Date.now() + 60_000,
     });
     githubUser.set({ login: "stale", name: null });
     vi.mocked(fetchGitHubUser).mockRejectedValue(new Error("network"));
@@ -59,6 +59,22 @@ describe("refreshSession", () => {
     expect(get(githubUser)).toBeNull();
     expect(get(githubLogin)).toBeNull();
   });
+
+  it("does not call fetchGitHubUser when stored token is already expired", async () => {
+    saveToken({
+      accessToken: "tok",
+      tokenType: "bearer",
+      expiresAt: Date.now() - 1,
+    });
+    githubUser.set({ login: "stale", name: null });
+
+    await refreshSession();
+
+    expect(fetchGitHubUser).not.toHaveBeenCalled();
+    expect(get(githubUser)).toBeNull();
+    expect(get(githubLogin)).toBeNull();
+    expect(localStorage.getItem("fullsend_admin_github_token")).toBeNull();
+  });
 });
 
 describe("signOut", () => {
@@ -66,7 +82,7 @@ describe("signOut", () => {
     saveToken({
       accessToken: "x",
       tokenType: "bearer",
-      expiresAt: 1,
+      expiresAt: Date.now() + 60_000,
     });
     githubUser.set({ login: "bob", name: null });
 
