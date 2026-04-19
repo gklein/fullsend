@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchGitHubUser } from "./user";
+import { fetchGitHubUser, GitHubUserRequestError } from "./user";
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
@@ -39,12 +39,15 @@ describe("fetchGitHubUser", () => {
     });
   });
 
-  it("throws when response is not ok", async () => {
+  it("throws GitHubUserRequestError when response is not ok", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response("forbidden body", { status: 403 }),
     );
 
-    await expect(fetchGitHubUser("t")).rejects.toThrow(/403/);
+    const err = await fetchGitHubUser("t").catch((e) => e);
+    expect(err).toBeInstanceOf(GitHubUserRequestError);
+    expect((err as GitHubUserRequestError).status).toBe(403);
+    expect((err as GitHubUserRequestError).message).toMatch(/403/);
   });
 
   it("throws when login is missing", async () => {

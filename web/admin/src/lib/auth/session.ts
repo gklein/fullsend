@@ -1,6 +1,10 @@
 import { derived, writable } from "svelte/store";
 import { clearSession, loadToken } from "./tokenStore";
-import { fetchGitHubUser, type GitHubUser } from "../github/user";
+import {
+  fetchGitHubUser,
+  GitHubUserRequestError,
+  type GitHubUser,
+} from "../github/user";
 
 /** Cached GitHub profile from `refreshSession()` (single `/api/github/user` source). */
 export const githubUser = writable<GitHubUser | null>(null);
@@ -20,7 +24,11 @@ export async function refreshSession(): Promise<void> {
   try {
     const u = await fetchGitHubUser(t.accessToken);
     githubUser.set(u);
-  } catch {
+  } catch (e) {
+    if (e instanceof GitHubUserRequestError && e.status === 401) {
+      signOut();
+      return;
+    }
     githubUser.set(null);
   }
 }

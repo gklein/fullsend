@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { get } from "svelte/store";
 
-vi.mock("../github/user", () => ({
-  fetchGitHubUser: vi.fn(),
-}));
+vi.mock("../github/user", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../github/user")>();
+  return { ...mod, fetchGitHubUser: vi.fn() };
+});
 
-import { fetchGitHubUser } from "../github/user";
+import { fetchGitHubUser, GitHubUserRequestError } from "../github/user";
 import { githubLogin, githubUser, refreshSession, signOut } from "./session";
 import { saveToken } from "./tokenStore";
 
@@ -45,7 +46,7 @@ describe("refreshSession", () => {
     expect(get(githubLogin)).toBe("alice");
   });
 
-  it("clears githubUser when fetchGitHubUser throws", async () => {
+  it("clears githubUser but keeps stored token when fetchGitHubUser throws generically", async () => {
     saveToken({
       accessToken: "bad",
       tokenType: "bearer",
@@ -56,6 +57,25 @@ describe("refreshSession", () => {
 
     await refreshSession();
 
+    expect(get(githubUser)).toBeNull();
+    expect(get(githubLogin)).toBeNull();
+    expect(localStorage.getItem("fullsend_admin_github_token")).not.toBeNull();
+  });
+
+  it("clears stored token and githubUser when fetchGitHubUser rejects with 401", async () => {
+    saveToken({
+      accessToken: "revoked",
+      tokenType: "bearer",
+      expiresAt: Date.now() + 60_000,
+    });
+    githubUser.set({ login: "stale", name: null });
+    vi.mocked(fetchGitHubUser).mockRejectedValue(
+      new GitHubUserRequestError(401, "GitHub /user failed: 401 "),
+    );
+
+    await refreshSession();
+
+    expect(localStorage.getItem("fullsend_admin_github_token")).toBeNull();
     expect(get(githubUser)).toBeNull();
     expect(get(githubLogin)).toBeNull();
   });
