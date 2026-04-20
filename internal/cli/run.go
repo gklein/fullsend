@@ -74,11 +74,17 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 		printer.StepFail("Environment validation failed")
 		return fmt.Errorf("validating env: %w", err)
 	}
-	// Expose the fullsend directory so runner_env values can reference it
+	// Expand env vars in runner_env values. FULLSEND_DIR is injected so
+	// harness configs can reference files relative to the fullsend directory
 	// (e.g., ${FULLSEND_DIR}/schemas/triage-result.schema.json).
-	os.Setenv("FULLSEND_DIR", absFullsendDir)
+	expander := func(key string) string {
+		if key == "FULLSEND_DIR" {
+			return absFullsendDir
+		}
+		return os.Getenv(key)
+	}
 	for k, v := range h.RunnerEnv {
-		h.RunnerEnv[k] = os.ExpandEnv(v)
+		h.RunnerEnv[k] = os.Expand(v, expander)
 	}
 	if err := h.ValidateFilesExist(); err != nil {
 		printer.StepFail("File validation failed")

@@ -637,6 +637,10 @@ Files over 64KB save fine if they contain only ASCII characters.`
 	if len(comments) > 0 {
 		lastComment := comments[len(comments)-1]
 		t.Logf("Triage comment by %s (first 200 chars): %.200s", lastComment.Author, lastComment.Body)
+
+		// The comment should be from the bot (ends with [bot]).
+		assert.True(t, strings.HasSuffix(lastComment.Author, "[bot]"),
+			"triage comment should be from a bot, got author %q", lastComment.Author)
 	}
 
 	// Verify labels: either needs-info (insufficient) or ready-to-code (sufficient).

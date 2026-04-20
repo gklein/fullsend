@@ -916,7 +916,7 @@ func (c *LiveClient) CloseIssue(ctx context.Context, owner, repo string, number 
 	return nil
 }
 
-// ListIssueComments returns all comments on an issue.
+// ListIssueComments returns up to 100 comments on an issue (single page, no pagination).
 func (c *LiveClient) ListIssueComments(ctx context.Context, owner, repo string, number int) ([]forge.IssueComment, error) {
 	resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/issues/%d/comments?per_page=100", owner, repo, number))
 	if err != nil {
