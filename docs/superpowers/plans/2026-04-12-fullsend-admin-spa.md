@@ -18,6 +18,8 @@
 
 **Related CI/site spec:** [2026-04-09-site-cloudflare-pages-design.md](../specs/2026-04-09-site-cloudflare-pages-design.md)
 
+**Task order:** **Tasks 1–14** follow the main build-out (scaffold through mutating wizard). **Task 15** (preview OAuth handoff) sits **after Task 14** and **before Task 16** (local dev doc) so it can be redesigned: **Turnstile on token exchange** (Worker hardening) may be **awkward or incompatible** with how we want **per-PR preview** review sites to behave—capture an explicit workaround before implementing the flow described below. **Task 16** is documentation only.
+
 ---
 
 ## File map
@@ -44,8 +46,8 @@
 | `web/admin/src/lib/auth/oauth.test.ts` | Vitest: callback parsing, storage |
 | `web/admin/src/lib/auth/previewHandoff.test.ts` | Vitest: allowlist accepts production admin origin only |
 | `.github/workflows/site-build.yml` | Setup Node, `npm ci` + `npm run build`, copy `web/admin/dist` → `_bundle/public/admin/`, mindmap from `web/public/`, worker from `cloudflare_site/worker/` |
-| `cloudflare_site/worker/src/index.ts` | **Task 4b:** extend OAuth allowlists for preview/production hostnames (see task); **`ASSETS` fallback** already wired |
-| `docs/admin-spa-local-dev.md` | Local dev GitHub App (localhost callback), env vars, `npm run dev` (Vite + Worker); cross-link **`web/admin/README.md`** |
+| `cloudflare_site/worker/src/index.ts` | **Task 4b** (implemented): OAuth + **`ASSETS` fallback**; preview allowlists evolve with **Task 15** |
+| `docs/admin-spa-local-dev.md` | **Task 16:** local dev GitHub App (localhost callback), env vars, `npm run dev` (Vite + Worker); cross-link **`web/admin/README.md`** |
 | `docs/superpowers/specs/2026-04-06-fullsend-admin-spa-design.md` | Appendix A permission matrix rows; Open items: OAuth static verification outcome |
 
 **Do not add** automated CLI↔SPA parity tests in CI in this plan (explicit non-goal in spec).
@@ -174,20 +176,13 @@ git commit -m "docs: record GitHub App OAuth experiment outcome for admin SPA"
 
 ### Task 2: Scaffold Vite + Svelte admin app (hash routing, `/admin/` base)
 
+**Status (2026-04-20):** **Complete** in repo under **`web/admin/`** (ADR 0019). **Root `package.json`** holds `dev` / `build` / `test` / `check` (not a nested `admin/package.json`). Snippets below still say **`admin/…`** for historical reasons—treat as **`web/admin/…`**.
+
 **Files:**
 
-- Create: `admin/package.json`
-- Create: `admin/vite.config.ts`
-- Create: `admin/tsconfig.json`
-- Create: `admin/svelte.config.js`
-- Create: `admin/index.html`
-- Create: `admin/src/main.ts`
-- Create: `admin/src/vite-env.d.ts`
-- Create: `admin/src/App.svelte`
-- Create: `admin/src/app.css`
-- Create: `admin/.gitignore`
+- Create: `web/admin/` tree (`index.html`, `src/*`, `tsconfig.json`, `svelte.config.js`, etc.) — equivalent to the plan’s original `admin/*` list
 
-- [ ] **Step 1: Write `admin/package.json`**
+- [x] **Step 1: Write `admin/package.json`**
 
 ```json
 {
@@ -217,9 +212,9 @@ git commit -m "docs: record GitHub App OAuth experiment outcome for admin SPA"
 }
 ```
 
-**Note:** `dev` stays `vite` until **Task 2b** replaces it with `concurrently` + `wrangler dev` + OAuth proxy (or run Task 2b in the same PR immediately after the scaffold lands).
+**Note:** Root `npm run dev` now runs **Task 2b**’s Worker + Vite together; `vite`-only remains as an escape hatch if present in `package.json`.
 
-- [ ] **Step 2: Write `admin/vite.config.ts`**
+- [x] **Step 2: Write `admin/vite.config.ts`**
 
 ```typescript
 import { svelte } from "@sveltejs/vite-plugin-svelte";
@@ -235,7 +230,7 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 3: Write `admin/tsconfig.json`**
+- [x] **Step 3: Write `admin/tsconfig.json`**
 
 ```json
 {
@@ -253,7 +248,7 @@ export default defineConfig({
 }
 ```
 
-- [ ] **Step 4: Write `admin/svelte.config.js`**
+- [x] **Step 4: Write `admin/svelte.config.js`**
 
 ```javascript
 import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
@@ -264,7 +259,7 @@ export default { preprocess: vitePreprocess() };
 
 If `npm install` reports a **peer dependency** conflict between `svelte-spa-router` and Svelte 5, drop that dependency and replace Task 2 Step 9 routing with a small in-repo **hashchange** router (`admin/src/lib/hashRouter.ts` exporting `currentPath` / `navigate`) plus static `routes` map—keep routes functionally identical for later tasks.
 
-- [ ] **Step 5: Write `admin/index.html`**
+- [x] **Step 5: Write `admin/index.html`**
 
 ```html
 <!doctype html>
@@ -281,14 +276,14 @@ If `npm install` reports a **peer dependency** conflict between `svelte-spa-rout
 </html>
 ```
 
-- [ ] **Step 6: Write `admin/src/vite-env.d.ts`**
+- [x] **Step 6: Write `admin/src/vite-env.d.ts`**
 
 ```typescript
 /// <reference types="svelte" />
 /// <reference types="vite/client" />
 ```
 
-- [ ] **Step 7: Write `admin/src/main.ts`**
+- [x] **Step 7: Write `admin/src/main.ts`**
 
 ```typescript
 import { mount } from "svelte";
@@ -298,7 +293,7 @@ import "./app.css";
 mount(App, { target: document.getElementById("app")! });
 ```
 
-- [ ] **Step 8: Write `admin/src/app.css`**
+- [x] **Step 8: Write `admin/src/app.css`**
 
 ```css
 :root {
@@ -310,7 +305,7 @@ body {
 }
 ```
 
-- [ ] **Step 9: Write `admin/src/App.svelte`**
+- [x] **Step 9: Write `admin/src/App.svelte`**
 
 ```svelte
 <script lang="ts">
@@ -348,7 +343,7 @@ body {
 </style>
 ```
 
-- [ ] **Step 10: Write `admin/src/routes/Home.svelte`**
+- [x] **Step 10: Write `admin/src/routes/Home.svelte`**
 
 ```svelte
 <script lang="ts">
@@ -360,7 +355,7 @@ body {
 <p>Current hash: <code>{hash}</code></p>
 ```
 
-- [ ] **Step 11: Write `admin/.gitignore`**
+- [x] **Step 11: Write `admin/.gitignore`**
 
 ```
 node_modules
@@ -371,20 +366,20 @@ dist
 .wrangler
 ```
 
-- [ ] **Step 12: Install and build locally**
+- [x] **Step 12: Install and build locally**
 
 Run:
 
 ```bash
-cd admin && npm install && npm run build && npm run test
+npm ci && npm run build && npm run test
 ```
 
-Expected: `npm run test` may report **no tests found** until Task 3; if Vitest exits non-zero with zero tests, run `npm run build` only and confirm `admin/dist/index.html` exists.
+Expected: tests pass (auth + status modules landed after Task 3); `web/admin/dist/index.html` exists.
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 ```bash
-git add admin
+git add web/admin
 git commit -m "feat(admin): scaffold Vite+Svelte SPA under /admin/"
 ```
 
@@ -394,6 +389,8 @@ git commit -m "feat(admin): scaffold Vite+Svelte SPA under /admin/"
 
 ### Task 2b: OAuth exchange Worker + Vite dev integration + PKCE
 
+**Status (2026-04-20):** **Complete** in repo: root **`vite.config.ts`** proxies `/api` to Wrangler; **`web/admin/src/lib/auth/pkce.ts`** (+ tests); **`sample.env.local`** at repo root; Worker + Turnstile behavior as listed under **Files** below.
+
 **Goal:** Replicate the successful **localhost auth flow** (authorize redirect → callback → **server-side** token `POST` with `client_secret`) inside the **admin** repo layout, started **together** with the Svelte dev server. The browser only talks **same-origin** to a tiny **Cloudflare Worker** (Wrangler dev); the Worker calls GitHub. Add **PKCE** (`code_challenge` on authorize, `code_verifier` on exchange) per [GitHub PKCE guidance](https://github.blog/changelog/2025-07-14-pkce-support-for-oauth-and-github-app-authentication/) and [Generating a user access token for a GitHub App](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app).
 
 **Files:**
@@ -401,26 +398,26 @@ git commit -m "feat(admin): scaffold Vite+Svelte SPA under /admin/"
 - Implemented under repo root: [`cloudflare_site/wrangler.toml`](../../../cloudflare_site/wrangler.toml) — Worker `main`, `[assets]`, **`[[ratelimits]]`** for OAuth token + GitHub user proxy; **`GITHUB_APP_CLIENT_ID`** and **`GITHUB_APP_CLIENT_SECRET`** via process env / Wrangler vars + secrets (local: `CLOUDFLARE_INCLUDE_PROCESS_ENV`); **required** **`TURNSTILE_SITE_KEY`** + **`TURNSTILE_SECRET_KEY`** (503 `missing_turnstile_keys` if absent); **`client_secret`** never in the SPA bundle
 - Implemented: [`cloudflare_site/worker/src/index.ts`](../../../cloudflare_site/worker/src/index.ts) — `GET /api/oauth/authorize` (302 to GitHub with `client_id` from env); Worker-expanded `state` embedding Turnstile **site** key; `POST /api/oauth/token` with JSON `{ code, redirect_uri, code_verifier, turnstile_token }`; `GET /api/github/user` proxy. Validates `redirect_uri` allowlist (HTTPS or loopback `/admin/` entry). **No `Referer` fallback** — **`Origin` only** for CORS and for token tab-binding; **`GET /api/oauth/authorize`** without `Origin` uses the navigation rule (admin README / PR #240 High 1). GitHub token exchange uses `application/x-www-form-urlencoded`. **Hardening:** Cloudflare Turnstile siteverify on every token exchange; Wrangler **native rate limits** (30 / 60s on token exchange, 120 / 60s on `GET /api/github/user`, per Cloudflare location) keyed by path + `CF-Connecting-IP`.
 - Modify: root [`vite.config.ts`](../../../vite.config.ts) — `server.proxy` `/api` → `http://127.0.0.1:8787` (Wrangler dev port)
-- Modify: `admin/package.json` — devDependencies: `wrangler`, `concurrently` (or `npm-run-all`); scripts e.g. `"dev": "concurrently -k -n worker,vite -c blue,green \\\"wrangler dev --port 8787\\\" \\\"vite\\\""` (adjust ports consistently); keep a `dev:vite`-only escape hatch if needed
-- Create: `admin/src/lib/auth/pkce.ts` — `randomVerifier()`, `challengeS256(verifier)` using **Web Crypto** (`crypto.subtle.digest`) so the SPA matches GitHub’s S256 rules
-- Create: `admin/src/lib/auth/pkce.test.ts` — Vitest: length / shape / stable challenge for fixture verifier (use known test vector or mock subtle)
+- Modify: **repo root** [`package.json`](../../../package.json) — `wrangler`, `concurrently`; `npm run dev` runs Worker + Vite; optional `dev:vite`-only escape hatch if present
+- Create: [`web/admin/src/lib/auth/pkce.ts`](../../../web/admin/src/lib/auth/pkce.ts) — `randomVerifier()`, `challengeS256(verifier)` using **Web Crypto** (`crypto.subtle.digest`) so the SPA matches GitHub’s S256 rules
+- Create: [`web/admin/src/lib/auth/pkce.test.ts`](../../../web/admin/src/lib/auth/pkce.test.ts) — Vitest: length / shape / stable challenge for fixture verifier (use known test vector or mock subtle)
 - Repo-root [`sample.env.local`](../../../sample.env.local) — documents **`GITHUB_APP_CLIENT_ID`** / **`GITHUB_APP_CLIENT_SECRET`** and **required** Turnstile keys (includes **official Cloudflare dummy** site + secret for local dev); SPA does **not** embed client id; Worker adds it at authorize. **Turnstile:** `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` are **Worker-only**; the SPA bundle must **not** bake them in — the site key reaches the browser only via **Worker-expanded OAuth `state`** after authorize (see design Appendix A / High 1 plan). **Do not commit** `.env.local` or `.dev.vars`
-- Modify: `admin/.gitignore` — ensure `.env.local`, `.dev.vars`, `.wrangler` present (may already be from Task 2 Step 11)
+- Modify: `web/admin/.gitignore` (or root) — ensure `.env.local`, `.dev.vars`, `.wrangler` present (may already be from Task 2 Step 11)
 
-- [ ] **Step 1: Add Worker + Wrangler config** — minimal `fetch` handler + CORS for **loopback** dev origins **or** browser origin equal to the Worker’s public origin (previews/production same host). **No `Referer`-based origin inference.** No logging of secrets or tokens.
+- [x] **Step 1: Add Worker + Wrangler config** — minimal `fetch` handler + CORS for **loopback** dev origins **or** browser origin equal to the Worker’s public origin (previews/production same host). **No `Referer`-based origin inference.** No logging of secrets or tokens.
 
-- [ ] **Step 2: Wire `npm run dev`** — one command starts **Wrangler dev** and **Vite**; confirm browser `fetch('http://localhost:5173/api/oauth/...')` (path per `vite.config.ts` proxy) hits the Worker and returns JSON.
+- [x] **Step 2: Wire `npm run dev`** — one command starts **Wrangler dev** and **Vite**; confirm browser `fetch('http://localhost:5173/api/oauth/...')` (path per `vite.config.ts` proxy) hits the Worker and returns JSON.
 
-- [ ] **Step 3: PKCE helpers + tests** — implement `pkce.ts` + `pkce.test.ts`; document storing **`code_verifier` in `sessionStorage`** from authorize click until callback/finish (same pattern as existing callback handoff plans).
+- [x] **Step 3: PKCE helpers + tests** — implement `pkce.ts` + `pkce.test.ts`; document storing **`code_verifier` in `sessionStorage`** from authorize click until callback/finish (same pattern as existing callback handoff plans).
 
-- [ ] **Step 4: `sample.env.local`** — full GitHub App + env walkthrough; example keys only (no real secrets).
+- [x] **Step 4: `sample.env.local`** — full GitHub App + env walkthrough; example keys only (no real secrets).
 
-- [ ] **Step 5: Manual smoke** — local GitHub App callback `http://localhost:5173/admin/` (or `127.0.0.1`); end-to-end: authorize → brief `/admin/?code=…` → same load replaces to `/admin/#/` → proxied Worker exchange → `ghu_` token only in controlled UI (not console-logged).
+- [x] **Step 5: Manual smoke** — local GitHub App callback `http://localhost:5173/admin/` (or `127.0.0.1`); end-to-end: authorize → brief `/admin/?code=…` → same load replaces to `/admin/#/` → proxied Worker exchange → `ghu_` token only in controlled UI (not console-logged).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
-git add admin
+git add cloudflare_site web/admin vite.config.ts package.json sample.env.local
 git commit -m "feat(admin): OAuth exchange Worker, Vite dev proxy, PKCE helpers"
 ```
 
@@ -430,14 +427,16 @@ git commit -m "feat(admin): OAuth exchange Worker, Vite dev proxy, PKCE helpers"
 
 ### Task 3: Vitest for `tokenStore` + `previewHandoff` allowlist
 
+**Status (2026-04-20):** **Complete** under `web/admin/src/lib/auth/`.
+
 **Files:**
 
-- Create: `admin/src/lib/auth/tokenStore.ts`
-- Create: `admin/src/lib/auth/tokenStore.test.ts`
-- Create: `admin/src/lib/auth/previewHandoff.ts`
-- Create: `admin/src/lib/auth/previewHandoff.test.ts`
+- Create: `web/admin/src/lib/auth/tokenStore.ts`
+- Create: `web/admin/src/lib/auth/tokenStore.test.ts`
+- Create: `web/admin/src/lib/auth/previewHandoff.ts`
+- Create: `web/admin/src/lib/auth/previewHandoff.test.ts`
 
-- [ ] **Step 1: Write failing tests `admin/src/lib/auth/tokenStore.test.ts`**
+- [x] **Step 1: Write failing tests `admin/src/lib/auth/tokenStore.test.ts`**
 
 ```typescript
 import { describe, it, expect, beforeEach } from "vitest";
@@ -468,17 +467,17 @@ describe("tokenStore", () => {
 });
 ```
 
-- [ ] **Step 2: Run tests (expect failure: module missing)**
+- [x] **Step 2: Run tests (expect failure: module missing)**
 
 Run:
 
 ```bash
-cd admin && npm run test
+npm run test
 ```
 
-Expected: FAIL — cannot resolve `./tokenStore` or missing exports.
+Expected: (historical TDD order) FAIL until implementation exists — current `main` branch has modules; tests PASS.
 
-- [ ] **Step 3: Implement `admin/src/lib/auth/tokenStore.ts`**
+- [x] **Step 3: Implement `admin/src/lib/auth/tokenStore.ts`**
 
 ```typescript
 export type StoredToken = {
@@ -508,17 +507,17 @@ export function clearSession(): void {
 }
 ```
 
-- [ ] **Step 4: Run tokenStore tests**
+- [x] **Step 4: Run tokenStore tests**
 
 Run:
 
 ```bash
-cd admin && npm run test -- src/lib/auth/tokenStore.test.ts
+npx vitest run --config vite.config.ts web/admin/src/lib/auth/tokenStore.test.ts
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Write failing tests `admin/src/lib/auth/previewHandoff.test.ts`**
+- [x] **Step 5: Write failing tests `admin/src/lib/auth/previewHandoff.test.ts`**
 
 ```typescript
 import { describe, it, expect } from "vitest";
@@ -544,17 +543,17 @@ describe("assertAllowedReturnTo", () => {
 });
 ```
 
-- [ ] **Step 6: Run tests (expect failure)**
+- [x] **Step 6: Run tests (expect failure)**
 
 Run:
 
 ```bash
-cd admin && npm run test -- src/lib/auth/previewHandoff.test.ts
+npx vitest run --config vite.config.ts web/admin/src/lib/auth/previewHandoff.test.ts
 ```
 
-Expected: FAIL — missing module or function.
+Expected: (historical TDD order) FAIL until implementation — current branch PASS.
 
-- [ ] **Step 7: Implement `admin/src/lib/auth/previewHandoff.ts`**
+- [x] **Step 7: Implement `admin/src/lib/auth/previewHandoff.ts`**
 
 ```typescript
 /**
@@ -582,34 +581,36 @@ export function assertAllowedReturnTo(
 }
 ```
 
-- [ ] **Step 8: Run previewHandoff tests**
+- [x] **Step 8: Run previewHandoff tests**
 
 Run:
 
 ```bash
-cd admin && npm run test -- src/lib/auth/previewHandoff.test.ts
+npx vitest run --config vite.config.ts web/admin/src/lib/auth/previewHandoff.test.ts
 ```
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
-git add admin/src/lib/auth
+git add web/admin/src/lib/auth
 git commit -m "feat(admin): token storage and preview return_to allowlist"
 ```
 
 ---
 
-### Task 4: Wire `site-build` to produce `_site/admin/` from `admin/dist`
+### Task 4: Wire `site-build` to bundle `web/admin/dist` into the site artifact
+
+**Status (2026-04-20):** **Complete** — [`site-build.yml`](../../../.github/workflows/site-build.yml) runs root `npm ci` / `npm run build`, copies `web/admin/dist` → **`_bundle/public/admin/`** (not the plan’s older `_site/` + nested `admin/package-lock` pattern).
 
 **Files:**
 
 - Modify: `.github/workflows/site-build.yml`
 
-- [ ] **Step 1: Extend workflow with Node setup and admin build**
+- [x] **Step 1: Extend workflow with Node setup and admin build**
 
-Replace the `Prepare site` step with two steps: **Build admin SPA** then **Assemble _site**. Use this pattern (pin Node 22 to match a single LTS across CI):
+Historical sketch (paths differ on disk—see **Status** above): **Build admin SPA** then assemble artifact. Pin Node 22 across CI:
 
 ```yaml
       - uses: actions/setup-node@v4
@@ -631,23 +632,23 @@ Replace the `Prepare site` step with two steps: **Build admin SPA** then **Assem
           cp -a admin/dist/. _site/admin/
 ```
 
-- [ ] **Step 2: Generate lockfile locally and commit**
+- [x] **Step 2: Generate lockfile locally and commit**
 
 Run on your machine:
 
 ```bash
-cd admin && npm install && cd ..
-git add admin/package-lock.json
+npm install
+git add package-lock.json
 ```
 
-- [ ] **Step 3: Commit workflow + lockfile**
+- [x] **Step 3: Commit workflow + lockfile**
 
 ```bash
-git add .github/workflows/site-build.yml admin/package-lock.json
+git add .github/workflows/site-build.yml package-lock.json
 git commit -m "ci: build admin SPA into site artifact"
 ```
 
-- [ ] **Step 4: Push to origin and confirm Build Site + Deploy Site**
+- [x] **Step 4: Push to origin and confirm Build Site + Deploy Site**
 
 Push your branch to **origin** and open a PR **into `origin/main`** (triggers the same `workflow_run` deploy as today). Expected: preview URL loads `…/admin/` and shows the admin shell (and mindmap still at `/`).
 
@@ -657,7 +658,9 @@ Push your branch to **origin** and open a PR **into `origin/main`** (triggers th
 
 ### Task 4b: Ship Task 2b OAuth Worker with site Worker + static assets
 
-**Goal:** One Cloudflare **Worker + static assets** deployment serves `_site` (mindmap + `/admin/*`) **and** the **same-origin** OAuth token exchange route the SPA calls in preview/production—so the browser never cross-origin `fetch`s `github.com/login/oauth/access_token`, and `client_secret` stays in Wrangler secrets / CI-injected vars only.
+**Status (2026-04-20):** **Complete** in code for **Option A** (Worker + `ASSETS` + OAuth routes). **Step 6** (GitHub App callback URL list for every preview hostname) remains an **ongoing maintainer / org checklist** as previews multiply.
+
+**Goal:** One Cloudflare **Worker + static assets** deployment serves the static tree (mindmap + `/admin/*`) **and** the **same-origin** OAuth token exchange route the SPA calls in preview/production—so the browser never cross-origin `fetch`s `github.com/login/oauth/access_token`, and `client_secret` stays in Wrangler secrets / CI-injected vars only.
 
 **Context:** The repo ships **one** [`cloudflare_site/wrangler.toml`](../../../cloudflare_site/wrangler.toml) Worker with **`[assets]`** and programmatic routes for admin OAuth. [`site-deploy.yml`](../../../.github/workflows/site-deploy.yml) deploys from `cloudflare_site/` using artifacts from **Build Site** (see ADR 0019). Task **2b** / **4b** descriptions below refer to this layout (`cloudflare_site/worker/`, not a separate `admin/worker/` or legacy `site/` tree).
 
@@ -674,41 +677,43 @@ Push your branch to **origin** and open a PR **into `origin/main`** (triggers th
 - [`cloudflare_site/worker/src/index.ts`](../../../cloudflare_site/worker/src/index.ts) — router: OAuth routes + delegate to `env.ASSETS` for static SPA
 - Modify: [`.github/workflows/site-build.yml`](../../../.github/workflows/site-build.yml) — ensure `site/public` layout before deploy still includes `admin/dist` output (unchanged from Task 4 unless worker build needs admin artifacts earlier)
 - Modify: [`.github/workflows/site-deploy.yml`](../../../.github/workflows/site-deploy.yml) — pass secrets to Wrangler for production + preview (`secrets` / `vars` inputs supported by `cloudflare/wrangler-action`); **never** echo secret values in logs
-- Modify: `admin/sample.env.local` (and/or `docs/admin-spa-local-dev.md`) — production + preview Worker URLs, GitHub App callback URL list (`*.workers.dev` preview aliases, production hostname), which GitHub secrets / Cloudflare vars map to which Wrangler names
+- Modify: [`sample.env.local`](../../../sample.env.local) (and **Task 16** `docs/admin-spa-local-dev.md` when written) — production + preview Worker URLs, GitHub App callback URL list (`*.workers.dev` preview aliases, production hostname), which GitHub secrets / Cloudflare vars map to which Wrangler names
 
 **Steps:**
 
-- [ ] **Step 1: Research / spike** — Confirm current Wrangler **4.x** syntax for Worker + assets on this repo’s deploy path (`deploy`, `versions upload --assets`). Read Cloudflare docs for **`ASSETS`** (or successor) with static asset routing.
+- [x] **Step 1: Research / spike** — Confirm current Wrangler **4.x** syntax for Worker + assets on this repo’s deploy path (`deploy`, `versions upload --assets`). Read Cloudflare docs for **`ASSETS`** (or successor) with static asset routing.
 
-- [ ] **Step 2: Implement `site` Worker shell** — `fetch` forwards non-OAuth traffic to assets; OAuth path returns JSON errors with safe status codes (no secret leakage).
+- [x] **Step 2: Implement `site` Worker shell** — `fetch` forwards non-OAuth traffic to assets; OAuth path returns JSON errors with safe status codes (no secret leakage).
 
-- [ ] **Step 3: Wire exchange handler** — PKCE `code_verifier`, `client_secret` from `env` only. Validate **`Origin`** (only) and `redirect_uri` allowlist for production + preview hostnames; add Turnstile + Wrangler rate limits per High 1 remediation.
+- [x] **Step 3: Wire exchange handler** — PKCE `code_verifier`, `client_secret` from `env` only. Validate **`Origin`** (only) and `redirect_uri` allowlist for production + preview hostnames; add Turnstile + Wrangler rate limits per High 1 remediation.
 
-- [ ] **Step 4: Local smoke** — `wrangler dev` from `site/` with built `public/` tree: static `/admin/` loads, `POST /api/oauth/...` returns expected GitHub error shape without real code (then with real code in trusted env).
+- [x] **Step 4: Local smoke** — `wrangler dev` from `cloudflare_site/` with built `public/` tree: static `/admin/` loads, `POST /api/oauth/...` returns expected GitHub error shape without real code (then with real code in trusted env).
 
-- [ ] **Step 5: CI secrets + deploy** — Add GitHub Actions secrets (names TBD in PR, e.g. `CLOUDFLARE_*` already exist; add app OAuth secrets). Update `wrangler-action` `command` or env so preview **versions upload** and production **deploy** bind secrets. Verify PR preview URL: admin shell + OAuth exchange same origin.
+- [x] **Step 5: CI secrets + deploy** — Add GitHub Actions secrets (names TBD in PR, e.g. `CLOUDFLARE_*` already exist; add app OAuth secrets). Update `wrangler-action` `command` or env so preview **versions upload** and production **deploy** bind secrets. Verify PR preview URL: admin shell + OAuth exchange same origin.
 
-- [ ] **Step 6: GitHub App settings** — Maintainer: register **Callback URL(s)** for production admin origin **and** preview Worker URL pattern (per-alias or wildcard policy per org security rules).
+- [ ] **Step 6: GitHub App settings** — Maintainer: register **Callback URL(s)** for production admin origin **and** preview Worker URL pattern (per-alias or wildcard policy per org security rules). *Revisit with **Task 15** once Turnstile vs preview policy is decided.*
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
-git add site .github/workflows
+git add cloudflare_site .github/workflows
 git commit -m "feat(site): Worker + assets with OAuth exchange for admin SPA"
 ```
 
-**Non-goals for Task 4b:** changing DNS outside Cloudflare Workers defaults; full **Task 8** preview handoff (production fragment redirect)—can remain a follow-up once same-origin OAuth works on preview.
+**Non-goals for Task 4b:** changing DNS outside Cloudflare Workers defaults; full **Task 15** preview handoff (production fragment redirect)—tracked separately after Turnstile/preview policy (**Task 15**).
 
 ---
 
 ### Task 5: Status model types (mirror Go `LayerReport`)
 
+**Status (2026-04-20):** **Complete** under `web/admin/src/lib/status/`.
+
 **Files:**
 
-- Create: `admin/src/lib/status/types.ts`
-- Create: `admin/src/lib/status/types.test.ts`
+- Create: `web/admin/src/lib/status/types.ts`
+- Create: `web/admin/src/lib/status/types.test.ts`
 
-- [ ] **Step 1: Write failing test `admin/src/lib/status/types.test.ts`**
+- [x] **Step 1: Write failing test `admin/src/lib/status/types.test.ts`**
 
 ```typescript
 import { describe, it, expect } from "vitest";
@@ -722,17 +727,17 @@ describe("layerStatusLabel", () => {
 });
 ```
 
-- [ ] **Step 2: Run test (expect failure)**
+- [x] **Step 2: Run test (expect failure)**
 
 Run:
 
 ```bash
-cd admin && npm run test -- src/lib/status/types.test.ts
+npx vitest run --config vite.config.ts web/admin/src/lib/status/types.test.ts
 ```
 
-Expected: FAIL.
+Expected: (historical TDD) FAIL until types exist — current branch PASS.
 
-- [ ] **Step 3: Implement `admin/src/lib/status/types.ts`**
+- [x] **Step 3: Implement `admin/src/lib/status/types.ts`**
 
 Align string labels with `internal/layers/layers.go` `LayerStatus.String()`:
 
@@ -769,20 +774,20 @@ export function layerStatusLabel(s: LayerStatus): string {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
 ```bash
-cd admin && npm run test -- src/lib/status/types.test.ts
+npx vitest run --config vite.config.ts web/admin/src/lib/status/types.test.ts
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
-git add admin/src/lib/status
+git add web/admin/src/lib/status
 git commit -m "feat(admin): add LayerReport TypeScript model"
 ```
 
@@ -790,21 +795,23 @@ git commit -m "feat(admin): add LayerReport TypeScript model"
 
 ### Task 6: Minimal Octokit client + 401 handling hook
 
+**Status (2026-04-20):** **Complete** — `@octokit/rest` on root `package.json`; client under `web/admin/src/lib/github/`.
+
 **Files:**
 
-- Create: `admin/package.json` dependency addition (in place): `@octokit/rest`
-- Create: `admin/src/lib/github/client.ts`
-- Create: `admin/src/lib/github/client.test.ts`
+- Create: root `package.json` dependency: `@octokit/rest`
+- Create: `web/admin/src/lib/github/client.ts`
+- Create: `web/admin/src/lib/github/client.test.ts`
 
-- [ ] **Step 1: Add dependency**
+- [x] **Step 1: Add dependency**
 
 Run:
 
 ```bash
-cd admin && npm install @octokit/rest@^21.0.0
+npm install @octokit/rest@^21.0.0
 ```
 
-- [ ] **Step 2: Write failing test `admin/src/lib/github/client.test.ts`**
+- [x] **Step 2: Write failing test `admin/src/lib/github/client.test.ts`**
 
 ```typescript
 import { describe, it, expect, vi } from "vitest";
@@ -818,17 +825,17 @@ describe("createUserOctokit", () => {
 });
 ```
 
-- [ ] **Step 3: Run test (expect failure)**
+- [x] **Step 3: Run test (expect failure)**
 
 Run:
 
 ```bash
-cd admin && npm run test -- src/lib/github/client.test.ts
+npx vitest run --config vite.config.ts web/admin/src/lib/github/client.test.ts
 ```
 
-Expected: FAIL — missing export.
+Expected: (historical TDD) FAIL until export — current branch PASS.
 
-- [ ] **Step 4: Implement `admin/src/lib/github/client.ts`**
+- [x] **Step 4: Implement `admin/src/lib/github/client.ts`**
 
 ```typescript
 import { Octokit } from "@octokit/rest";
@@ -849,20 +856,20 @@ export function createUserOctokit(accessToken: string): Octokit {
 }
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run:
 
 ```bash
-cd admin && npm run test -- src/lib/github/client.test.ts
+npx vitest run --config vite.config.ts web/admin/src/lib/github/client.test.ts
 ```
 
 Expected: PASS (smoke only; hook integration with real 401 is manual).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
-git add admin/package.json admin/package-lock.json admin/src/lib/github
+git add package.json package-lock.json web/admin/src/lib/github
 git commit -m "feat(admin): Octokit factory with 401 event"
 ```
 
@@ -870,17 +877,19 @@ git commit -m "feat(admin): Octokit factory with 401 event"
 
 ### Task 7: Production sign-in (authorize URL + SPA document callback)
 
+**Status (2026-04-20):** **Complete** in app code (`web/admin/src/lib/auth/oauth.ts`, `session.ts`, `App.svelte`). Spec **Appendix A** rows may still be filled incrementally with later tasks.
+
 **Files:**
 
-- Create / maintain: `admin/src/lib/auth/oauth.ts` (PKCE-aware; builds on `pkce.ts` from **Task 2b**)
-- Modify: `admin/src/App.svelte` (`onMount`: document `?code=&state=` handoff, `history.replaceState` to `#/`, token exchange)
+- Create / maintain: `web/admin/src/lib/auth/oauth.ts` (PKCE-aware; builds on `pkce.ts` from **Task 2b**)
+- Modify: `web/admin/src/App.svelte` (`onMount`: document `?code=&state=` handoff, `history.replaceState` to `#/`, token exchange)
 - Modify: `docs/superpowers/specs/2026-04-06-fullsend-admin-spa-design.md` (Appendix A: REST rows for `/user` and Worker proxy path for exchange)
 
 **Prerequisite:** **Task 2b** (OAuth Worker + Vite proxy + PKCE) must exist so token exchange is **same-origin** to the admin origin in dev; production deploy of that Worker is tracked in **Task 2b** follow-up / **Task 4** extension.
 
-- [ ] **Step 1: `admin/src/lib/auth/oauth.ts`** — PKCE authorize (`startGithubSignIn`), `getOAuthRedirectUri()` from `new URL(import.meta.env.BASE, window.location.origin).href`, document handoff (`consumeOAuthParamsFromDocumentUrl`, one-shot `sessionStorage`), `completeGithubOAuthFromHandoff` (`POST /api/oauth/token`, `saveToken`, `refreshSession`).
+- [x] **Step 1: `admin/src/lib/auth/oauth.ts`** — PKCE authorize (`startGithubSignIn`), `getOAuthRedirectUri()` from `new URL(import.meta.env.BASE, window.location.origin).href`, document handoff (`consumeOAuthParamsFromDocumentUrl`, one-shot `sessionStorage`), `completeGithubOAuthFromHandoff` (`POST /api/oauth/token`, `saveToken`, `refreshSession`).
 
-- [ ] **Step 2: SPA document callback (no static `callback.html`, no `#/oauth/finish`)**
+- [x] **Step 2: SPA document callback (no static `callback.html`, no `#/oauth/finish`)**
 
 Register the GitHub App callback as the **SPA entry** matching Vite `base: '/admin/'`, e.g. `http://localhost:5173/admin/` (trailing slash should match `redirect_uri` in code). **`redirect_uri`** in authorize + token exchange is `new URL(import.meta.env.BASE, window.location.origin).href`.
 
@@ -888,34 +897,11 @@ On load, if `URLSearchParams(location.search).has("code")`, stash `{ code, state
 
 The dev Worker allowlists loopback **`redirect_uri`** pathnames **`/admin/`**, **`/admin`**, and legacy **`/admin/oauth/callback.html`** for migrations.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
-git add admin
+git add web/admin
 git commit -m "feat(admin): OAuth callback via SPA entry /admin/"
-```
-
----
-
-### Task 8: Preview OAuth handoff (production `sessionStorage` + fragment on preview)
-
-**Files:**
-
-- Create: `admin/src/lib/auth/previewStart.ts` (build production URL with signed `state` placeholder—use random `state` + server verification later; **MVP:** `state` = base64url JSON `{ "nonce": "…", "return_to": "<preview>" }` + **HMAC** optional future)
-- Modify: `admin/src/routes/Home.svelte` — button “Sign in on preview” when `import.meta.env` or runtime detection says hostname is preview
-- Modify: `docs/superpowers/specs/2026-04-06-fullsend-admin-spa-design.md` — document `/oauth/preview-start` and `/oauth/preview-callback` on **production** static pages mirroring Task 7 callback pattern
-
-**MVP crypto:** use `crypto.randomUUID()` for `nonce`; store in `sessionStorage` on production at preview-start page; on preview-callback compare nonce inside `state` JSON **after** GitHub returns to production. **Full HMAC** binding of `return_to` is a follow-up commit once production has a secret (Worker or env-injected at build—**avoid** embedding secrets in static JS).
-
-- [ ] **Step 1: Add `admin/public/oauth/preview-start.html` and `preview-callback.html`** following the spec’s flow (production stores PKCE/state, GitHub redirects to production, production redirects to `return_to` with `#access_token=...&token_type=...&expires_in=...` **only if** GitHub fragment flow applies—**verify** against GitHub docs; if GitHub does not put tokens in hash, use **your** production page to append **fragment** after server exchange).
-
-- [ ] **Step 2: Vitest for `assertAllowedReturnTo` integration** from preview-start (construct `return_to`, assert throws on evil).
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add admin/public/oauth admin/src
-git commit -m "feat(admin): preview OAuth handoff via production origin"
 ```
 
 ---
@@ -1087,13 +1073,38 @@ git commit -m "feat(admin): apply config repo layer from wizard"
 
 ---
 
-### Task 15: Local dev + CSP notes
+### Task 15: Preview OAuth handoff (production `sessionStorage` + fragment on preview)
+
+**Status:** **Open — redesign.** This content was **old Task 8**; it is sequenced **after Task 14** so it is not blocked by feature work, but the design must be revisited: the site Worker **requires Turnstile verification on token exchange**, which may be **poorly suited** to **per-PR preview** review flows (anonymous traffic, embed friction, or policy). Decide an explicit workaround before shipping preview-only sign-in (examples to evaluate, not commitments): preview-only **relaxed** verification behind tighter **rate limits**; **production-only** OAuth with fragment / `return_to` handoff to preview unchanged; **separate GitHub OAuth app** or env tier for previews; or Turnstile **managed** / hostname-key strategy that works for ephemeral preview hosts. Record the threat-model trade-off in the spec and Worker.
+
+**Files:**
+
+- Create: `web/admin/src/lib/auth/previewStart.ts` (build production URL with signed `state` placeholder—use random `state` + server verification later; **MVP:** `state` = base64url JSON `{ "nonce": "…", "return_to": "<preview>" }` + **HMAC** optional future)
+- Modify: `web/admin/src/routes/Home.svelte` — button “Sign in on preview” when `import.meta.env` or runtime detection says hostname is preview
+- Modify: `docs/superpowers/specs/2026-04-06-fullsend-admin-spa-design.md` — document `/oauth/preview-start` and `/oauth/preview-callback` on **production** static pages mirroring **Task 7** callback pattern
+
+**MVP crypto:** use `crypto.randomUUID()` for `nonce`; store in `sessionStorage` on production at preview-start page; on preview-callback compare nonce inside `state` JSON **after** GitHub returns to production. **Full HMAC** binding of `return_to` is a follow-up commit once production has a secret (Worker or env-injected at build—**avoid** embedding secrets in static JS).
+
+- [ ] **Step 1: Add `web/admin/public/oauth/preview-start.html` and `preview-callback.html`** following the spec’s flow (production stores PKCE/state, GitHub redirects to production, production redirects to `return_to` with `#access_token=...&token_type=...&expires_in=...` **only if** GitHub fragment flow applies—**verify** against GitHub docs; if GitHub does not put tokens in hash, use **your** production page to append **fragment** after server exchange).
+
+- [ ] **Step 2: Vitest for `assertAllowedReturnTo` integration** from preview-start (construct `return_to`, assert throws on evil).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add web/admin/public/oauth web/admin/src
+git commit -m "feat(admin): preview OAuth handoff via production origin"
+```
+
+---
+
+### Task 16: Local dev + CSP notes
 
 **Files:**
 
 - Create: `docs/admin-spa-local-dev.md`
 
-Include: creating a **dev** GitHub App, callback URLs for Vite dev, **`npm run dev`** (Vite + OAuth Worker per **Task 2b**), pointers to **`admin/sample.env.local`**, and **separate** preview app checklist.
+Include: creating a **dev** GitHub App, callback URLs for Vite dev, **`npm run dev`** (Vite + OAuth Worker per **Task 2b**), pointers to repo-root **`sample.env.local`** (and **`web/admin/README.md`**), and **separate** preview app checklist (coordinate with **Task 15** once Turnstile/preview policy is settled).
 
 - [ ] **Step 1: Add doc**
 
@@ -1113,19 +1124,19 @@ git commit -m "docs: admin SPA local development checklist"
 | Spec area | Task(s) |
 |-----------|---------|
 | Static SPA, GitHub API from browser | 2, 2b, 6–9 |
-| GitHub App sign-in + token storage | 1, 2b (exchange + PKCE), 7–8 |
-| Per-PR previews + preview OAuth | 4, **4b** (Worker + assets + OAuth on preview host), 8 (production origin pages) |
+| GitHub App sign-in + token storage | 1, 2b (exchange + PKCE), 3, 7 |
+| Per-PR previews + preview OAuth | 4, **4b** (Worker + assets + OAuth on preview host), **15** (production-origin preview handoff — **open**, Turnstile vs preview) |
 | Org list + search | 9 |
 | Org/repo union + orphan | 12 |
 | `LayerReport` / analyze semantics | 5, 10–11 |
 | Wizards + review | 13–14 |
-| Self-hosted / local dev | 2b, 15 (`sample.env.local` + `docs/admin-spa-local-dev.md`) |
+| Self-hosted / local dev | 2b, **16** (`sample.env.local` + `docs/admin-spa-local-dev.md`) |
 | Permission matrix | 1, 2b, 7, 9–11 (incremental) |
 | No automated CLI↔SPA parity CI | Omitted intentionally |
 
 **2. Placeholder scan**
 
-No TBD/TODO strings; **Task 1** (OAuth verification gate) is **complete** (2026-04-12). **Task 2b** is the mandatory admin-local Worker + PKCE path; **Task 4b** deploys exchange + assets on Workers; Task 7 assumes Task 2b exists.
+No TBD/TODO strings. **Complete (2026-04-20 plan refresh):** Tasks **1**, **2**, **2b**, **3**, **4**, **4b** (Step 6 callback URL checklist ongoing), **5**, **6**, **7**. **Open:** **9–14**, **15** (preview OAuth redesign), **16** (local dev doc), **4b** Step 6.
 
 **3. Type consistency**
 
@@ -1134,7 +1145,7 @@ No TBD/TODO strings; **Task 1** (OAuth verification gate) is **complete** (2026-
 **Gaps / follow-ups**
 
 - **Path-based routing** under `/admin/*` without hash: add a dedicated task after verifying Cloudflare static asset fallback for nested `index.html`.
-- **PKCE (baseline):** **Task 2b** adds PKCE for the production-shaped authorize + exchange path. **Task 8** preview handoff still uses structured `state` + nonce; upgrade to HMAC or signed JWT when preview `return_to` binding needs hardening beyond allowlist.
+- **PKCE (baseline):** **Task 2b** adds PKCE for the production-shaped authorize + exchange path. **Task 15** preview handoff still uses structured `state` + nonce in the original sketch; upgrade to HMAC or signed JWT when preview `return_to` binding needs hardening beyond allowlist—and reconcile with **Turnstile** requirements on **`POST /api/oauth/token`** before shipping.
 
 ---
 
