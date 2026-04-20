@@ -592,7 +592,7 @@ func runHeartbeat(printer *ui.Printer, start time.Time, timeout time.Duration, d
 			remaining := (timeout - elapsed).Truncate(time.Second)
 			msg := fmt.Sprintf("Agent running (%s elapsed, %s remaining)", elapsed, remaining)
 			if isCI {
-				fmt.Fprintf(os.Stderr, "::notice::%s\n", sanitizeGHA(msg))
+				fmt.Fprintf(os.Stderr, "::notice::%s\n", msg)
 			}
 			printer.Heartbeat(msg)
 		}

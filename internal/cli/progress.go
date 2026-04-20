@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -221,21 +222,33 @@ func emitToolProgress(printer *ui.Printer, toolName, context string, start time.
 		msg = fmt.Sprintf("%s (%s, %d tools)", toolName, elapsed, toolCount)
 	}
 
+	msg = sanitizeOutput(msg)
 	if isCI {
-		fmt.Fprintf(os.Stderr, "::notice::%s\n", sanitizeGHA(msg))
+		fmt.Fprintf(os.Stderr, "::notice::%s\n", msg)
 	}
 	printer.Heartbeat(msg)
 }
 
-// sanitizeGHA strips characters that could inject GitHub Actions workflow
-// commands from untrusted sandbox output, including URL-encoded variants.
-func sanitizeGHA(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.ReplaceAll(s, "%0A", " ")
-	s = strings.ReplaceAll(s, "%0a", " ")
-	s = strings.ReplaceAll(s, "%0D", " ")
-	s = strings.ReplaceAll(s, "%0d", " ")
+// ansiEscRe matches ANSI CSI sequences, OSC sequences, and charset designators.
+var ansiEscRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][A-Z0-9]`)
+
+// sanitizeOutput strips ANSI escape sequences, control characters, and GHA
+// workflow command markers from untrusted sandbox output. Safe for terminals,
+// CI log viewers, and log aggregators.
+func sanitizeOutput(s string) string {
+	s = ansiEscRe.ReplaceAllString(s, "")
 	s = strings.ReplaceAll(s, "::", ": :")
-	return s
+	for _, enc := range []string{"%0A", "%0a", "%0D", "%0d"} {
+		s = strings.ReplaceAll(s, enc, " ")
+	}
+	var buf strings.Builder
+	buf.Grow(len(s))
+	for _, r := range s {
+		if r >= 0x20 && r != 0x7F {
+			buf.WriteRune(r)
+		} else {
+			buf.WriteByte(' ')
+		}
+	}
+	return buf.String()
 }

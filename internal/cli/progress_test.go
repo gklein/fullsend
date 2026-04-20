@@ -282,7 +282,7 @@ func TestProgressParserReaderError(t *testing.T) {
 	}
 }
 
-func TestSanitizeGHA(t *testing.T) {
+func TestSanitizeOutput(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -318,12 +318,47 @@ func TestSanitizeGHA(t *testing.T) {
 			input: "Read%0d%0a::error::pwned",
 			want:  "Read  : :error: :pwned",
 		},
+		{
+			name:  "ANSI CSI color escape",
+			input: "Read: /src/\x1b[31mred\x1b[0m.go",
+			want:  "Read: /src/red.go",
+		},
+		{
+			name:  "ANSI CSI clear screen",
+			input: "Bash: \x1b[2Jmake test",
+			want:  "Bash: make test",
+		},
+		{
+			name:  "ANSI OSC clipboard write",
+			input: "Read: /src/\x1b]52;c;SGVsbG8=\x07file.go",
+			want:  "Read: /src/file.go",
+		},
+		{
+			name:  "raw control characters",
+			input: "Read: /src/\x00\x01\x02file.go",
+			want:  "Read: /src/   file.go",
+		},
+		{
+			name:  "DEL character",
+			input: "Read: /src/file\x7f.go",
+			want:  "Read: /src/file .go",
+		},
+		{
+			name:  "tab character",
+			input: "Read: /src/\tfile.go",
+			want:  "Read: /src/ file.go",
+		},
+		{
+			name:  "combined ANSI and GHA injection",
+			input: "\x1b[2J\n::error::pwned",
+			want:  " : :error: :pwned",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sanitizeGHA(tt.input)
+			got := sanitizeOutput(tt.input)
 			if got != tt.want {
-				t.Errorf("sanitizeGHA(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("sanitizeOutput(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
