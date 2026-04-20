@@ -282,6 +282,33 @@ func TestProgressParserReaderError(t *testing.T) {
 	}
 }
 
+func TestProgressParserOversizedLineSkipped(t *testing.T) {
+	normalBefore := `{"type":"assistant","content":[{"type":"tool_use","name":"Read","input":{"file_path":"/before.go"}}]}`
+	oversized := `{"type":"assistant","content":[{"type":"tool_use","name":"Write","input":{"file_path":"/big.go","content":"` + strings.Repeat("x", 2*1024*1024) + `"}}]}`
+	normalAfter := `{"type":"assistant","content":[{"type":"tool_use","name":"Read","input":{"file_path":"/after.go"}}]}`
+
+	input := strings.NewReader(normalBefore + "\n" + oversized + "\n" + normalAfter + "\n")
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	metrics := &RunMetrics{}
+
+	if err := progressParser(input, printer, time.Now(), metrics); err != nil {
+		t.Fatalf("progressParser returned error: %v", err)
+	}
+
+	if metrics.ToolCalls.Load() != 2 {
+		t.Errorf("expected 2 tool calls (oversized skipped), got %d", metrics.ToolCalls.Load())
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "/before.go") {
+		t.Errorf("expected line before oversized, got: %s", output)
+	}
+	if !strings.Contains(output, "/after.go") {
+		t.Errorf("expected line after oversized, got: %s", output)
+	}
+}
+
 func TestSanitizeOutput(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -352,6 +379,21 @@ func TestSanitizeOutput(t *testing.T) {
 			name:  "combined ANSI and GHA injection",
 			input: "\x1b[2J\n::error::pwned",
 			want:  " : :error: :pwned",
+		},
+		{
+			name:  "8-bit CSI stripped",
+			input: "Read: /src/\xC2\x9B31mred.go",
+			want:  "Read: /src/ 31mred.go",
+		},
+		{
+			name:  "8-bit OSC stripped",
+			input: "Read: /src/\xC2\x9D52;c;SGVsbG8=file.go",
+			want:  "Read: /src/ 52;c;SGVsbG8=file.go",
+		},
+		{
+			name:  "all C1 control range stripped",
+			input: "a\xC2\x80b\xC2\x8Fc\xC2\x90d\xC2\x9Fe",
+			want:  "a b c d e",
 		},
 	}
 	for _, tt := range tests {

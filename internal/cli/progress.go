@@ -60,19 +60,29 @@ type RunMetrics struct {
 // (binary name for Bash, file path for Read/Write/Edit) without logging
 // potentially sensitive arguments.
 func progressParser(r io.Reader, printer *ui.Printer, start time.Time, metrics *RunMetrics) error {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
-
+	br := bufio.NewReaderSize(r, 1024*1024)
 	isCI := os.Getenv("GITHUB_ACTIONS") == "true"
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for {
+		line, isPrefix, err := br.ReadLine()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if isPrefix {
+			for isPrefix && err == nil {
+				_, isPrefix, err = br.ReadLine()
+			}
+			continue
+		}
 		if len(line) == 0 {
 			continue
 		}
 
 		var evt streamEvent
-		if err := json.Unmarshal(line, &evt); err != nil {
+		if jsonErr := json.Unmarshal(line, &evt); jsonErr != nil {
 			continue
 		}
 
@@ -80,8 +90,6 @@ func progressParser(r io.Reader, printer *ui.Printer, start time.Time, metrics *
 			parseAssistantToolUse(line, printer, start, metrics, isCI)
 		}
 	}
-
-	return scanner.Err()
 }
 
 func parseAssistantToolUse(line []byte, printer *ui.Printer, start time.Time, metrics *RunMetrics, isCI bool) {
@@ -224,7 +232,7 @@ func sanitizeOutput(s string) string {
 	var buf strings.Builder
 	buf.Grow(len(s))
 	for _, r := range s {
-		if r >= 0x20 && r != 0x7F {
+		if (r >= 0x20 && r < 0x7F) || r > 0x9F {
 			buf.WriteRune(r)
 		} else {
 			buf.WriteByte(' ')
