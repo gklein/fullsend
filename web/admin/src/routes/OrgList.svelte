@@ -9,25 +9,28 @@
   let search = $state("");
   let loading = $state(false);
   let error = $state<string | null>(null);
+  let emptyHint = $state<string | null>(null);
 
   async function loadOrgs(force: boolean) {
     const token = loadToken()?.accessToken;
     if (!token) {
       orgs = [];
       error = null;
+      emptyHint = null;
       return;
     }
     loading = true;
     error = null;
+    emptyHint = null;
     try {
-      orgs = await fetchOrgs(token, { force });
+      const r = await fetchOrgs(token, { force });
+      orgs = r.orgs;
+      emptyHint = r.emptyHint;
     } catch (e) {
       orgs = [];
+      emptyHint = null;
       if (e instanceof FetchOrgsError) {
-        error =
-          e.status === 401 || e.status === 403
-            ? "Could not load organizations — try signing out and back in if your token expired."
-            : e.message;
+        error = e.message;
       } else {
         error =
           e instanceof Error ? e.message : "Failed to load organizations.";
@@ -43,6 +46,7 @@
       else {
         orgs = [];
         error = null;
+        emptyHint = null;
       }
     });
     return unsub;
@@ -90,9 +94,12 @@
     {:else if filtered.length === 0}
       <p class="muted">
         {orgs.length === 0
-          ? "No organization memberships returned for this account."
+          ? "No organizations returned for this token."
           : "No organizations match your filter."}
       </p>
+      {#if orgs.length === 0 && emptyHint}
+        <p class="hint" role="note">{emptyHint}</p>
+      {/if}
     {:else}
       <ul class="list">
         {#each filtered as o (o.login)}
@@ -185,6 +192,17 @@
   .muted {
     color: #555;
     margin: 0 0 0.75rem;
+  }
+  .hint {
+    margin: 0 0 0.75rem;
+    padding: 0.65rem 0.75rem;
+    font-size: 0.9rem;
+    line-height: 1.45;
+    color: #333;
+    background: #f6f8fa;
+    border: 1px solid #d8dee4;
+    border-radius: 6px;
+    max-width: 40rem;
   }
   .err {
     color: #a40000;
