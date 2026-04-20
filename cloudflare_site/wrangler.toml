@@ -15,6 +15,11 @@ preview_urls = true
 [assets]
 directory = "./public"
 not_found_handling = "single-page-application"
+# With compatibility_date >= 2025-04-01, navigations (Sec-Fetch-Mode: navigate) skip the Worker by
+# default. Admin sign-in uses location.assign to GET /api/oauth/authorize — without this, that hop
+# is served as SPA fallback (/index.html) instead of the OAuth redirect. See:
+# https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/
+run_worker_first = ["/api/*"]
 
 # Native rate limits (Wrangler ≥ 4.36). namespace_id must be a string of a positive integer (Cloudflare docs).
 # Local dev: bases below. CI (site-deploy.yml): patch-wrangler-rate-limit-namespace-ids.mjs sets
