@@ -194,9 +194,7 @@ func newInstallCmd() *cobra.Command {
 }
 
 // vendorFullsendBinary cross-compiles the fullsend binary for linux/amd64
-// and uploads it to .fullsend/bin/fullsend. This allows CI workflows to use
-// the vendored binary instead of downloading from GitHub releases, enabling
-// rapid iteration during development without cutting a release.
+// and uploads it to .fullsend/bin/fullsend via layers.VendorBinary.
 func vendorFullsendBinary(ctx context.Context, client forge.Client, printer *ui.Printer, org string) error {
 	printer.StepStart("Cross-compiling fullsend for linux/amd64")
 
@@ -207,7 +205,6 @@ func vendorFullsendBinary(ctx context.Context, client forge.Client, printer *ui.
 	tmpBinary.Close()
 	defer os.Remove(tmpBinary.Name())
 
-	// Cross-compile. The source is the module containing this package.
 	buildCmd := exec.Command("go", "build",
 		"-ldflags", fmt.Sprintf("-X github.com/fullsend-ai/fullsend/internal/cli.version=%s-vendored", version),
 		"-o", tmpBinary.Name(),
@@ -222,17 +219,17 @@ func vendorFullsendBinary(ctx context.Context, client forge.Client, printer *ui.
 	printer.StepDone("Cross-compiled fullsend for linux/amd64")
 
 	printer.StepStart("Uploading vendored binary to .fullsend/bin/fullsend")
-	binaryData, err := os.ReadFile(tmpBinary.Name())
-	if err != nil {
-		return fmt.Errorf("reading compiled binary: %w", err)
+	if err := layers.VendorBinary(ctx, client, org, tmpBinary.Name()); err != nil {
+		printer.StepFail("Failed to upload vendored binary")
+		return err
 	}
 
-	if err := client.CreateOrUpdateFile(ctx, org, forge.ConfigRepoName,
-		"bin/fullsend", "chore: vendor fullsend binary for development", binaryData); err != nil {
-		printer.StepFail("Failed to upload vendored binary")
-		return fmt.Errorf("uploading binary: %w", err)
+	info, _ := os.Stat(tmpBinary.Name())
+	if info != nil {
+		printer.StepDone(fmt.Sprintf("Uploaded vendored binary (%d MB)", info.Size()/(1024*1024)))
+	} else {
+		printer.StepDone("Uploaded vendored binary")
 	}
-	printer.StepDone(fmt.Sprintf("Uploaded vendored binary (%d MB)", len(binaryData)/(1024*1024)))
 
 	return nil
 }

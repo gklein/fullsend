@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -155,6 +156,7 @@ func TestAdminInstallUninstall(t *testing.T) {
 	// Phase 2.5: Triage dispatch smoke test
 	// =========================================
 	t.Log("=== Phase 2.5: Triage Dispatch Smoke Test ===")
+	vendorBinaryForE2E(t, env)
 	runTriageDispatchSmokeTest(t, env)
 
 	// =========================================
@@ -492,6 +494,29 @@ func verifyNotInstalled(t *testing.T, env *e2eEnv) {
 			t.Logf("layer %s status: %s (accepted)", report.Name, report.Status)
 		}
 	}
+}
+
+// vendorBinaryForE2E builds the fullsend binary for the current platform
+// (which is linux/amd64 in CI) and uploads it to the config repo so the
+// triage workflow uses the code under test rather than a released version.
+func vendorBinaryForE2E(t *testing.T, env *e2eEnv) {
+	t.Helper()
+
+	tmpBinary, err := os.CreateTemp("", "fullsend-e2e-*")
+	require.NoError(t, err)
+	tmpBinary.Close()
+	t.Cleanup(func() { os.Remove(tmpBinary.Name()) })
+
+	t.Log("Building fullsend binary for vendoring...")
+	cmd := exec.Command("go", "build", "-o", tmpBinary.Name(), "./cmd/fullsend/")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "building fullsend binary: %s", string(out))
+
+	t.Log("Uploading vendored binary to .fullsend/bin/fullsend...")
+	err = layers.VendorBinary(context.Background(), env.client, testOrg, tmpBinary.Name())
+	require.NoError(t, err, "vendoring binary")
+	t.Log("Vendored binary uploaded successfully")
 }
 
 func runTriageDispatchSmokeTest(t *testing.T, env *e2eEnv) {

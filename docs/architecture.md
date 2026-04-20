@@ -82,7 +82,7 @@ The harness draws its configuration from the adopting organization's **`.fullsen
   output against a declared JSON schema on the host. Non-compliant output
   triggers a retry (capped); exhaustion is a hard failure — no unvalidated
   output is emitted
-  ([ADR 0020](ADRs/0020-harness-level-output-schema-enforcement.md)).
+  ([ADR 0022](ADRs/0022-harness-level-output-schema-enforcement.md)).
 
 **Open questions:**
 

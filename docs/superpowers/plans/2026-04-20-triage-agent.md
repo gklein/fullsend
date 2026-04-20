@@ -4,7 +4,7 @@
 
 **Goal:** Implement the triage agent (Story 3, #126) — a single-shot agent that reads a GitHub issue, decides whether information is sufficient, and either asks a clarifying question or declares the issue triaged, communicating its decision via structured JSON that a deterministic post-script interprets and acts on.
 
-**Architecture:** The agent runs inside a sandbox via `claude --print --agent triage`. It reads the issue (title, body, all comments) using `gh issue view`, applies a hybrid questioning strategy (phased interview + ambiguity gating from the PR #170 experiment), and writes a single JSON file to `$FULLSEND_OUTPUT_DIR/triage-result.json`. Per [ADR 0020](../ADRs/0020-harness-level-output-schema-enforcement.md), the harness first validates the JSON against a declared schema (with retry on non-compliance), then a post-script (`scripts/post-triage.sh`) running on the host performs the deterministic GitHub mutations: posting a comment, applying labels, and optionally closing the issue. Before the agent runs, a label-reset step in the triage workflow strips all triage-related labels to a clean baseline (per Story 2 #125). The agent never directly mutates the issue — all side effects flow through the post-script.
+**Architecture:** The agent runs inside a sandbox via `claude --print --agent triage`. It reads the issue (title, body, all comments) using `gh issue view`, applies a hybrid questioning strategy (phased interview + ambiguity gating from the PR #170 experiment), and writes a single JSON file to `$FULLSEND_OUTPUT_DIR/triage-result.json`. Per [ADR 0022](../ADRs/0022-harness-level-output-schema-enforcement.md), the harness first validates the JSON against a declared schema (with retry on non-compliance), then a post-script (`scripts/post-triage.sh`) running on the host performs the deterministic GitHub mutations: posting a comment, applying labels, and optionally closing the issue. Before the agent runs, a label-reset step in the triage workflow strips all triage-related labels to a clean baseline (per Story 2 #125). The agent never directly mutates the issue — all side effects flow through the post-script.
 
 **Tech Stack:** Bash (post-script, schema validation), JSON Schema, Go (forge interface, e2e tests), Claude agent markdown, GitHub Actions YAML
 
@@ -12,9 +12,9 @@
 
 ## Design Decisions
 
-### Agent output contract (ADR 0020)
+### Agent output contract (ADR 0022)
 
-The agent writes a single JSON file. Per ADR 0020, the harness validates this file against a declared JSON Schema before the post-script runs. The pipeline is:
+The agent writes a single JSON file. Per ADR 0022, the harness validates this file against a declared JSON Schema before the post-script runs. The pipeline is:
 
 ```
 agent produces JSON → schema validation (retry on fail) → post-script (applies GitHub mutations)
@@ -103,7 +103,7 @@ The triage workflow fires on `issues.opened`, `issues.edited`, `issue_comment.cr
 
 1. Pre-script strips all triage labels to a clean baseline
 2. Agent runs, reads full issue, assesses, writes JSON
-3. Schema validation checks JSON against declared schema (retry on fail per ADR 0020)
+3. Schema validation checks JSON against declared schema (retry on fail per ADR 0022)
 4. Post-script reads validated JSON and performs GitHub mutations:
    - `insufficient`: post question + apply `needs-info`
    - `duplicate`: post notice + apply `duplicate` + close issue
@@ -121,7 +121,7 @@ The loop is stateless between invocations. Each agent invocation is single-shot 
 | File | Responsibility |
 |------|---------------|
 | `internal/scaffold/fullsend-repo/agents/triage.md` | Agent prompt (overwrite existing placeholder) |
-| `internal/scaffold/fullsend-repo/schemas/triage-result.schema.json` | JSON Schema for triage agent output (ADR 0020) |
+| `internal/scaffold/fullsend-repo/schemas/triage-result.schema.json` | JSON Schema for triage agent output (ADR 0022) |
 | `internal/scaffold/fullsend-repo/scripts/validate-output-schema.sh` | Generic schema validator — works for any agent |
 | `internal/scaffold/fullsend-repo/scripts/pre-triage.sh` | Pre-script: strip triage labels to clean baseline |
 | `internal/scaffold/fullsend-repo/scripts/post-triage.sh` | Post-script: parse validated JSON, post comment, apply labels |
@@ -347,7 +347,7 @@ Refs #126"
 **Files:**
 - Create: `internal/scaffold/fullsend-repo/scripts/post-triage.sh`
 
-The post-script runs on the host after sandbox cleanup. It reads the agent's validated JSON output and performs deterministic GitHub mutations. The working directory is the run output directory (set by `run.go:180`). By the time this script runs, ADR 0020 schema validation has already passed, so the JSON structure is guaranteed.
+The post-script runs on the host after sandbox cleanup. It reads the agent's validated JSON output and performs deterministic GitHub mutations. The working directory is the run output directory (set by `run.go:180`). By the time this script runs, ADR 0022 schema validation has already passed, so the JSON structure is guaranteed.
 
 - [ ] **Step 1: Write the post-script**
 
@@ -467,7 +467,7 @@ Refs #126"
 
 ---
 
-### Task 3: JSON Schema for triage result (ADR 0020)
+### Task 3: JSON Schema for triage result (ADR 0022)
 
 **Files:**
 - Create: `internal/scaffold/fullsend-repo/schemas/triage-result.schema.json`
@@ -481,7 +481,7 @@ Define the formal JSON Schema that the harness validates agent output against be
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "triage-result.schema.json",
   "title": "Triage Agent Result",
-  "description": "Structured output from the triage agent, validated by the harness before the post-script runs (ADR 0020).",
+  "description": "Structured output from the triage agent, validated by the harness before the post-script runs (ADR 0022).",
   "type": "object",
   "required": ["action", "reasoning", "comment"],
   "properties": {
@@ -567,7 +567,7 @@ Expected: No error.
 
 ```bash
 git add internal/scaffold/fullsend-repo/schemas/triage-result.schema.json
-git commit -m "feat(triage): add JSON Schema for triage result (ADR 0020)
+git commit -m "feat(triage): add JSON Schema for triage result (ADR 0022)
 
 Formal schema validated by the harness before the post-script runs.
 Uses conditional requirements: 'duplicate' requires duplicate_of,
@@ -578,7 +578,7 @@ Refs #126"
 
 ---
 
-### Task 4: Generic schema validation script (ADR 0020)
+### Task 4: Generic schema validation script (ADR 0022)
 
 **Files:**
 - Create: `internal/scaffold/fullsend-repo/scripts/validate-output-schema.sh`
@@ -592,7 +592,7 @@ This script is agent-agnostic — it validates any agent's output against a decl
 #!/usr/bin/env bash
 # validate-output-schema.sh — Validate agent output against a JSON Schema.
 #
-# Generic script used by the harness validation_loop (ADR 0020).
+# Generic script used by the harness validation_loop (ADR 0022).
 # Works for any agent — the schema path is configured in the harness.
 #
 # Required env vars:
@@ -636,7 +636,7 @@ fi
 # Validate against schema using Python's jsonschema.
 # jsonschema is required — fail hard if not installed.
 if ! python3 -c "import jsonschema" 2>/dev/null; then
-  echo "FAIL: python3 jsonschema package is not installed (required by ADR 0020)"
+  echo "FAIL: python3 jsonschema package is not installed (required by ADR 0022)"
   exit 1
 fi
 
@@ -673,7 +673,7 @@ Run: `git rm internal/scaffold/fullsend-repo/scripts/validate-triage.sh`
 
 ```bash
 git add internal/scaffold/fullsend-repo/scripts/validate-output-schema.sh
-git commit -m "feat(harness): add generic output schema validator (ADR 0020)
+git commit -m "feat(harness): add generic output schema validator (ADR 0022)
 
 Agent-agnostic script that validates any agent's JSON output against
 a declared schema. Used as the validation_loop script in the harness.
@@ -879,7 +879,7 @@ Refs #126"
 
 The harness now uses all three mechanisms:
 - `pre_script` — label reset before the agent runs (Story 2)
-- `validation_loop` — schema validation per ADR 0020, retries agent on non-compliance
+- `validation_loop` — schema validation per ADR 0022, retries agent on non-compliance
 - `post_script` — deterministic GitHub mutations after validation passes
 
 - [ ] **Step 1: Update triage.yaml**
@@ -931,7 +931,7 @@ git add internal/scaffold/fullsend-repo/harness/triage.yaml
 git commit -m "feat(triage): wire pre-script, schema validation, and post-script
 
 pre_script resets triage labels (Story 2). validation_loop validates
-output against JSON Schema (ADR 0020) with 1 retry. post_script
+output against JSON Schema (ADR 0022) with 1 retry. post_script
 applies GitHub mutations. runner_env passes GH_TOKEN and schema path.
 
 Refs #125, #126"
