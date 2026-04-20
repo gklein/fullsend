@@ -31,8 +31,12 @@ function octokitErrorStatus(e: unknown): number {
 }
 
 /**
- * Lists org memberships from GitHub REST in the browser (`api.github.com` allows CORS for this route).
- * Results are cached in memory for the session until `force` or `clearOrgListMemoryCache`.
+ * Lists organizations the token may access via `GET /user/orgs` in the browser (CORS allows it).
+ *
+ * We use {@link Octokit.rest.orgs.listForAuthenticatedUser} rather than
+ * `listMembershipsForAuthenticatedUser` (`GET /user/memberships/orgs`): GitHub App user access
+ * tokens commonly return an **empty** memberships list while `/user/orgs` still reflects orgs
+ * the app installation can see (see GitHub REST docs for both endpoints).
  */
 export async function fetchOrgs(
   accessToken: string,
@@ -44,24 +48,23 @@ export async function fetchOrgs(
 
   const octokit = createUserOctokit(accessToken);
 
-  let memberships: {
-    organization?: { login?: string } | null;
-  }[];
+  let orgPayloads: { login?: string }[];
 
   try {
-    memberships = await octokit.paginate(
-      octokit.rest.orgs.listMembershipsForAuthenticatedUser,
+    orgPayloads = await octokit.paginate(
+      octokit.rest.orgs.listForAuthenticatedUser,
       { per_page: 100 },
     );
   } catch (e) {
     const status = octokitErrorStatus(e);
-    const msg = e instanceof Error ? e.message : "GitHub org memberships failed.";
+    const msg = e instanceof Error ? e.message : "GitHub organizations failed.";
     throw new FetchOrgsError(status, msg);
   }
 
   const logins = new Map<string, string>();
-  for (const m of memberships) {
-    const login = m.organization?.login?.trim();
+  for (const org of orgPayloads) {
+    const login =
+      typeof org.login === "string" ? org.login.trim() : "";
     if (login) logins.set(login.toLowerCase(), login);
   }
 
