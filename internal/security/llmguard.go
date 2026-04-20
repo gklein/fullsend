@@ -55,15 +55,20 @@ func NewLLMGuardScanner(threshold float64, matchType string, required bool) *LLM
 // When Required is true, fails closed (missing Python treated as tampering).
 func (s *LLMGuardScanner) Scan(text string) ScanResult {
 	script := fmt.Sprintf(`
-import json, sys
+import json, sys, os, pathlib
+os.environ["HF_HUB_OFFLINE"] = "1"
 try:
     import numpy as np
     import onnxruntime as ort
     from transformers import AutoTokenizer
     from huggingface_hub import hf_hub_download
     model_name = "protectai/deberta-v3-base-prompt-injection-v2"
-    tokenizer = AutoTokenizer.from_pretrained(model_name, subfolder="onnx")
-    model_path = hf_hub_download(model_name, "onnx/model.onnx")
+    model_rev = "e6535ca4ce3ba852083e75ec585d7c8aeb4be4c5"
+    tokenizer = AutoTokenizer.from_pretrained(model_name, subfolder="onnx", revision=model_rev)
+    model_path = hf_hub_download(model_name, "onnx/model.onnx", revision=model_rev)
+    cfg_path = hf_hub_download(model_name, "onnx/config.json", revision=model_rev)
+    cfg = json.loads(pathlib.Path(cfg_path).read_text())
+    assert cfg.get("id2label", {}).get("1") == "INJECTION", f"label ordering mismatch: id2label={cfg.get('id2label')}"
     session = ort.InferenceSession(model_path)
     input_names = [i.name for i in session.get_inputs()]
     def score_text(t):
@@ -85,7 +90,6 @@ try:
     is_injection = risk_score >= threshold
     json.dump({"is_injection": is_injection, "risk_score": round(risk_score, 4), "detail": "DeBERTa-v3 ONNX ML scan"}, sys.stdout)
 except ImportError:
-    import os
     if os.environ.get("LLM_GUARD_REQUIRED", "") == "1":
         json.dump({"is_injection": True, "risk_score": 1.0, "detail": "onnxruntime not installed but LLM_GUARD_REQUIRED=1"}, sys.stdout)
         sys.exit(1)

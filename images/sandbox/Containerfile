@@ -47,24 +47,29 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # NLTK_DATA stores the punkt_tab sentence tokenizer used for
 # sentence-level matching.
 ENV HF_HOME="/opt/huggingface" \
-    NLTK_DATA="/opt/nltk_data"
+    NLTK_DATA="/opt/nltk_data" \
+    HF_HUB_OFFLINE="1"
+ARG PROTECTAI_MODEL_REV=e6535ca4ce3ba852083e75ec585d7c8aeb4be4c5
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip \
     && rm -rf /var/lib/apt/lists/* \
     && /usr/bin/python3 -m pip install --no-cache-dir --break-system-packages \
-        onnxruntime \
-        "transformers>=4.40" \
-        sentencepiece \
-        nltk \
-        numpy \
-    && /usr/bin/python3 -c "\
+        "onnxruntime==1.24.4" \
+        "transformers==4.57.6" \
+        "sentencepiece==0.2.1" \
+        "nltk==3.9.4" \
+        "numpy==2.4.4" \
+    && HF_HUB_OFFLINE=0 /usr/bin/python3 -c "\
+import json, pathlib; \
 from transformers import AutoTokenizer; \
 from huggingface_hub import hf_hub_download; \
 import nltk; \
-AutoTokenizer.from_pretrained('protectai/deberta-v3-base-prompt-injection-v2', subfolder='onnx'); \
-hf_hub_download('protectai/deberta-v3-base-prompt-injection-v2', 'onnx/model.onnx'); \
+AutoTokenizer.from_pretrained('protectai/deberta-v3-base-prompt-injection-v2', subfolder='onnx', revision='${PROTECTAI_MODEL_REV}'); \
+hf_hub_download('protectai/deberta-v3-base-prompt-injection-v2', 'onnx/model.onnx', revision='${PROTECTAI_MODEL_REV}'); \
+cfg = json.loads(pathlib.Path(hf_hub_download('protectai/deberta-v3-base-prompt-injection-v2', 'onnx/config.json', revision='${PROTECTAI_MODEL_REV}')).read_text()); \
+assert cfg.get('id2label', {}).get('1') == 'INJECTION', f\"label ordering mismatch: id2label={cfg.get('id2label')}\"; \
 nltk.download('punkt_tab', download_dir='/opt/nltk_data')" \
-    && echo "ProtectAI DeBERTa-v3 model pre-downloaded successfully" \
+    && echo "ProtectAI DeBERTa-v3 model pre-downloaded at rev ${PROTECTAI_MODEL_REV} (label ordering verified)" \
     && printf '#!/bin/sh\nexec /usr/bin/python3 "$@"\n' > /usr/local/bin/llm-guard-python \
     && chmod +x /usr/local/bin/llm-guard-python
 
