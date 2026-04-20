@@ -61,8 +61,9 @@ export function buildEmptyOrgListHint(
 
   if (scopes.length === 0) {
     return (
-      "GitHub returned no organizations with HTTP 200. Fine-grained personal access tokens and many GitHub App user tokens do that when organization data is not accessible (GitHub documents empty lists instead of 403). " +
-      "Confirm this GitHub App is installed on each organization you expect and has Organization or repository permissions that allow org listing for your account."
+      "GitHub returned an empty list (HTTP 200). For GitHub App user tokens, GET /user/orgs usually reflects organizations this app can already work with—so the list can be empty until the app is installed somewhere, or when GitHub omits OAuth scope headers. " +
+      "That does not mean the product is blocked: many apps pair this with GET /user/installations and an Install / Configure link so an org admin adds the app when they choose an organization. " +
+      "In GitHub App settings, grant the minimum Organization permissions your API calls need (Metadata read-only is a typical baseline); add Members, Administration, Actions, Secrets, and other repository or organization permissions per endpoint—see GitHub’s documentation topic “Permissions required for GitHub Apps.”"
     );
   }
 

@@ -2,11 +2,11 @@ import { describe, it, expect } from "vitest";
 import { buildEmptyOrgListHint } from "./emptyOrgListHint";
 
 describe("buildEmptyOrgListHint", () => {
-  it("returns fine-grained / app guidance when scopes header is absent on 200", () => {
+  it("returns GitHub App / empty-scope guidance when scopes header is absent on 200", () => {
     const h = buildEmptyOrgListHint(200, {});
     expect(h).toMatch(/HTTP 200/);
-    expect(h).toMatch(/Fine-grained/);
-    expect(h).toMatch(/GitHub App/);
+    expect(h).toMatch(/GET \/user\/installations/);
+    expect(h).toMatch(/Metadata/);
   });
 
   it("returns classic OAuth scope guidance when scopes omit user/read:org", () => {
