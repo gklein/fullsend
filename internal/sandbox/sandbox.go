@@ -109,8 +109,8 @@ func Create(name string, providers []string, image, policy string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), createTimeout)
 	defer cancel()
 
-	args := []string{"60",
-		"openshell", "sandbox", "create",
+	args := []string{
+		"sandbox", "create",
 		"--name", name,
 		"--keep",
 		"--no-auto-providers",
@@ -125,13 +125,15 @@ func Create(name string, providers []string, image, policy string) error {
 	for _, p := range providers {
 		args = append(args, "--provider", p)
 	}
-	cmd := exec.CommandContext(ctx, "timeout", args...)
+	// Without a command, sandbox create starts an interactive shell and
+	// blocks until it exits. Pass `true` so it returns immediately.
+	args = append(args, "--", "true")
+
+	cmd := exec.CommandContext(ctx, "openshell", args...)
 	cmd.Stdin = nil
 	out, err := cmd.CombinedOutput()
 
-	// timeout exits 124 — sandbox create may exit non-zero after the
-	// interactive shell is killed. Check if the sandbox actually exists.
-	if err != nil && (cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 124) {
+	if err != nil {
 		check := exec.Command("openshell", "sandbox", "get", name)
 		if checkErr := check.Run(); checkErr != nil {
 			return fmt.Errorf("sandbox create failed: %s", string(out))

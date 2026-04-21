@@ -52,6 +52,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 
 	// 1. Resolve and load harness.
 	harnessPath := filepath.Join(fullsendDir, "harness", agentName+".yaml")
+	harnessStart := time.Now()
 	printer.StepStart("Loading harness: " + harnessPath)
 
 	h, err := harness.Load(harnessPath)
@@ -80,7 +81,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 		printer.StepFail("File validation failed")
 		return fmt.Errorf("validating files: %w", err)
 	}
-	printer.StepDone("Harness loaded")
+	printer.StepDone(fmt.Sprintf("Harness loaded (%.1fs)", time.Since(harnessStart).Seconds()))
 
 	// Print plan.
 	printer.KeyValue("Agent", h.Agent)
@@ -114,20 +115,22 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 	printer.Blank()
 
 	// 2. Check openshell availability.
+	openshellStart := time.Now()
 	printer.StepStart("Checking openshell availability")
 	if err := sandbox.EnsureAvailable(); err != nil {
 		printer.StepFail("openshell not available")
 		return fmt.Errorf("openshell is required: %w", err)
 	}
-	printer.StepDone("openshell available")
+	printer.StepDone(fmt.Sprintf("openshell available (%.1fs)", time.Since(openshellStart).Seconds()))
 
 	// 2a. Ensure a gateway is running.
+	gatewayStart := time.Now()
 	printer.StepStart("Ensuring gateway")
 	if err := sandbox.EnsureGateway(); err != nil {
 		printer.StepFail("Failed to start gateway")
 		return fmt.Errorf("starting gateway: %w", err)
 	}
-	printer.StepDone("Gateway ready")
+	printer.StepDone(fmt.Sprintf("Gateway ready (%.1fs)", time.Since(gatewayStart).Seconds()))
 
 	// 2b. Ensure providers exist on the gateway (if any declared).
 	if len(h.Providers) > 0 {
@@ -138,17 +141,19 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 			return fmt.Errorf("loading provider definitions: %w", err)
 		}
 		for _, pd := range providerDefs {
+			providerStart := time.Now()
 			printer.StepStart("Ensuring provider: " + pd.Name)
 			if err := sandbox.EnsureProvider(pd.Name, pd.Type, pd.Credentials, pd.Config); err != nil {
 				printer.StepFail("Failed to create provider " + pd.Name)
 				return fmt.Errorf("ensuring provider %q: %w", pd.Name, err)
 			}
-			printer.StepDone("Provider ready: " + pd.Name)
+			printer.StepDone(fmt.Sprintf("Provider ready: %s (%.1fs)", pd.Name, time.Since(providerStart).Seconds()))
 		}
 	}
 
 	// 2c. Run pre-script on the host (if configured).
 	if h.PreScript != "" {
+		preStart := time.Now()
 		printer.StepStart("Running pre-script: " + h.PreScript)
 		preCmd := exec.Command(h.PreScript)
 		preCmd.Env = append(os.Environ(), envToList(h.RunnerEnv)...)
@@ -158,11 +163,12 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 			printer.StepFail("Pre-script failed")
 			return fmt.Errorf("running pre-script: %w", err)
 		}
-		printer.StepDone("Pre-script completed")
+		printer.StepDone(fmt.Sprintf("Pre-script completed (%.1fs)", time.Since(preStart).Seconds()))
 	}
 
 	// 3. Create sandbox.
 	sandboxName := fmt.Sprintf("agent-%s-%d-%d", agentName, os.Getpid(), time.Now().Unix())
+	createStart := time.Now()
 	printer.StepStart("Creating sandbox: " + sandboxName)
 
 	if err := sandbox.Create(sandboxName, h.Providers, h.Image, h.Policy); err != nil {
@@ -177,6 +183,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 	// Post-script runs after sandbox cleanup (defers are LIFO).
 	if h.PostScript != "" {
 		defer func() {
+			postStart := time.Now()
 			printer.StepStart("Running post-script: " + h.PostScript)
 			postCmd := exec.Command(h.PostScript)
 			postCmd.Dir = runDir
@@ -186,19 +193,20 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 			if err := postCmd.Run(); err != nil {
 				printer.StepWarn("Post-script failed: " + err.Error())
 			} else {
-				printer.StepDone("Post-script completed")
+				printer.StepDone(fmt.Sprintf("Post-script completed (%.1fs)", time.Since(postStart).Seconds()))
 			}
 		}()
 	}
 	defer func() {
+		cleanupStart := time.Now()
 		printer.StepStart("Cleaning up sandbox")
 		if err := sandbox.Delete(sandboxName); err != nil {
 			printer.StepWarn("Sandbox cleanup failed: " + err.Error())
 		} else {
-			printer.StepDone("Sandbox deleted")
+			printer.StepDone(fmt.Sprintf("Sandbox deleted (%.1fs)", time.Since(cleanupStart).Seconds()))
 		}
 	}()
-	printer.StepDone("Sandbox created")
+	printer.StepDone(fmt.Sprintf("Sandbox created (%.1fs)", time.Since(createStart).Seconds()))
 
 	// 4. Get SSH config.
 	sshConfig, err := sandbox.GetSSHConfig(sandboxName)
@@ -229,14 +237,16 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 	repoDir := fmt.Sprintf("%s/%s", sandbox.SandboxWorkspace, repoName)
 
 	// 7. Bootstrap sandbox.
+	bootstrapStart := time.Now()
 	printer.StepStart("Bootstrapping sandbox")
 	if err := bootstrapSandbox(sshConfigPath, sandboxName, repoDir, h); err != nil {
 		printer.StepFail("Failed to bootstrap sandbox")
 		return err
 	}
-	printer.StepDone("Sandbox bootstrapped")
+	printer.StepDone(fmt.Sprintf("Sandbox bootstrapped (%.1fs)", time.Since(bootstrapStart).Seconds()))
 
 	// 8. Make project code available (copy repo root into a named subdirectory).
+	copyStart := time.Now()
 	printer.StepStart("Copying project code into sandbox")
 	mkRepoCmd := fmt.Sprintf("mkdir -p %s", repoDir)
 	if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, mkRepoCmd, 10*time.Second); err != nil {
@@ -246,10 +256,11 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 		printer.StepFail("Failed to copy project code")
 		return fmt.Errorf("copying project code: %w", err)
 	}
-	printer.StepDone("Project code copied to " + repoName + "/")
+	printer.StepDone(fmt.Sprintf("Project code copied to %s/ (%.1fs)", repoName, time.Since(copyStart).Seconds()))
 
 	// 8b. Copy agent-input files (if configured).
 	if h.AgentInput != "" {
+		inputStart := time.Now()
 		printer.StepStart("Copying agent-input files into sandbox")
 		remoteInput := fmt.Sprintf("%s/agent-input", sandbox.SandboxWorkspace)
 		mkInputCmd := fmt.Sprintf("mkdir -p %s", remoteInput)
@@ -260,7 +271,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 			printer.StepFail("Failed to copy agent-input files")
 			return fmt.Errorf("copying agent-input files: %w", err)
 		}
-		printer.StepDone("Agent-input files copied")
+		printer.StepDone(fmt.Sprintf("Agent-input files copied (%.1fs)", time.Since(inputStart).Seconds()))
 	}
 
 	// 9a. Generate trace ID for security finding correlation.
@@ -366,12 +377,13 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 		printer.Blank()
 		// Non-zero exit is a warning, not a failure — the validation loop is the success gate.
 		if exitCode == 0 {
-			printer.StepDone(fmt.Sprintf("Agent exited with code %d", exitCode))
+			printer.StepDone(fmt.Sprintf("Agent exited with code %d (%.1fs)", exitCode, time.Since(agentStart).Seconds()))
 		} else {
 			printer.StepWarn(fmt.Sprintf("Agent exited with code %d", exitCode))
 		}
 
 		// 9b. Extract output files.
+		extractStart := time.Now()
 		printer.StepStart("Extracting output files")
 		remoteSrc := fmt.Sprintf("%s/output", sandbox.SandboxWorkspace)
 		extracted, extractErr := sandbox.ExtractOutputFiles(sshConfigPath, sandboxName, remoteSrc, iterOutputDir)
@@ -383,25 +395,27 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 			for _, f := range extracted {
 				printer.StepInfo(f)
 			}
-			printer.StepDone(fmt.Sprintf("Extracted %d output file(s)", len(extracted)))
+			printer.StepDone(fmt.Sprintf("Extracted %d output file(s) (%.1fs)", len(extracted), time.Since(extractStart).Seconds()))
 		}
 
 		// 9c. Extract transcripts for this iteration.
+		transcriptStart := time.Now()
 		printer.StepStart("Extracting transcripts")
 		if err := sandbox.ExtractTranscripts(sshConfigPath, sandboxName, agentName, iterTranscriptDir); err != nil {
 			printer.StepWarn("Failed to extract transcripts: " + err.Error())
 		} else {
-			printer.StepDone("Transcripts extracted")
+			printer.StepDone(fmt.Sprintf("Transcripts extracted (%.1fs)", time.Since(transcriptStart).Seconds()))
 		}
 
 		// 9d. Extract target repo back to host. Uses rsync with --no-links
 		// and --exclude .git/hooks/ to prevent sandbox escape via symlinks
 		// or injected git hooks.
+		repoExtractStart := time.Now()
 		printer.StepStart("Extracting target repo")
 		if err := sandbox.RsyncFrom(sshConfigPath, sandboxName, repoDir, repoSrc); err != nil {
 			printer.StepWarn("Failed to extract target repo: " + err.Error())
 		} else {
-			printer.StepDone("Target repo extracted to " + repoSrc)
+			printer.StepDone(fmt.Sprintf("Target repo extracted to %s (%.1fs)", repoSrc, time.Since(repoExtractStart).Seconds()))
 		}
 
 		// 9e. Run validation.
@@ -409,6 +423,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 			break
 		}
 
+		valStart := time.Now()
 		printer.StepStart("Running validation: " + h.ValidationLoop.Script)
 		valCmd := exec.Command(h.ValidationLoop.Script)
 		valCmd.Dir = iterDir
@@ -421,7 +436,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 		valOut, valErr := valCmd.CombinedOutput()
 
 		if valErr == nil {
-			printer.StepDone("Validation passed: " + strings.TrimSpace(string(valOut)))
+			printer.StepDone(fmt.Sprintf("Validation passed: %s (%.1fs)", strings.TrimSpace(string(valOut)), time.Since(valStart).Seconds()))
 			validationPassed = true
 			break
 		}
