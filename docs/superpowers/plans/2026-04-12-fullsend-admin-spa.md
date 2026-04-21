@@ -14,7 +14,9 @@
 
 **UI stack:** **Svelte** is **locked in** (Svelte 5 + Vite); recorded in the spec Open items.
 
-**Spec:** [2026-04-06-fullsend-admin-spa-design.md](../specs/2026-04-06-fullsend-admin-spa-design.md)
+**Spec:** [2026-04-06-fullsend-admin-spa-design.md](../specs/2026-04-06-fullsend-admin-spa-design.md) (architecture, auth, wizards)
+
+**UX spec (screens, copy, states, errors):** [2026-04-21-fullsend-admin-spa-ux-design.md](../specs/2026-04-21-fullsend-admin-spa-ux-design.md) — use wherever tasks touch login, nav chrome, org list, org dashboard, or row/global error presentation. **Not** a commitment to implement every UX row in one PR; tasks below cite the sections that matter.
 
 **Related CI/site spec:** [2026-04-09-site-cloudflare-pages-design.md](../specs/2026-04-09-site-cloudflare-pages-design.md)
 
@@ -35,14 +37,14 @@
 | `web/admin/tsconfig.json` / `web/admin/svelte.config.js` | TS + Svelte compiler options |
 | `web/admin/index.html` | Vite HTML entry |
 | `web/admin/src/main.ts` | Bootstraps Svelte app, mounts router |
-| `web/admin/src/App.svelte` | Shell layout, nav, sign-in/out |
+| `web/admin/src/App.svelte` | Shell layout, nav, sign-in/out (evolve toward [UX spec](../specs/2026-04-21-fullsend-admin-spa-ux-design.md): account bar, login gate, global banners) |
 | `web/admin/src/lib/github/client.ts` | Octokit factory from stored token |
 | `web/admin/src/lib/auth/tokenStore.ts` | `localStorage` read/write/clear; **no logging** of secrets |
 | `web/admin/src/lib/auth/oauth.ts` | Production OAuth: authorize URL (include PKCE **`code_challenge`** + **`S256`**), callback parsing; exchange via **same-origin** `fetch('/api/oauth/...')` to Worker (not GitHub cross-origin) |
 | `web/admin/src/lib/auth/previewHandoff.ts` | `return_to` allowlist, `state`/`sessionStorage`, fragment parse |
 | `web/admin/src/lib/status/types.ts` | TS mirrors of `LayerStatus` / `LayerReport` from `internal/layers/layers.go` |
 | `web/admin/src/lib/status/engine.ts` | Read-only analyze-style rollup (grows over phases) |
-| `web/admin/src/routes/*` | Svelte views (hash routes): org list, org detail, repo list |
+| `web/admin/src/routes/*` | Svelte views (hash routes): org list, org dashboard, repo list — layout and state tables: [UX spec](../specs/2026-04-21-fullsend-admin-spa-ux-design.md) |
 | `web/admin/src/lib/auth/oauth.test.ts` | Vitest: callback parsing, storage |
 | `web/admin/src/lib/auth/previewHandoff.test.ts` | Vitest: allowlist accepts production admin origin only |
 | `.github/workflows/site-build.yml` | Setup Node, `npm ci` + `npm run build`, copy `web/admin/dist` → `_bundle/public/admin/`, mindmap from `web/public/`, worker from `cloudflare_site/worker/` |
@@ -873,6 +875,8 @@ git add package.json package-lock.json web/admin/src/lib/github
 git commit -m "feat(admin): Octokit factory with 401 event"
 ```
 
+**UX spec (for consumers of `fullsend:github-unauthorized`):** [Global banners](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-banners-screen-level-below-the-nav-bar) — persistent banner **below** the future account bar with **Re-authenticate** (and intended-route preservation per architecture spec). Row-level API calls should not silently fail without tying into the same session story.
+
 ---
 
 ### Task 7: Production sign-in (authorize URL + SPA document callback)
@@ -893,7 +897,9 @@ git commit -m "feat(admin): Octokit factory with 401 event"
 
 Register the GitHub App callback as the **SPA entry** matching Vite `base: '/admin/'`, e.g. `http://localhost:5173/admin/` (trailing slash should match `redirect_uri` in code). **`redirect_uri`** in authorize + token exchange is `new URL(import.meta.env.BASE, window.location.origin).href`.
 
-On load, if `URLSearchParams(location.search).has("code")`, stash `{ code, state }` in `sessionStorage` for one-shot use, then **`history.replaceState`** to the same origin with **no** document query and hash **`#/`** so the authorization `code` never lingers in the address bar. Still in `App.svelte` `onMount`, consume the stash, verify `state` against the value stored at authorize time, read PKCE **`code_verifier`**, **`POST /api/oauth/token`** (Task 2b Worker via Vite proxy in dev), **`saveToken`**, clear OAuth session keys, **`refreshSession`**. Surface errors inline (banner / short message). **Never** send `client_secret` from the SPA.
+On load, if `URLSearchParams(location.search).has("code")`, stash `{ code, state }` in `sessionStorage` for one-shot use, then **`history.replaceState`** to the same origin with **no** document query and hash **`#/`** so the authorization `code` never lingers in the address bar. Still in `App.svelte` `onMount`, consume the stash, verify `state` against the value stored at authorize time, read PKCE **`code_verifier`**, **`POST /api/oauth/token`** (Task 2b Worker via Vite proxy in dev), **`saveToken`**, clear OAuth session keys, **`refreshSession`**. Surface failures with the **global banner** pattern from the [UX spec](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-banners-screen-level-below-the-nav-bar) (**Retry** / **Re-authenticate** as appropriate); avoid leaving a blank shell. **Never** send `client_secret` from the SPA.
+
+**UX alignment (login + return journey):** See [Screen: Login](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-login) and [Post–OAuth return loading](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#postoauth-return-loading): unauthenticated `/admin` shows **Sign in with GitHub** (GitHub logo on the control); after redirect back, show a **large centered spinner** until token **and** `/user` fields needed for the [account bar](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-account--navigation-bar) exist; then **restore the deep link** the user originally opened ([User journeys](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#user-journeys-routes)).
 
 The dev Worker allowlists loopback **`redirect_uri`** pathnames **`/admin/`**, **`/admin`**, and legacy **`/admin/oauth/callback.html`** for migrations.
 
@@ -909,6 +915,13 @@ git commit -m "feat(admin): OAuth callback via SPA entry /admin/"
 ### Task 9: Org list (alphabetical, search) + in-memory session cache
 
 **Status (2026-04-20):** **Complete** — filter + Vitest under `web/admin/src/lib/orgs/`; org list UI + `#/orgs` route; org names derived via **Octokit `paginate`** on `GET https://api.github.com/user/repos` (unique organization owners) for a repo-first flow. In-memory cache cleared on sign-out.
+
+**UX spec (org selection screen):** [Screen: Organisation selection](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-organisation-selection) + [Global UX patterns](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-ux-patterns). When iterating on this route, prefer:
+
+- **Chrome:** title **`Select an organisation to deploy or configure Fullsend`**, search placeholder **`Type to filter`**, **Refresh** as specified.
+- **Cap:** filter the **full** org set, then show **≤20** rows; if more than 20 matches, **red** helper **`Showing up to 20 organisations`** ([Search and “showing 20” cap](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#search-and-showing-20-cap-organisation-list)).
+- **Row trailing cluster:** spinner while resolving → **Configure** (grey) / **Deploy Fullsend** (blue) / **Cannot deploy** (yellow + **`i`** popover, no inline paragraph) / **per-row error** (red triangle + **`Error`** + **`i`** + **`Retry`**) — [Per-row error](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#per-row-error-pattern-org-list-and-repo-list) vs [Cannot deploy](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#per-row-cannot-deploy-pattern-org-list-only).
+- **Navigation:** [List interaction model](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#list-interaction-model) — actions on **buttons**, not whole-row click.
 
 **Files:**
 
@@ -978,6 +991,8 @@ git commit -m "feat(admin): org list with search-as-you-type"
 - Create: `admin/src/lib/layers/configRepo.ts` — TS port of **read-only** checks from `internal/layers/configrepo.go` `Analyze` (only what is inferable via public GitHub APIs)
 - Create: `admin/src/lib/layers/configRepo.test.ts` — mock GitHub responses
 
+**UX spec (org dashboard — Fullsend status pane):** When surfacing rollup state in the UI, map engine outcomes to the labels in [Pane A — Fullsend status](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#pane-a--fullsend-status): **Deployed** (green), **Partially deployed / broken** (yellow + **Repair**), **Outdated** (orange + **Upgrade**), **Checking** (spinner). Exact mapping from `LayerReport` / merged layers is implementation-defined but **user-visible strings** should match the UX spec (and stay aligned with CLI wording per architecture spec).
+
 **Instruction:** Open `internal/layers/configrepo.go` and for each API used in `Analyze`, add a TypeScript function and a Vitest table-driven test with **fixture JSON** checked into `admin/src/lib/layers/fixtures/configrepo/*.json`.
 
 - [ ] **Step 1: Write failing test for expected `LayerReport` shape** given fixture “no repo”.
@@ -1003,7 +1018,7 @@ For each file `internal/layers/workflows.go`, `secrets.go`, `enrollment.go`, `di
 
 - [ ] **Step 1: Port `Analyze` REST/GraphQL dependencies only** (no mutating `Install` yet unless same PR scope).
 
-- [ ] **Step 2: Extend `admin/src/lib/status/engine.ts` to merge layer reports into org-level rollup** (`not installed` / `degraded` / `installed` wording matches CLI).
+- [ ] **Step 2: Extend `admin/src/lib/status/engine.ts` to merge layer reports into org-level rollup** (`not installed` / `degraded` / `installed` wording matches CLI). **UX:** merged org-level state feeds the [Fullsend status pane](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#pane-a--fullsend-status) (same label set as Task 10).
 
 - [ ] **Step 3: Update Appendix A** with each new endpoint.
 
@@ -1019,14 +1034,16 @@ git commit -m "feat(admin): TS analyze for workflows layer"
 
 ### Task 12: Org detail + repo union list (read-only)
 
+**UX spec (this task is the main surface for):** [Screen: Organisation dashboard](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-organisation-dashboard) — **Pane A** (Fullsend status) + **Pane B** (repository list). There is **no** separate repo onboarding/settings wizard: all repo outcomes are **rows** on that list ([Scope clarification](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#scope-clarification-repositories)).
+
 **Files:**
 
 - Create: `admin/src/routes/OrgDetail.svelte`
 - Create: `admin/src/lib/repos/unionConfig.ts` — union org repos + `config.yaml` repo names; classify orphan / missing
 
-- [ ] **Step 1: Vitest for pure union/classification** with fixture YAML strings in test file.
+- [ ] **Step 1: Vitest for pure union/classification** with fixture YAML strings in test file. Fixtures should cover **R6** / **R7** style cases from [Repo row states](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#repo-row-states-complete-set) (not-in-config vs orphan).
 
-- [ ] **Step 2: Implement UI routes `#/org/:login`**.
+- [ ] **Step 2: Implement UI routes `#/org/:login`** (org dashboard). **Nav bar:** [Account bar](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-account--navigation-bar) shows user + org avatar/name for this screen. **Pane A:** status states and **Repair** / **Upgrade** as in UX spec (wire to routes or disabled stubs until Task 14). **Pane B:** search-as-you-type + **Refresh**; each row implements the **R0–R7** trailing clusters where read-only data allows (e.g. **Onboard** / **Onboarding — check PR #nnn** / **Off-boarding — check PR #nnn** / **Onboarded** + red **Remove** / partial + **Repair** + **Remove** / **Not in Fullsend config** + **Onboard** / orphan + **Repository missing** + **i** + **Remove from config**). Use [GitHub terminology](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#github-terminology) for GitHub-sourced labels. **Errors:** [Per-row error pattern](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#per-row-error-pattern-org-list-and-repo-list) (red triangle + **`Error`** + popover + **`Retry`**); pane-wide failures → [global banner](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-banners-screen-level-below-the-nav-bar). **Interaction:** [List interaction model](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#list-interaction-model) — primary actions on **buttons**; PR `#nnn` is a **link**. Read-only task: **Remove** / **Repair** / **Onboard** may be disabled or navigate to placeholders until Task 14 implements mutations.
 
 - [ ] **Step 3: Commit**
 
@@ -1038,6 +1055,8 @@ git commit -m "feat(admin): org detail with repo/config union"
 ---
 
 ### Task 13: Wizard shell (linear steps, review screen, no mutations yet)
+
+**UX spec boundary:** Wizard **interiors** (steps, fields) follow the **architecture** spec [Section 4](../specs/2026-04-06-fullsend-admin-spa-design.md#section-4--wizards-onboard-repair-uninstall-agent-apps-secrets). **Entry chrome** from lists (**Deploy Fullsend**, **Configure**, **Repair**, **Upgrade**, **Onboard**) must stay consistent with [Organisation selection](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-organisation-selection) and [Organisation dashboard](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-organisation-dashboard) in the UX spec (labels, colors, button vs row-click rules).
 
 **Files:**
 
@@ -1061,6 +1080,8 @@ git commit -m "feat(admin): onboarding wizard shell"
 
 Each wizard step gets **idempotent** GitHub API calls mirrored from `internal/cli/admin.go` call chains; **before** each mutation batch, show **review** screen listing planned file/secret changes.
 
+**UX spec:** Use [global banners](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-banners-screen-level-below-the-nav-bar) for session, rate-limit, and Worker-wide failures during wizards. After mutations affect repo/org row state, refresh row data so **Pane B** states (**R2**/**R3** PR links, **R4**/**R5** + **Remove**, etc.) stay aligned with [Repo row states](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#repo-row-states-complete-set). Destructive actions (**Remove**, config cleanup) warrant confirmations at least as strong as the architecture spec’s wizard **review** pattern (UX spec does not redefine wizard confirmations).
+
 **Files:** grow under `admin/src/lib/actions/*`; each action module pairs with Vitest **HTTP mock** (e.g. `fetch` mock) where feasible.
 
 - [ ] **Step 1: Implement **config repo** create/push path in TS** (mirror Go), with tests.
@@ -1078,6 +1099,8 @@ git commit -m "feat(admin): apply config repo layer from wizard"
 ### Task 15: Preview OAuth handoff (production `sessionStorage` + fragment on preview)
 
 **Status:** **Open — redesign.** This content was **old Task 8**; it is sequenced **after Task 14** so it is not blocked by feature work, but the design must be revisited: the site Worker **requires Turnstile verification on token exchange**, which may be **poorly suited** to **per-PR preview** review flows (anonymous traffic, embed friction, or policy). Decide an explicit workaround before shipping preview-only sign-in (examples to evaluate, not commitments): preview-only **relaxed** verification behind tighter **rate limits**; **production-only** OAuth with fragment / `return_to` handoff to preview unchanged; **separate GitHub OAuth app** or env tier for previews; or Turnstile **managed** / hostname-key strategy that works for ephemeral preview hosts. Record the threat-model trade-off in the spec and Worker.
+
+**UX spec:** Whatever preview sign-in ships, the **post-handoff** experience should still match [Post–OAuth return loading](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#postoauth-return-loading) and [global error presentation](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-banners-screen-level-below-the-nav-bar) (e.g. `missing_turnstile_keys` → banner copy that explains misconfiguration).
 
 **Files:**
 
@@ -1106,7 +1129,7 @@ git commit -m "feat(admin): preview OAuth handoff via production origin"
 
 - Create: `docs/admin-spa-local-dev.md`
 
-Include: creating a **dev** GitHub App, callback URLs for Vite dev, **`npm run dev`** (Vite + OAuth Worker per **Task 2b**), pointers to repo-root **`sample.env.local`** (and **`web/admin/README.md`**), and **separate** preview app checklist (coordinate with **Task 15** once Turnstile/preview policy is settled).
+Include: creating a **dev** GitHub App, callback URLs for Vite dev, **`npm run dev`** (Vite + OAuth Worker per **Task 2b**), pointers to repo-root **`sample.env.local`** (and **`web/admin/README.md`**), and **separate** preview app checklist (coordinate with **Task 15** once Turnstile/preview policy is settled). Cross-link the [UX spec](../specs/2026-04-21-fullsend-admin-spa-ux-design.md) so manual testers can verify **login**, **account bar**, **org list**, and **org dashboard** behaviors against the screen/state tables without rereading the architecture spec.
 
 - [ ] **Step 1: Add doc**
 
@@ -1135,6 +1158,7 @@ git commit -m "docs: admin SPA local development checklist"
 | Self-hosted / local dev | 2b, **16** (`sample.env.local` + `docs/admin-spa-local-dev.md`) |
 | Permission matrix | 1, 2b, 7, 9–11 (incremental) |
 | No automated CLI↔SPA parity CI | Omitted intentionally |
+| **UX** (screens, states, nav, errors) | [2026-04-21 UX spec](../specs/2026-04-21-fullsend-admin-spa-ux-design.md); tasks **6–7**, **9**, **10–16** cite it where relevant |
 
 **2. Placeholder scan**
 
