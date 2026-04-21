@@ -526,7 +526,7 @@ func vendorBinaryForE2E(t *testing.T, env *e2eEnv) {
 	t.Log("Building fullsend binary for vendoring...")
 	cmd := exec.Command("go", "build", "-o", tmpBinary.Name(), "./cmd/fullsend/")
 	cmd.Dir = strings.TrimSpace(string(modRoot))
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "building fullsend binary: %s", string(out))
 

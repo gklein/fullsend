@@ -212,9 +212,19 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 	}
 	runDir := filepath.Join(outputBase, sandboxName)
 
+	// validationPassed is declared here (before the post-script defer) so the
+	// defer closure can guard on it. The post-script must only run when
+	// validation has passed — running it on unvalidated output would violate
+	// ADR 0022's zero-trust model.
+	var validationPassed bool
+
 	// Post-script runs after sandbox cleanup (defers are LIFO).
 	if h.PostScript != "" {
 		defer func() {
+			if h.ValidationLoop != nil && !validationPassed {
+				printer.StepWarn("Skipping post-script: validation did not pass")
+				return
+			}
 			postStart := time.Now()
 			printer.StepStart("Running post-script: " + h.PostScript)
 			postCmd := exec.Command(h.PostScript)
@@ -360,7 +370,6 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 	}
 
 	var lastExitCode int
-	var validationPassed bool
 	var runCount int
 
 	for iteration := 1; iteration <= maxIterations; iteration++ {

@@ -10,7 +10,7 @@ topics:
   - harness
 ---
 
-# 20. Harness-level output schema enforcement
+# 22. Harness-level output schema enforcement
 
 Date: 2026-04-15
 
