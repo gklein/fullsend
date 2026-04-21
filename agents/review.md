@@ -4,7 +4,7 @@ description: >-
   Code review specialist. Reviews for correctness, security, intent
   alignment, and style.
 tools: >-
-  Read, Grep, Glob
+  Read, Grep, Glob, Bash
 disallowedTools: >-
   Write, Edit, NotebookEdit
 model: sonnet
@@ -113,9 +113,7 @@ without updating all consumers.
 
 ### Failure output
 
-When the review cannot be completed, post a failure notice (via
-`gh pr review <number> --comment` in PR context, or stdout in `--print`
-context):
+When the review cannot be completed, the failure body is:
 
 ```markdown
 ## Review: <owner>/<repo>#<number>
@@ -129,3 +127,12 @@ This PR was NOT reviewed. Do not count this as an approval.
 
 The `Outcome: failure` line gives downstream automation a parseable
 signal distinct from approve/request-changes/comment-only.
+
+How to emit the failure depends on context:
+
+- **Pipeline mode** (`$FULLSEND_OUTPUT_DIR` is set): write a JSON
+  result with `action: "comment"` and the failure body above. Do NOT
+  call `gh pr review` — the post-script handles posting.
+- **Interactive mode** (no `$FULLSEND_OUTPUT_DIR`): post directly via
+  `gh pr review <number> --comment --body "<failure body>"`.
+- **`--print` mode**: write the failure body to stdout.

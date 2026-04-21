@@ -3,15 +3,18 @@ name: pr-review
 description: >-
   PR-specific review procedure. Gathers GitHub context, delegates code
   evaluation to the code-review skill, adds PR-specific checks, and
-  posts a structured review via the GitHub API.
+  writes a structured review result.
 ---
 
 # PR Review
 
 This skill orchestrates a pull request review by gathering GitHub
 context, delegating code evaluation to the `code-review` skill, adding
-PR-specific checks, and posting the result. It does not evaluate code
-directly — that is the `code-review` skill's responsibility.
+PR-specific checks, and producing a structured result. In pipeline mode
+(`$FULLSEND_OUTPUT_DIR` set), it writes JSON for the post-script to
+post. In interactive mode, it posts directly via `gh pr review`. It
+does not evaluate code directly — that is the `code-review` skill's
+responsibility.
 
 ## Process
 
@@ -48,16 +51,19 @@ PR_STATS=$(gh pr view <number> --json changedFiles,additions,deletions,files)
 FILE_COUNT=$(echo "$PR_STATS" | jq '.changedFiles')
 LINE_COUNT=$(echo "$PR_STATS" | jq '.additions + .deletions')
 ```
+
 From there use FILE_COUNT and LINE_COUNT to decide how to proceed
 
 1. FILE_COUNT<50, LINE_COUNT<3000: small PR — proceed as-is with `gh pr diff`
 2. FILE_COUNT~=50-200, LINE_COUNT~=3000-10000: large PR — switch to per-file
    mode
-  - Extract file paths from PR_STATS
-  - Filter out generated files (lockfiles, vendor/, protobuf, etc.)
-  - Pass individual file paths to the code-review skill, which reviews each via
-    `git diff <merge-base>..HEAD -- <file>`
-  - Each per-file diff fits in context; aggregate findings across files
+
+   - Extract file paths from PR_STATS
+   - Filter out generated files (lockfiles, vendor/, protobuf, etc.)
+   - Pass individual file paths to the code-review skill, which reviews each via
+     `git diff <merge-base>..HEAD -- <file>`
+   - Each per-file diff fits in context; aggregate findings across files
+
 3. FILE_COUNT>200 after filtering, LINE_COUNT>10K: emit failure with reason
    `token-limit` and list the file count. Genuine "too big to review" case
 
@@ -129,7 +135,7 @@ the label. Add a finding if the scope exceeds authorization.
 Merge any new findings into the findings list from step 3 and
 re-evaluate the overall outcome.
 
-### 5. Post the review
+### 5. Produce the review result
 
 Compose the review comment using this structure:
 
@@ -167,7 +173,71 @@ This review applies to SHA `<sha>`. Any push to the PR head clears
 this review and requires a new evaluation.
 ```
 
-Post the review using the appropriate flag:
+Map the outcome to an action value:
+
+| Outcome            | Action              |
+|--------------------|---------------------|
+| approve            | `approve`           |
+| request-changes    | `request-changes`   |
+| comment-only       | `comment`           |
+| failure            | `failure`           |
+
+#### Pipeline mode (`$FULLSEND_OUTPUT_DIR` is set)
+
+Write the result as JSON. Do NOT call `gh pr review` — the post-script
+handles all GitHub mutations. The JSON shape varies by action.
+
+For `approve` or `comment`:
+
+```bash
+jq -n \
+  --arg action "<action>" \
+  --argjson pr_number <number> \
+  --arg repo "<owner/repo>" \
+  --arg head_sha "<sha>" \
+  --arg body "<markdown review comment>" \
+  '{action: $action, pr_number: $pr_number, repo: $repo,
+    head_sha: $head_sha, body: $body}' \
+  > "$FULLSEND_OUTPUT_DIR/agent-result.json"
+```
+
+For `request-changes`, include structured findings alongside the body:
+
+```bash
+jq -n \
+  --arg action "request-changes" \
+  --argjson pr_number <number> \
+  --arg repo "<owner/repo>" \
+  --arg head_sha "<sha>" \
+  --arg body "<markdown review comment>" \
+  --argjson findings '<findings array>' \
+  '{action: $action, pr_number: $pr_number, repo: $repo,
+    head_sha: $head_sha, body: $body, findings: $findings}' \
+  > "$FULLSEND_OUTPUT_DIR/agent-result.json"
+```
+
+Each finding object has: `severity` (critical/high/medium/low/info),
+`category`, `file`, `line` (optional), `description`, `remediation`
+(optional).
+
+For `failure`, provide the reason — body is optional:
+
+```bash
+jq -n \
+  --arg action "failure" \
+  --argjson pr_number <number> \
+  --arg repo "<owner/repo>" \
+  --arg reason "<reason>" \
+  '{action: $action, pr_number: $pr_number, repo: $repo,
+    reason: $reason}' \
+  > "$FULLSEND_OUTPUT_DIR/agent-result.json"
+```
+
+Exit after writing the file.
+
+#### Interactive mode (`$FULLSEND_OUTPUT_DIR` is not set)
+
+Post the review directly using the appropriate flag:
 
 ```bash
 # Approve
@@ -208,5 +278,8 @@ wins.
   is only valid for the SHA evaluated; new pushes require a new review.
 - **Report failure rather than posting a partial review.** If you cannot
   complete all six dimensions (tool failure, missing context, ambiguous
-  findings), post a failure notice (see step 5) rather than posting an
-  incomplete result.
+  findings), produce a failure result (see step 5) rather than posting
+  an incomplete result.
+- **In pipeline mode, `gh pr review` is reserved for the post-script.**
+  The sandbox token is read-only. Write JSON to
+  `$FULLSEND_OUTPUT_DIR/agent-result.json` and exit.
