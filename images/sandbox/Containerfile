@@ -6,8 +6,9 @@
 #   - gitleaks (secret scanner, SHA256-verified)
 #   - pre-commit + gitlint (repo hook runner + commit message validator)
 #   - tirith (Rust CLI for terminal security scanning hooks)
-#   - ProtectAI DeBERTa-v3 ONNX model for prompt injection detection
-#     (loaded directly via onnxruntime — no torch, no cold-start latency)
+#   - ONNX Runtime + ProtectAI DeBERTa-v3 model for prompt injection
+#     detection (loaded natively by fullsend via Go/hugot — no Python
+#     runtime dependency, no cold-start latency)
 #
 # Must extend the OpenShell base image — the sandbox supervisor is
 # side-loaded at runtime.
@@ -38,40 +39,49 @@ RUN apt-get update \
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # ---------------------------------------------------------------------------
-# Install Python, ONNX runtime, and ProtectAI DeBERTa-v3 model for
-# ML-based prompt injection scanning. Loads the model directly via
-# onnxruntime (no torch, no llm-guard wrapper — ~840MB vs ~3GB).
+# ONNX Runtime + ProtectAI DeBERTa-v3 model for ML-based prompt injection
+# scanning. The fullsend binary loads the model directly via Go (hugot +
+# onnxruntime) — no Python, no cold-start latency.
 #
 # HF_HOME must point outside /root/ so the sandbox user (uid 998) can
 # read the cached model at runtime — /root/ is mode 700.
-# NLTK_DATA stores the punkt_tab sentence tokenizer used for
-# sentence-level matching.
 ENV HF_HOME="/opt/huggingface" \
-    NLTK_DATA="/opt/nltk_data" \
     HF_HUB_OFFLINE="1"
+
+# Download ProtectAI DeBERTa-v3 ONNX model files. Uses Python + huggingface_hub
+# for the download, then removes huggingface_hub (Python itself stays for
+# pre-commit/gitlint). The model files are loaded at runtime by Go/onnxruntime.
 ARG PROTECTAI_MODEL_REV=e6535ca4ce3ba852083e75ec585d7c8aeb4be4c5
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip \
     && rm -rf /var/lib/apt/lists/* \
     && /usr/bin/python3 -m pip install --no-cache-dir --break-system-packages \
-        "onnxruntime==1.24.4" \
-        "transformers==4.57.6" \
-        "sentencepiece==0.2.1" \
-        "nltk==3.9.4" \
-        "numpy==2.4.4" \
+        "huggingface_hub==0.30.2" \
     && HF_HUB_OFFLINE=0 /usr/bin/python3 -c "\
 import json, pathlib; \
-from transformers import AutoTokenizer; \
 from huggingface_hub import hf_hub_download; \
-import nltk; \
-AutoTokenizer.from_pretrained('protectai/deberta-v3-base-prompt-injection-v2', subfolder='onnx', revision='${PROTECTAI_MODEL_REV}'); \
-hf_hub_download('protectai/deberta-v3-base-prompt-injection-v2', 'onnx/model.onnx', revision='${PROTECTAI_MODEL_REV}'); \
+for f in ['onnx/model.onnx', 'onnx/config.json', 'onnx/tokenizer.json', 'onnx/special_tokens_map.json', 'onnx/tokenizer_config.json']: \
+    hf_hub_download('protectai/deberta-v3-base-prompt-injection-v2', f, revision='${PROTECTAI_MODEL_REV}'); \
 cfg = json.loads(pathlib.Path(hf_hub_download('protectai/deberta-v3-base-prompt-injection-v2', 'onnx/config.json', revision='${PROTECTAI_MODEL_REV}')).read_text()); \
-assert cfg.get('id2label', {}).get('1') == 'INJECTION', f\"label ordering mismatch: id2label={cfg.get('id2label')}\"; \
-nltk.download('punkt_tab', download_dir='/opt/nltk_data')" \
+assert cfg.get('id2label', {}).get('1') == 'INJECTION', f\"label ordering mismatch: id2label={cfg.get('id2label')}\"" \
     && echo "ProtectAI DeBERTa-v3 model pre-downloaded at rev ${PROTECTAI_MODEL_REV} (label ordering verified)" \
-    && printf '#!/bin/sh\nexec /usr/bin/python3 "$@"\n' > /usr/local/bin/llm-guard-python \
-    && chmod +x /usr/local/bin/llm-guard-python
+    && /usr/bin/python3 -m pip uninstall -y huggingface_hub \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# ONNX Runtime shared library — loaded by hugot at runtime.
+# Pinned version for supply chain safety.
+# To update: bump ORT_VERSION from:
+#   https://github.com/microsoft/onnxruntime/releases
+ARG ORT_VERSION=1.24.1
+RUN curl -fsSL \
+      "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
+      -o /tmp/ort.tgz \
+    && tar xzf /tmp/ort.tgz -C /tmp/ \
+    && cp "/tmp/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION}" /usr/lib/ \
+    && ln -sf "/usr/lib/libonnxruntime.so.${ORT_VERSION}" /usr/lib/libonnxruntime.so \
+    && ldconfig \
+    && rm -rf /tmp/ort.tgz "/tmp/onnxruntime-linux-x64-${ORT_VERSION}"
 
 # ---------------------------------------------------------------------------
 # gitleaks — secret scanner used by scan-secrets and post-scripts.
