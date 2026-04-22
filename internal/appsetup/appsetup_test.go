@@ -307,6 +307,10 @@ func TestManifestFlow_HTMLForm(t *testing.T) {
 
 func TestSetup_StalePermissions_AllRolesChecked(t *testing.T) {
 	client := &forge.FakeClient{
+		AppClientIDs: map[string]string{
+			"myorg-fullsend": "Iv1.abc",
+			"myorg-triage":   "Iv1.def",
+		},
 		Installations: []forge.Installation{
 			{
 				ID: 100, AppID: 10, AppSlug: "myorg-fullsend",
@@ -349,6 +353,9 @@ func TestSetup_StalePermissions_AllRolesChecked(t *testing.T) {
 
 func TestSetup_CorrectPermissions_NoError(t *testing.T) {
 	client := &forge.FakeClient{
+		AppClientIDs: map[string]string{
+			"myorg-fullsend": "Iv1.abc",
+		},
 		Installations: []forge.Installation{
 			{
 				ID: 100, AppID: 10, AppSlug: "myorg-fullsend",

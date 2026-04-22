@@ -222,8 +222,6 @@ func (s *Setup) handleExistingApp(ctx context.Context, inst *forge.Installation,
 		return nil, fmt.Errorf("looking up client ID for %s: %w", inst.AppSlug, err)
 	}
 
-	s.checkPermissions(inst, org, role)
-
 	if s.secretExists != nil {
 		exists, err := s.secretExists(role)
 		if err != nil {
@@ -231,6 +229,7 @@ func (s *Setup) handleExistingApp(ctx context.Context, inst *forge.Installation,
 		}
 
 		if exists {
+			s.checkPermissions(inst, org, role)
 			s.ui.StepDone(fmt.Sprintf("Reusing existing app %s (credentials present)", inst.AppSlug))
 			return &AppCredentials{
 				AppID:    inst.AppID,
@@ -274,18 +273,13 @@ func (s *Setup) PermissionErrors() error {
 
 func (s *Setup) checkPermissions(inst *forge.Installation, org, role string) {
 	if inst.Permissions == nil {
+		s.ui.StepWarn(fmt.Sprintf("app %s: permissions not available, skipping check", inst.AppSlug))
 		return
 	}
 	expected := ghTypes.AgentAppConfig(org, role).Permissions
-	want := map[string]string{
-		"issues":         expected.Issues,
-		"pull_requests":  expected.PullRequests,
-		"checks":         expected.Checks,
-		"contents":       expected.Contents,
-		"workflows":      expected.Workflows,
-		"administration": expected.Administration,
-		"members":        expected.Members,
-	}
+	data, _ := json.Marshal(expected)
+	var want map[string]string
+	_ = json.Unmarshal(data, &want)
 	var missing []string
 	for perm, level := range want {
 		if level == "" {
