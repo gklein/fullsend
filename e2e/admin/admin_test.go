@@ -257,7 +257,7 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 		}
 		gcpRegion := os.Getenv("E2E_GCP_REGION")
 		if gcpRegion == "" {
-			gcpRegion = "us-east5"
+			gcpRegion = "global"
 		}
 		inferenceProvider = vertex.New(vertex.Config{
 			ProjectID:      gcpProjectID,

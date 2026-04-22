@@ -45,7 +45,7 @@ func vertexProvider() *fakeProvider {
 			"FULLSEND_GCP_PROJECT_ID":  "my-project",
 		},
 		variables: map[string]string{
-			"FULLSEND_GCP_REGION": "us-east5",
+			"FULLSEND_GCP_REGION": "global",
 		},
 	}
 }
@@ -78,7 +78,7 @@ func TestInferenceLayer_Install_StoresSecrets(t *testing.T) {
 	// Variables should also have been set.
 	require.Len(t, client.Variables, 1)
 	assert.Equal(t, "FULLSEND_GCP_REGION", client.Variables[0].Name)
-	assert.Equal(t, "us-east5", client.Variables[0].Value)
+	assert.Equal(t, "global", client.Variables[0].Value)
 }
 
 func TestInferenceLayer_Install_NilProvider(t *testing.T) {

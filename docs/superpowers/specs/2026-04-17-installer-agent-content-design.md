@@ -308,7 +308,7 @@ Unchanged. It still creates the `.fullsend` repo and writes `config.yaml`. The p
 
 ### 4.5 SecretsLayer / InferenceLayer
 
-Minor addition: `InferenceLayer` should store `FULLSEND_GCP_REGION` as a repo variable (the workflows reference `${{ vars.FULLSEND_GCP_REGION || 'us-east5' }}`). Check if this already happens; add if not.
+Minor addition: `InferenceLayer` should store `FULLSEND_GCP_REGION` as a repo variable (the workflows reference `${{ vars.FULLSEND_GCP_REGION || 'global' }}`). Check if this already happens; add if not.
 
 ---
 

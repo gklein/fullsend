@@ -43,7 +43,7 @@ type GCPClient interface {
 // Config holds the inputs for Vertex credential provisioning.
 type Config struct {
 	ProjectID          string // required
-	Region             string // required: GCP region (e.g. us-east5)
+	Region             string // required: GCP region (e.g. global)
 	ServiceAccountName string // optional: existing SA name (mode 2)
 	CredentialJSON     []byte // optional: pre-made key JSON (mode 3)
 }

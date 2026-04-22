@@ -186,7 +186,7 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&skipAppSetup, "skip-app-setup", false, "skip GitHub App creation/setup")
 	cmd.Flags().BoolVar(&vendorBinary, "vendor-fullsend-binary", false, "cross-compile and upload the fullsend binary into .fullsend/bin/ for development iteration")
 	cmd.Flags().StringVar(&gcpProject, "gcp-project", "", "GCP project ID for Vertex AI inference")
-	cmd.Flags().StringVar(&gcpRegion, "gcp-region", "", "GCP region for Vertex AI (e.g. us-east5, required with --gcp-project)")
+	cmd.Flags().StringVar(&gcpRegion, "gcp-region", "", "GCP region for Vertex AI (e.g. global, required with --gcp-project)")
 	cmd.Flags().StringVar(&gcpServiceAccount, "gcp-service-account", "", "existing GCP service account name (optional, used with --gcp-project)")
 	cmd.Flags().StringVar(&gcpCredentialsFile, "gcp-credentials-file", "", "path to pre-made GCP service account key JSON (optional, used with --gcp-project)")
 
