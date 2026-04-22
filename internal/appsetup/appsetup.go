@@ -103,6 +103,7 @@ type Setup struct {
 	ui           *ui.Printer
 	knownSlugs   map[string]string
 	secretExists SecretExistsFunc
+	permErrors   []string
 }
 
 // NewSetup creates a new Setup instance.
@@ -147,7 +148,7 @@ func (s *Setup) Run(ctx context.Context, org, role string) (*AppCredentials, err
 	}
 
 	if found {
-		return s.handleExistingApp(ctx, inst, role)
+		return s.handleExistingApp(ctx, inst, org, role)
 	}
 
 	// No existing app found — run the manifest flow.
@@ -213,7 +214,7 @@ func (s *Setup) findExistingInstallation(
 //
 // When an existing app is found with valid credentials, it is reused
 // automatically. To get fresh apps, run uninstall first, then install.
-func (s *Setup) handleExistingApp(ctx context.Context, inst *forge.Installation, role string) (*AppCredentials, error) {
+func (s *Setup) handleExistingApp(ctx context.Context, inst *forge.Installation, org, role string) (*AppCredentials, error) {
 	s.ui.StepDone(fmt.Sprintf("Found existing app: %s (ID: %d)", inst.AppSlug, inst.AppID))
 
 	clientID, err := s.client.GetAppClientID(ctx, inst.AppSlug)
@@ -228,6 +229,7 @@ func (s *Setup) handleExistingApp(ctx context.Context, inst *forge.Installation,
 		}
 
 		if exists {
+			s.checkPermissions(inst, org, role)
 			s.ui.StepDone(fmt.Sprintf("Reusing existing app %s (credentials present)", inst.AppSlug))
 			return &AppCredentials{
 				AppID:    inst.AppID,
@@ -255,6 +257,46 @@ func (s *Setup) handleExistingApp(ctx context.Context, inst *forge.Installation,
 		Name:     inst.AppSlug,
 		ClientID: clientID,
 	}, nil
+}
+
+// checkPermissions warns if the installed app is missing permissions that
+// the current manifest expects.
+// PermissionErrors returns a combined error if any apps have stale permissions,
+// or nil if all permissions are up to date. Call after all roles have been
+// processed so the user sees every mismatch at once.
+func (s *Setup) PermissionErrors() error {
+	if len(s.permErrors) == 0 {
+		return nil
+	}
+	return fmt.Errorf("apps have stale permissions:\n  %s", strings.Join(s.permErrors, "\n  "))
+}
+
+func (s *Setup) checkPermissions(inst *forge.Installation, org, role string) {
+	if inst.Permissions == nil {
+		s.ui.StepWarn(fmt.Sprintf("app %s: permissions not available, skipping check", inst.AppSlug))
+		return
+	}
+	expected := ghTypes.AgentAppConfig(org, role).Permissions
+	data, _ := json.Marshal(expected)
+	var want map[string]string
+	_ = json.Unmarshal(data, &want)
+	var missing []string
+	for perm, level := range want {
+		if level == "" {
+			continue
+		}
+		if inst.Permissions[perm] != level {
+			missing = append(missing, fmt.Sprintf("%s:%s", perm, level))
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	s.ui.StepWarn(fmt.Sprintf("app %s missing permissions: %s", inst.AppSlug, strings.Join(missing, ", ")))
+	s.permErrors = append(s.permErrors, fmt.Sprintf(
+		"%s — update at https://github.com/organizations/%s/settings/apps/%s/permissions",
+		inst.AppSlug, org, inst.AppSlug,
+	))
 }
 
 // manifestResponse is the JSON response from GitHub's app manifest conversion.
