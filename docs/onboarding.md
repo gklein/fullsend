@@ -24,7 +24,7 @@ Create a service account with the `Vertex AI User` role and download its key:
 ```bash
 export GCP_PROJECT="<gcp-project>"
 export ORG_NAME="<org-name>"
-export REPO_NAME="<repo-name>"
+export REPO_NAME="<repo-name>" # create a public repo for testing
 gcloud iam service-accounts create "$ORG_NAME" \
   --display-name="Fullsend for $ORG_NAME" \
   --project="$GCP_PROJECT"
@@ -55,6 +55,8 @@ fullsend admin install "$ORG_NAME" \
   --gcp-region global \
   --gcp-credentials-file sa-key.json
 ```
+
+After the installer ends you need to change the `.fullsend` repository visibility to public.
 
 ## 3. Merge enrollment PRs
 
