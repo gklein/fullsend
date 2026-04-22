@@ -392,6 +392,10 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 		})
 	}
 
+	if err := setup.PermissionErrors(); err != nil {
+		return nil, err
+	}
+
 	printer.Blank()
 	return creds, nil
 }

@@ -65,9 +65,10 @@ type IssueComment struct {
 
 // Installation represents an app installation on an org.
 type Installation struct {
-	ID      int
-	AppID   int
-	AppSlug string
+	ID          int
+	AppID       int
+	AppSlug     string
+	Permissions map[string]string
 }
 
 // Client abstracts all git forge operations.

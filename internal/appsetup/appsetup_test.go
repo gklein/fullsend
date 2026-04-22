@@ -305,6 +305,76 @@ func TestManifestFlow_HTMLForm(t *testing.T) {
 	<-errCh
 }
 
+func TestSetup_StalePermissions_AllRolesChecked(t *testing.T) {
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{
+			{
+				ID: 100, AppID: 10, AppSlug: "myorg-fullsend",
+				Permissions: map[string]string{
+					"contents":       "write",
+					"issues":         "read",
+					"pull_requests":  "write",
+					"checks":         "read",
+					"administration": "write",
+					"members":        "read",
+					// missing: workflows
+				},
+			},
+			{
+				ID: 101, AppID: 11, AppSlug: "myorg-triage",
+				Permissions: map[string]string{
+					// has issues:read but needs issues:write
+					"issues": "read",
+				},
+			},
+		},
+	}
+	printer := ui.New(&discardWriter{})
+
+	setup := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithSecretExists(func(_ string) (bool, error) { return true, nil })
+
+	// Run both roles — each should succeed individually.
+	_, err := setup.Run(context.Background(), "myorg", "fullsend")
+	require.NoError(t, err)
+	_, err = setup.Run(context.Background(), "myorg", "triage")
+	require.NoError(t, err)
+
+	// PermissionErrors should report both apps.
+	permErr := setup.PermissionErrors()
+	require.Error(t, permErr)
+	assert.Contains(t, permErr.Error(), "myorg-fullsend")
+	assert.Contains(t, permErr.Error(), "myorg-triage")
+}
+
+func TestSetup_CorrectPermissions_NoError(t *testing.T) {
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{
+			{
+				ID: 100, AppID: 10, AppSlug: "myorg-fullsend",
+				Permissions: map[string]string{
+					"contents":       "write",
+					"workflows":      "write",
+					"issues":         "read",
+					"pull_requests":  "write",
+					"checks":         "read",
+					"administration": "write",
+					"members":        "read",
+				},
+			},
+		},
+	}
+	printer := ui.New(&discardWriter{})
+
+	setup := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithSecretExists(func(_ string) (bool, error) { return true, nil })
+
+	_, err := setup.Run(context.Background(), "myorg", "fullsend")
+	require.NoError(t, err)
+
+	assert.NoError(t, setup.PermissionErrors())
+}
+
 // discardWriter implements io.Writer, discarding all output.
 type discardWriter struct{}
 

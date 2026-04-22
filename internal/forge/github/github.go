@@ -1062,9 +1062,10 @@ func (c *LiveClient) ListOrgInstallations(ctx context.Context, org string) ([]fo
 
 	var result struct {
 		Installations []struct {
-			ID      int    `json:"id"`
-			AppID   int    `json:"app_id"`
-			AppSlug string `json:"app_slug"`
+			ID          int               `json:"id"`
+			AppID       int               `json:"app_id"`
+			AppSlug     string            `json:"app_slug"`
+			Permissions map[string]string `json:"permissions"`
 		} `json:"installations"`
 	}
 	if err := decodeJSON(resp, &result); err != nil {
@@ -1074,9 +1075,10 @@ func (c *LiveClient) ListOrgInstallations(ctx context.Context, org string) ([]fo
 	installs := make([]forge.Installation, len(result.Installations))
 	for i, inst := range result.Installations {
 		installs[i] = forge.Installation{
-			ID:      inst.ID,
-			AppID:   inst.AppID,
-			AppSlug: inst.AppSlug,
+			ID:          inst.ID,
+			AppID:       inst.AppID,
+			AppSlug:     inst.AppSlug,
+			Permissions: inst.Permissions,
 		}
 	}
 	return installs, nil
