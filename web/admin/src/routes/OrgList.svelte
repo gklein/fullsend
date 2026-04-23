@@ -2,21 +2,64 @@
   import { onMount } from "svelte";
   import { githubUser } from "../lib/auth/session";
   import { loadToken } from "../lib/auth/tokenStore";
-  import { FetchOrgsError, fetchOrgs } from "../lib/orgs/fetchOrgs";
+  import {
+    FetchOrgsError,
+    fetchOrgsWithProgress,
+  } from "../lib/orgs/fetchOrgs";
   import { filterOrgsBySearch, type OrgRow } from "../lib/orgs/filter";
 
-  const DISPLAY_CAP = 20;
+  /** Max visible rows after filter (matches UX spec). */
+  const DISPLAY_CAP = 15;
+  /** After this many rows, batch UI updates until +5 more or scan completes. */
+  const BATCH_FIRST = 10;
+  const BATCH_INCREMENT = 5;
 
-  let orgs = $state<OrgRow[]>([]);
+  let serverOrgs = $state<OrgRow[]>([]);
+  let displayedOrgs = $state<OrgRow[]>([]);
+  let scanComplete = $state(false);
   let search = $state("");
   let loading = $state(false);
   let error = $state<string | null>(null);
   let emptyHint = $state<string | null>(null);
 
+  function commitDisplayedRows(capped: OrgRow[], done: boolean): void {
+    if (done) {
+      scanComplete = true;
+      displayedOrgs = capped;
+      return;
+    }
+    scanComplete = false;
+    const c = capped.length;
+    const d = displayedOrgs.length;
+
+    if (c <= BATCH_FIRST) {
+      displayedOrgs = capped;
+      return;
+    }
+    if (c >= DISPLAY_CAP) {
+      displayedOrgs = capped;
+      return;
+    }
+    if (d < BATCH_FIRST) {
+      displayedOrgs = capped.slice(0, BATCH_FIRST);
+      return;
+    }
+    if (c >= d + BATCH_INCREMENT) {
+      displayedOrgs = capped;
+    }
+  }
+
+  function syncDisplayFromSearch(): void {
+    const capped = filterOrgsBySearch(serverOrgs, search).slice(0, DISPLAY_CAP);
+    commitDisplayedRows(capped, scanComplete);
+  }
+
   async function loadOrgs(force: boolean) {
     const token = loadToken()?.accessToken;
     if (!token) {
-      orgs = [];
+      serverOrgs = [];
+      displayedOrgs = [];
+      scanComplete = false;
       error = null;
       emptyHint = null;
       return;
@@ -24,12 +67,26 @@
     loading = true;
     error = null;
     emptyHint = null;
+    serverOrgs = [];
+    displayedOrgs = [];
+    scanComplete = false;
     try {
-      const r = await fetchOrgs(token, { force });
-      orgs = r.orgs;
+      const r = await fetchOrgsWithProgress(token, {
+        force,
+        onProgress: (orgs, meta) => {
+          serverOrgs = orgs;
+          const capped = filterOrgsBySearch(orgs, search).slice(0, DISPLAY_CAP);
+          commitDisplayedRows(capped, meta.done);
+        },
+      });
+      serverOrgs = r.orgs;
       emptyHint = r.emptyHint;
+      const capped = filterOrgsBySearch(r.orgs, search).slice(0, DISPLAY_CAP);
+      commitDisplayedRows(capped, true);
     } catch (e) {
-      orgs = [];
+      serverOrgs = [];
+      displayedOrgs = [];
+      scanComplete = false;
       emptyHint = null;
       if (e instanceof FetchOrgsError) {
         error = e.message;
@@ -46,7 +103,9 @@
     const unsub = githubUser.subscribe((u) => {
       if (u) void loadOrgs(false);
       else {
-        orgs = [];
+        serverOrgs = [];
+        displayedOrgs = [];
+        scanComplete = false;
         error = null;
         emptyHint = null;
       }
@@ -54,9 +113,8 @@
     return unsub;
   });
 
-  const filtered = $derived(filterOrgsBySearch(orgs, search));
-  const cappedRows = $derived(filtered.slice(0, DISPLAY_CAP));
-  const showCapHint = $derived(filtered.length > DISPLAY_CAP);
+  const filteredAll = $derived(filterOrgsBySearch(serverOrgs, search));
+  const showCapHint = $derived(filteredAll.length > DISPLAY_CAP);
 
   function orgAvatarUrl(login: string): string {
     return `https://github.com/${encodeURIComponent(login)}.png?size=64`;
@@ -71,7 +129,7 @@
   {#if !$githubUser}
     <p class="muted">Sign in to load this list.</p>
   {:else}
-    {#if loading && orgs.length === 0}
+    {#if loading && serverOrgs.length === 0}
       <div class="org-loading" role="status" aria-live="polite" aria-busy="true">
         <div class="org-loading-spinner" aria-hidden="true"></div>
         <p class="org-loading-label">Loading organisations…</p>
@@ -85,6 +143,7 @@
             class="search"
             placeholder="Type to filter"
             bind:value={search}
+            oninput={() => syncDisplayFromSearch()}
             autocomplete="off"
             spellcheck="false"
           />
@@ -100,11 +159,7 @@
       </div>
 
       {#if showCapHint}
-        <p class="cap-hint" role="status">Showing up to 20 organisations</p>
-      {/if}
-
-      {#if loading && orgs.length > 0}
-        <p class="muted refresh-note" role="status">Refreshing…</p>
+        <p class="cap-hint" role="status">Showing up to 15 organisations</p>
       {/if}
 
       {#if error}
@@ -118,18 +173,18 @@
             Retry
           </button>
         </div>
-      {:else if filtered.length === 0}
+      {:else if filteredAll.length === 0}
         <p class="muted">
-          {orgs.length === 0
+          {serverOrgs.length === 0
             ? "No organisations found for this account."
             : "No matching organisations."}
         </p>
-        {#if orgs.length === 0 && emptyHint}
+        {#if serverOrgs.length === 0 && emptyHint}
           <p class="hint" role="note">{emptyHint}</p>
         {/if}
       {:else}
         <ul class="list">
-          {#each cappedRows as o (o.login)}
+          {#each displayedOrgs as o (o.login)}
             <li class="row">
               <div class="row-main">
                 <img
@@ -153,6 +208,17 @@
             </li>
           {/each}
         </ul>
+        {#if loading && displayedOrgs.length > 0}
+          <div
+            class="org-more-loading"
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
+          >
+            <div class="org-more-spinner" aria-hidden="true"></div>
+            <span class="sr-only">Loading more organisations</span>
+          </div>
+        {/if}
       {/if}
     {/if}
   {/if}
@@ -195,6 +261,24 @@
       transform: rotate(360deg);
     }
   }
+  .org-more-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(5 * 2.75rem);
+    margin-top: 0.25rem;
+    border: 1px dashed #d0d7de;
+    border-radius: 8px;
+    background: #fafafa;
+  }
+  .org-more-spinner {
+    width: 2rem;
+    height: 2rem;
+    border: 3px solid #d0d7de;
+    border-top-color: #24292f;
+    border-radius: 50%;
+    animation: org-spin 0.75s linear infinite;
+  }
   .toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -207,10 +291,6 @@
     font-size: 0.88rem;
     color: #cf222e;
     font-weight: 500;
-  }
-  .refresh-note {
-    margin: -0.25rem 0 0.75rem;
-    font-size: 0.9rem;
   }
   .search-label {
     flex: 1;

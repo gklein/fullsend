@@ -2,7 +2,10 @@ import { createUserOctokit } from "../github/client";
 import { buildEmptyOrgsFromReposHint, headersToRecord } from "./emptyOrgListHint";
 import type { OrgRow } from "./filter";
 
-/** Cap pages when paginating GET /user/repos (100 repos per page). */
+/** Smaller GitHub pages so the UI can paint orgs sooner than 100-repo chunks. */
+const REPOS_PER_PAGE = 25;
+
+/** Cap pages when paginating GET /user/repos. */
 const MAX_REPO_LIST_PAGES = 50;
 
 export type FetchOrgsResult = {
@@ -12,6 +15,12 @@ export type FetchOrgsResult = {
    * (`GET /user/repos`).
    */
   emptyHint: string | null;
+};
+
+export type FetchOrgsProgressMeta = {
+  done: boolean;
+  /** Number of GitHub repo list pages processed so far. */
+  repoPagesFetched: number;
 };
 
 let memoryCache: {
@@ -67,20 +76,29 @@ function isOrganizationOwner(owner: unknown): owner is { login: string } {
   );
 }
 
+function sortedOrgRowsFromMap(orgLogins: Map<string, string>): OrgRow[] {
+  return [...orgLogins.values()]
+    .sort((a, b) => a.localeCompare(b))
+    .map((login) => ({ login }));
+}
+
 /**
- * Builds the org picker from **`GET /user/repos`**: unique GitHub **Organization** owners among
- * repositories the user may access (owner, collaborator, organization_member). This matches a
- * “choose org → choose repo” flow without calling org-membership or org-list endpoints.
+ * Scans **`GET /user/repos`** page-by-page (`per_page` {@link REPOS_PER_PAGE}), calling
+ * `onProgress` after each page with the cumulative unique organisation list so the UI can
+ * paint early.
  */
-export async function fetchOrgs(
+export async function fetchOrgsWithProgress(
   accessToken: string,
-  options?: { force?: boolean },
+  options: {
+    force?: boolean;
+    signal?: AbortSignal;
+    onProgress: (orgs: OrgRow[], meta: FetchOrgsProgressMeta) => void;
+  },
 ): Promise<FetchOrgsResult> {
-  if (!options?.force && memoryCache?.token === accessToken) {
-    return {
-      orgs: memoryCache.orgs,
-      emptyHint: memoryCache.emptyHint,
-    };
+  if (!options.force && memoryCache?.token === accessToken) {
+    const { orgs, emptyHint } = memoryCache;
+    options.onProgress(orgs, { done: true, repoPagesFetched: 0 });
+    return { orgs, emptyHint };
   }
 
   const octokit = createUserOctokit(accessToken);
@@ -89,7 +107,7 @@ export async function fetchOrgs(
     const iterator = octokit.paginate.iterator(
       octokit.rest.repos.listForAuthenticatedUser,
       {
-        per_page: 100,
+        per_page: REPOS_PER_PAGE,
         affiliation: "owner,collaborator,organization_member",
         sort: "full_name",
       },
@@ -102,6 +120,9 @@ export async function fetchOrgs(
     let pages = 0;
 
     for await (const page of iterator) {
+      if (options.signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
       pages += 1;
       if (pages > MAX_REPO_LIST_PAGES) break;
 
@@ -121,12 +142,12 @@ export async function fetchOrgs(
           orgLogins.set(login.toLowerCase(), login);
         }
       }
+
+      const orgs = sortedOrgRowsFromMap(orgLogins);
+      options.onProgress(orgs, { done: false, repoPagesFetched: pages });
     }
 
-    const orgs = [...orgLogins.values()]
-      .sort((a, b) => a.localeCompare(b))
-      .map((login) => ({ login }));
-
+    const orgs = sortedOrgRowsFromMap(orgLogins);
     const emptyHint =
       orgs.length === 0
         ? buildEmptyOrgsFromReposHint(
@@ -138,10 +159,29 @@ export async function fetchOrgs(
         : null;
 
     memoryCache = { token: accessToken, orgs, emptyHint };
+    options.onProgress(orgs, { done: true, repoPagesFetched: pages });
     return { orgs, emptyHint };
   } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw e;
+    }
     const status = octokitErrorStatus(e);
     const msg = e instanceof Error ? e.message : "GitHub repository listing failed.";
     throw new FetchOrgsError(status, friendlyReposListHttpError(status, msg));
   }
+}
+
+/**
+ * Builds the org picker from **`GET /user/repos`**: unique GitHub **Organization** owners among
+ * repositories the user may access (owner, collaborator, organization_member).
+ */
+export async function fetchOrgs(
+  accessToken: string,
+  options?: { force?: boolean; signal?: AbortSignal },
+): Promise<FetchOrgsResult> {
+  return fetchOrgsWithProgress(accessToken, {
+    force: options?.force,
+    signal: options?.signal,
+    onProgress: () => {},
+  });
 }

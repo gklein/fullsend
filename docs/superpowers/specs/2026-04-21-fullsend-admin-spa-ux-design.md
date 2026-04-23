@@ -87,10 +87,17 @@ When Fullsend is **not** deployed and the user **cannot** deploy, use:
 
 - **Yellow warning triangle** + text **`Cannot deploy`** + **circled “i”** (popover explains **why**: insufficient permissions, GitHub role hint, or engine-derived reason). **No** `Retry` unless the reason is **transient** (implementation may show **Retry** only for retriable classification; otherwise omit).
 
-### Search and “showing 20” cap (organisation list)
+### Search and “showing 15” cap (organisation list)
 
-- **Search-as-you-type** filters the **full** organisation set the user has access to, then the UI displays **at most 20** matching rows (sorted **alphabetically** by organisation name unless product later defines another stable sort).
-- If the filtered set has **more than 20** matches, show **red** helper text beneath the search field: **`Showing up to 20 organisations`** (exact string).
+- **Search-as-you-type** filters the **full** organisation set the user has access to, then the UI displays **at most 15** matching rows (sorted **alphabetically** by organisation name unless product later defines another stable sort).
+- If the filtered set has **more than 15** matches, show **red** helper text beneath the search field: **`Showing up to 15 organisations`** (exact string).
+
+### Search and “showing 15” cap (repository list)
+
+On the **organisation dashboard** repository list (**Pane B**), apply the same pattern as the organisation picker:
+
+- **Search-as-you-type** filters the **full** repository union (see **Pane B — row source**), then the UI displays **at most 15** matching rows (sorted **alphabetically** by repository name unless product later defines another stable sort).
+- If the filtered set has **more than 15** matches, show **red** helper text beneath the search field: **`Showing up to 15 repositories`** (exact string).
 
 ### List interaction model
 
@@ -157,7 +164,10 @@ Pick an organisation to **deploy** Fullsend into, **configure** an existing depl
 
 ### Organisation selection — list
 
-- Up to **20** rows after filtering (see **Global UX patterns**).
+- Up to **15** rows after filtering (see **Global UX patterns**).
+- While the organisation set is still being discovered (for example paginated **`GET /user/repos`**), **paint organisations as soon as they are known**, subject to the **progressive display rule** below.
+- **Progressive display:** once **10** rows are on screen, **hold** further row updates until either discovery **finishes** or **at least five** additional filtered rows are available to show, then continue updating — always capped at **15** visible rows. (This reduces layout churn when many organisations appear quickly.)
+- **In-list loading:** when discovery may still be in flight and at least one row is already visible, show an **indeterminate spinner** in the blank area **below** the list; reserve vertical space similar to **five** row heights so users see that loading continues.
 - Each row, **left:** organisation **logo/avatar** + **organisation name**.
 - Each row, **right** (mutually exclusive **trailing** cluster):
 
@@ -205,6 +215,7 @@ Pane-level fetch failures use the **global banner** pattern; do not fragment org
 
 - **Search-as-you-type** (filters row **names** / identifiers shown in the list).
 - **Refresh** (re-fetches repo union and row statuses).
+- **Visible row cap** and **“showing 15”** helper for repositories: [Search and “showing 15” cap (repository list)](#search-and-showing-15-cap-repository-list).
 
 #### Repository list — row source
 
@@ -257,7 +268,8 @@ States are **mutually exclusive** on the trailing side except where noted (actio
 
 - [ ] Unauthenticated `/admin/deep` → Login → returns to **deep** after success.
 - [ ] Post-OAuth spinner covers until **nav bar** can render accurately.
-- [ ] Org list: **>20** matches when filtered → **red** “showing 20” helper appears; **≤20** → helper hidden.
+- [ ] Org list: **>15** matches when filtered → **red** “showing 15 organisations” helper appears; **≤15** → helper hidden.
+- [ ] Repo list (org dashboard): **>15** matches when filtered → **red** “showing 15 repositories” helper appears; **≤15** → helper hidden.
 - [ ] Org row failure → **red** error row pattern with popover + **Retry**; **cannot deploy** remains **yellow** without the red pattern.
 - [ ] Repo list includes **union** rows and shows **R6** and **R7** distinctly.
 - [ ] **R4**/**R5** always show **red** **`Remove`** in addition to status text / **Repair** as specified.
