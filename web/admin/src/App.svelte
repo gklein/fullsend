@@ -36,7 +36,6 @@
     oauthBootAbort?.abort();
     signOut();
     clearSigningInBrowserState();
-    authBootPending.set(false);
   }
 
   async function beginGithubSignIn(): Promise<void> {

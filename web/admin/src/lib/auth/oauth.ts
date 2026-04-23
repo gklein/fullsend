@@ -364,11 +364,6 @@ export async function completeGithubOAuthFromHandoff(
     return { ok: false, error: "Token response missing access_token." };
   }
 
-  if (aborted()) {
-    clearOAuthState();
-    return { ok: false, error: SIGNING_IN_CANCELLED_MESSAGE };
-  }
-
   const token_type =
     typeof body.token_type === "string" ? body.token_type : "bearer";
   const expires_in =
