@@ -51,10 +51,17 @@ _CHECKS: list[tuple[str, str, re.Pattern]] = [
         "medium",
         re.compile("[\ufe00-\ufe0f]+"),
     ),
+    # CSI: ECMA-48 compliant ranges (broader than Go's [0-9;]*[a-zA-Z]).
     (
         "ansi_escape",
         "medium",
         re.compile(r"\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]"),
+    ),
+    # OSC: terminal hyperlinks, window title injection.
+    (
+        "osc_escape",
+        "medium",
+        re.compile(r"\x1b\].*?(?:\x1b\\|\x07)"),
     ),
     (
         "null_byte",
@@ -141,20 +148,21 @@ def scan_text(text: str) -> tuple[str, list[dict]]:
     return result, findings
 
 
-MAX_INPUT_BYTES = 10 * 1024 * 1024  # 10 MB
+# sys.stdin.read(n) in text mode reads characters, not bytes.
+MAX_INPUT_CHARS = 10 * 1024 * 1024
 
 
 def main() -> None:
     try:
-        raw = sys.stdin.read(MAX_INPUT_BYTES + 1)
-        if len(raw) > MAX_INPUT_BYTES:
+        raw = sys.stdin.read(MAX_INPUT_CHARS + 1)
+        if len(raw) > MAX_INPUT_CHARS:
             log_finding(
                 "input_truncated",
                 "medium",
-                f"Input truncated from {len(raw)} to {MAX_INPUT_BYTES} bytes",
+                f"Input truncated from {len(raw)} to {MAX_INPUT_CHARS} characters",
                 "warn",
             )
-            raw = raw[:MAX_INPUT_BYTES]
+            raw = raw[:MAX_INPUT_CHARS]
         if not raw.strip():
             sys.exit(0)
         hook_input = json.loads(raw)

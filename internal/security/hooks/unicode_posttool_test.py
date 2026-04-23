@@ -130,6 +130,15 @@ class TestAnsiEscape(unittest.TestCase):
         self.assertEqual(out["tool_result"], "hellored")
         self.assertIn("ansi_escape", out["metadata"]["categories"])
 
+    def test_osc_hyperlink_stripped(self):
+        # OSC 8 hyperlink: ESC ] 8 ; ; url BEL text ESC ] 8 ; ; BEL
+        payload = "before\x1b]8;;http://evil.com\x07click\x1b]8;;\x07after"
+        rc, stdout, _ = run_hook(payload)
+        self.assertEqual(rc, 0)
+        out = json.loads(stdout)
+        self.assertNotIn("evil.com", out["tool_result"])
+        self.assertIn("osc_escape", out["metadata"]["categories"])
+
 
 class TestNFKC(unittest.TestCase):
     def test_fullwidth_normalized(self):

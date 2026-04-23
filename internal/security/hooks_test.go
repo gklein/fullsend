@@ -157,3 +157,29 @@ func TestGenerateClaudeSettings_UnicodeDisabled(t *testing.T) {
 	chainedHooks := matcher["hooks"].([]any)
 	assert.Len(t, chainedHooks, 1) // only secret_redact
 }
+
+func TestGenerateClaudeSettings_SecretRedactDisabled(t *testing.T) {
+	disabled := false
+	h := &harness.Harness{
+		Agent: "test.md",
+		Security: &harness.SecurityConfig{
+			SandboxHooks: &harness.SandboxHooks{
+				SecretRedactPostTool: &disabled,
+			},
+		},
+	}
+	data, err := GenerateClaudeSettings(h)
+	require.NoError(t, err)
+
+	var settings map[string]any
+	require.NoError(t, json.Unmarshal(data, &settings))
+
+	hooks := settings["hooks"].(map[string]any)
+	postTools := hooks["PostToolUse"].([]any)
+	assert.Len(t, postTools, 1) // single matcher
+
+	// With secret_redact disabled, only unicode hook in the chain.
+	matcher := postTools[0].(map[string]any)
+	chainedHooks := matcher["hooks"].([]any)
+	assert.Len(t, chainedHooks, 1) // only unicode
+}
