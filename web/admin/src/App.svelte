@@ -11,6 +11,7 @@
   } from "./lib/auth/session";
   import {
     clearIntendedHashStash,
+    clearSigningInBrowserState,
     completeGithubOAuthFromHandoff,
     consumeIntendedHashAfterGithubOAuth,
     consumeOAuthParamsFromDocumentUrl,
@@ -29,6 +30,14 @@
   let oauthBootAbort: AbortController | null = null;
   /** Bumps on each mount cleanup so a disposed boot’s `finally` cannot clear a newer mount’s boot state. */
   let oauthBootSeq = 0;
+
+  function cancelSigningInAsDifferentAccount(): void {
+    oauthErr = null;
+    oauthBootAbort?.abort();
+    signOut();
+    clearSigningInBrowserState();
+    authBootPending.set(false);
+  }
 
   async function beginGithubSignIn(): Promise<void> {
     oauthErr = null;
@@ -95,7 +104,37 @@
 {#if $authBootPending}
   <div class="boot-screen" role="status" aria-live="polite" aria-busy="true">
     <div class="boot-spinner" aria-hidden="true"></div>
-    <p class="boot-label">Loading…</p>
+    <p class="boot-signing-label">Signing in as:</p>
+    {#if $githubUser}
+      <div class="boot-identity">
+        {#if $githubUser.avatarUrl}
+          <img
+            class="boot-avatar"
+            src={$githubUser.avatarUrl}
+            alt=""
+            width="48"
+            height="48"
+          />
+        {/if}
+        <div class="boot-user-text">
+          <span class="boot-login">{$githubUser.login}</span>
+          {#if $githubUser.name}
+            <span class="boot-display-name">{$githubUser.name}</span>
+          {/if}
+        </div>
+      </div>
+    {:else}
+      <p class="boot-wait-hint">
+        Hang on while we verify this session with Cloudflare and GitHub.
+      </p>
+    {/if}
+    <button
+      type="button"
+      class="btn boot-different-account"
+      onclick={cancelSigningInAsDifferentAccount}
+    >
+      Sign in with a different account
+    </button>
   </div>
 {:else if $githubUser}
   <header class="bar account-bar">
@@ -229,7 +268,10 @@
     align-items: center;
     justify-content: center;
     gap: 1rem;
-    background: #fafafa;
+    padding: 1.5rem;
+    box-sizing: border-box;
+    background: #f6f8fa;
+    border-top: 1px solid #d8dee4;
   }
   .boot-spinner {
     width: 2.75rem;
@@ -239,10 +281,51 @@
     border-radius: 50%;
     animation: spin 0.75s linear infinite;
   }
-  .boot-label {
+  .boot-signing-label {
     margin: 0;
     font-size: 1rem;
+    font-weight: 600;
+    color: #24292f;
+  }
+  .boot-identity {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.75rem 1rem;
+    background: #fff;
+    border: 1px solid #d0d7de;
+    border-radius: 10px;
+    box-shadow: 0 1px 2px rgba(31, 35, 40, 0.04);
+  }
+  .boot-avatar {
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .boot-user-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    line-height: 1.25;
+    text-align: left;
+  }
+  .boot-login {
+    font-weight: 700;
+    font-size: 1rem;
+  }
+  .boot-display-name {
+    font-size: 0.9rem;
+    color: #57606a;
+  }
+  .boot-wait-hint {
+    margin: 0;
+    max-width: 22rem;
+    text-align: center;
+    font-size: 0.95rem;
+    line-height: 1.45;
     color: #444;
+  }
+  .boot-different-account {
+    margin-top: 0.25rem;
   }
   @keyframes spin {
     to {

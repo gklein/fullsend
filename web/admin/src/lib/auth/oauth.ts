@@ -9,6 +9,22 @@ const OAUTH_DOC_HANDOFF_KEY = "fullsend_admin_oauth_doc_handoff";
 /** Hash route to restore after successful OAuth (e.g. `#/orgs`). */
 const INTENDED_HASH_KEY = "fullsend_admin_intended_hash";
 
+/** Returned when `AbortSignal` aborts during `completeGithubOAuthFromHandoff` (user chose another account). */
+export const SIGNING_IN_CANCELLED_MESSAGE =
+  "Signing in was cancelled." as const;
+
+/** Clears OAuth-related `sessionStorage` so a cancelled sign-in can restart cleanly. */
+export function clearSigningInBrowserState(): void {
+  clearOAuthState();
+  clearIntendedHashStash();
+  try {
+    sessionStorage.removeItem(PKCE_VERIFIER_KEY);
+    sessionStorage.removeItem(OAUTH_DOC_HANDOFF_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 const DEFAULT_ADMIN_BASE = "/admin/";
 
 /**
@@ -176,7 +192,7 @@ export const SIGNING_IN_CANCELLED_MESSAGE =
   "Signing in was cancelled." as const;
 
 export type CompleteGithubOAuthOptions = {
-  /** When aborted, Turnstile + token exchange are skipped. */
+  /** When aborted (unmount or “different account”), Turnstile + token exchange are skipped. */
   signal?: AbortSignal;
 };
 
@@ -346,6 +362,11 @@ export async function completeGithubOAuthFromHandoff(
   if (!access_token) {
     clearOAuthState();
     return { ok: false, error: "Token response missing access_token." };
+  }
+
+  if (aborted()) {
+    clearOAuthState();
+    return { ok: false, error: SIGNING_IN_CANCELLED_MESSAGE };
   }
 
   const token_type =
