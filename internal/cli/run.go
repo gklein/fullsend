@@ -652,11 +652,11 @@ func bootstrapEnv(sshConfigPath, sandboxName, repoDir string, h *harness.Harness
 			}
 		}
 
-		// TODO(#312): remove this once admin install preserves the executable
+		// TODO(#345): remove this once admin install preserves the executable
 		// bit when writing files to .fullsend/. The GitHub Contents API commits
 		// everything as 100644, so scripts lose +x. Force it back for anything
 		// landing in a bin/ directory.
-		// https://github.com/fullsend-ai/fullsend/issues/312#issuecomment-4300729520
+		// https://github.com/fullsend-ai/fullsend/issues/345#issuecomment-4300740512
 		if strings.Contains(hf.Dest, "/bin/") {
 			chmodCmd := fmt.Sprintf("chmod +x %s", hf.Dest)
 			if _, _, _, sshErr := sandbox.SSH(sshConfigPath, sandboxName, chmodCmd, 10*time.Second); sshErr != nil {
