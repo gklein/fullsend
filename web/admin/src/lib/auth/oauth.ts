@@ -6,6 +6,8 @@ import { saveToken } from "./tokenStore";
 const PKCE_VERIFIER_KEY = "fullsend_admin_pkce_verifier";
 const OAUTH_STATE_KEY = "fullsend_admin_oauth_state";
 const OAUTH_DOC_HANDOFF_KEY = "fullsend_admin_oauth_doc_handoff";
+/** Hash route to restore after successful OAuth (e.g. `#/orgs`). */
+const INTENDED_HASH_KEY = "fullsend_admin_intended_hash";
 
 const DEFAULT_ADMIN_BASE = "/admin/";
 
@@ -66,11 +68,33 @@ export function tryParseWorkerExpandedOauthState(
   }
 }
 
+/** Stash current `location.hash` so we can restore after OAuth (companion UX: anonymous deep link). */
+export function stashIntendedHashBeforeGithubOAuth(): void {
+  const h = window.location.hash?.trim();
+  sessionStorage.setItem(INTENDED_HASH_KEY, h && h.length > 0 ? h : "#/");
+}
+
+/** Remove stashed hash (e.g. after a failed exchange). */
+export function clearIntendedHashStash(): void {
+  sessionStorage.removeItem(INTENDED_HASH_KEY);
+}
+
+/**
+ * Returns the stashed hash (with `#`) and removes it. Returns `null` if none.
+ */
+export function consumeIntendedHashAfterGithubOAuth(): string | null {
+  const raw = sessionStorage.getItem(INTENDED_HASH_KEY);
+  sessionStorage.removeItem(INTENDED_HASH_KEY);
+  if (raw == null || raw === "") return null;
+  return raw.startsWith("#") ? raw : `#/${raw}`;
+}
+
 /**
  * Starts GitHub OAuth: stores PKCE + state, then navigates to the site Worker
  * `/api/oauth/authorize`, which redirects to GitHub with `client_id` (never embedded in the SPA bundle).
  */
 export async function startGithubSignIn(): Promise<void> {
+  stashIntendedHashBeforeGithubOAuth();
   const redirectUri = getOAuthRedirectUri();
   const verifier = randomVerifier();
   const challenge = await challengeS256(verifier);
