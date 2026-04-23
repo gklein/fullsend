@@ -22,7 +22,8 @@
   let error = $state<string | null>(null);
   let emptyHint = $state<string | null>(null);
 
-  function commitDisplayedRows(capped: OrgRow[], done: boolean): void {
+  /** Batched updates while the repo scan is still running (unfiltered growth from `onProgress`). */
+  function commitDisplayedRowsFromScan(capped: OrgRow[], done: boolean): void {
     if (done) {
       scanComplete = true;
       displayedOrgs = capped;
@@ -49,21 +50,33 @@
     }
   }
 
-  function syncDisplayFromSearch(): void {
-    const capped = filterOrgsBySearch(serverOrgs, search).slice(0, DISPLAY_CAP);
-    commitDisplayedRows(capped, scanComplete);
+  /** Search/filter changes must not reuse scan batching (can leave rows that no longer match). */
+  function applySearchFilterDisplay(): void {
+    displayedOrgs = filterOrgsBySearch(serverOrgs, search).slice(0, DISPLAY_CAP);
   }
+
+  let loadGeneration = 0;
+  let loadAbort: AbortController | null = null;
 
   async function loadOrgs(force: boolean) {
     const token = loadToken()?.accessToken;
     if (!token) {
+      loadAbort?.abort();
+      loadAbort = null;
+      loadGeneration += 1;
       serverOrgs = [];
       displayedOrgs = [];
       scanComplete = false;
       error = null;
       emptyHint = null;
+      loading = false;
       return;
     }
+    loadAbort?.abort();
+    loadAbort = new AbortController();
+    const signal = loadAbort.signal;
+    const gen = (loadGeneration += 1);
+
     loading = true;
     error = null;
     emptyHint = null;
@@ -73,17 +86,24 @@
     try {
       const r = await fetchOrgsWithProgress(token, {
         force,
+        signal,
         onProgress: (orgs, meta) => {
+          if (gen !== loadGeneration) return;
           serverOrgs = orgs;
           const capped = filterOrgsBySearch(orgs, search).slice(0, DISPLAY_CAP);
-          commitDisplayedRows(capped, meta.done);
+          commitDisplayedRowsFromScan(capped, meta.done);
         },
       });
+      if (gen !== loadGeneration) return;
       serverOrgs = r.orgs;
       emptyHint = r.emptyHint;
       const capped = filterOrgsBySearch(r.orgs, search).slice(0, DISPLAY_CAP);
-      commitDisplayedRows(capped, true);
+      commitDisplayedRowsFromScan(capped, true);
     } catch (e) {
+      if (gen !== loadGeneration) return;
+      if (e instanceof DOMException && e.name === "AbortError") {
+        return;
+      }
       serverOrgs = [];
       displayedOrgs = [];
       scanComplete = false;
@@ -95,7 +115,9 @@
           e instanceof Error ? e.message : "Failed to load organisations.";
       }
     } finally {
-      loading = false;
+      if (gen === loadGeneration) {
+        loading = false;
+      }
     }
   }
 
@@ -103,11 +125,15 @@
     const unsub = githubUser.subscribe((u) => {
       if (u) void loadOrgs(false);
       else {
+        loadAbort?.abort();
+        loadAbort = null;
+        loadGeneration += 1;
         serverOrgs = [];
         displayedOrgs = [];
         scanComplete = false;
         error = null;
         emptyHint = null;
+        loading = false;
       }
     });
     return unsub;
@@ -143,7 +169,7 @@
             class="search"
             placeholder="Type to filter"
             bind:value={search}
-            oninput={() => syncDisplayFromSearch()}
+            oninput={() => applySearchFilterDisplay()}
             autocomplete="off"
             spellcheck="false"
           />

@@ -96,6 +96,9 @@ export async function fetchOrgsWithProgress(
   },
 ): Promise<FetchOrgsResult> {
   if (!options.force && memoryCache?.token === accessToken) {
+    if (options.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
     const { orgs, emptyHint } = memoryCache;
     options.onProgress(orgs, { done: true, repoPagesFetched: 0 });
     return { orgs, emptyHint };
@@ -104,6 +107,9 @@ export async function fetchOrgsWithProgress(
   const octokit = createUserOctokit(accessToken);
 
   try {
+    if (options.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
     const iterator = octokit.paginate.iterator(
       octokit.rest.repos.listForAuthenticatedUser,
       {
