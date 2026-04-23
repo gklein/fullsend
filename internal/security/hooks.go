@@ -16,6 +16,9 @@ var SecretRedactPostToolHook []byte
 //go:embed hooks/tirith_check.py
 var TirithCheckHook []byte
 
+//go:embed hooks/unicode_posttool.py
+var UnicodePostToolHook []byte
+
 // hookEntry represents a single hook command in Claude settings.
 type hookEntry struct {
 	Type    string `json:"type"`
@@ -69,13 +72,25 @@ func GenerateClaudeSettings(h *harness.Harness) ([]byte, error) {
 		})
 	}
 
-	// Secret redaction PostToolUse hook.
+	// PostToolUse hooks for Bash|WebFetch|Read: secret redaction then unicode
+	// scanning. Combined into a single matcher so Claude Code chains them
+	// sequentially (separate matchers run in parallel on the original result,
+	// which would cause modifications to conflict).
+	var postToolHooks []hookEntry
 	if secretRedactPostToolEnabled(sec) {
+		postToolHooks = append(postToolHooks, hookEntry{
+			Type: "command", Command: "python3 " + SandboxHooksDir + "/secret_redact_posttool.py",
+		})
+	}
+	if unicodePostToolEnabled(sec) {
+		postToolHooks = append(postToolHooks, hookEntry{
+			Type: "command", Command: "python3 " + SandboxHooksDir + "/unicode_posttool.py",
+		})
+	}
+	if len(postToolHooks) > 0 {
 		postToolMatchers = append(postToolMatchers, hookMatcher{
 			Matcher: "Bash|WebFetch|Read",
-			Hooks: []hookEntry{
-				{Type: "command", Command: "python3 " + SandboxHooksDir + "/secret_redact_posttool.py"},
-			},
+			Hooks:   postToolHooks,
 		})
 	}
 
@@ -102,6 +117,9 @@ func HookFiles(h *harness.Harness) map[string][]byte {
 	}
 	if secretRedactPostToolEnabled(sec) {
 		files["secret_redact_posttool.py"] = SecretRedactPostToolHook
+	}
+	if unicodePostToolEnabled(sec) {
+		files["unicode_posttool.py"] = UnicodePostToolHook
 	}
 
 	return files
@@ -134,4 +152,11 @@ func secretRedactPostToolEnabled(sec *harness.SecurityConfig) bool {
 		return true
 	}
 	return boolDefault(sec.SandboxHooks.SecretRedactPostTool, true)
+}
+
+func unicodePostToolEnabled(sec *harness.SecurityConfig) bool {
+	if sec == nil || sec.SandboxHooks == nil {
+		return true
+	}
+	return boolDefault(sec.SandboxHooks.UnicodePostTool, true)
 }

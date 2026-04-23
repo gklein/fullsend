@@ -26,7 +26,13 @@ func TestGenerateClaudeSettings_AllDefaults(t *testing.T) {
 	assert.Len(t, preTools, 2) // tirith + ssrf
 
 	postTools := hooks["PostToolUse"].([]any)
-	assert.Len(t, postTools, 1) // secret_redact
+	assert.Len(t, postTools, 1) // single matcher with chained hooks
+
+	// Verify both hooks are chained within the single matcher.
+	matcher := postTools[0].(map[string]any)
+	assert.Equal(t, "Bash|WebFetch|Read", matcher["matcher"])
+	chainedHooks := matcher["hooks"].([]any)
+	assert.Len(t, chainedHooks, 2) // secret_redact → unicode
 }
 
 func TestGenerateClaudeSettings_TirithDisabled(t *testing.T) {
@@ -59,6 +65,7 @@ func TestGenerateClaudeSettings_AllHooksDisabled(t *testing.T) {
 				Tirith:               &harness.TirithConfig{Enabled: &disabled},
 				SSRFPreTool:          &disabled,
 				SecretRedactPostTool: &disabled,
+				UnicodePostTool:      &disabled,
 			},
 		},
 	}
@@ -76,10 +83,11 @@ func TestGenerateClaudeSettings_AllHooksDisabled(t *testing.T) {
 func TestHookFiles_AllDefaults(t *testing.T) {
 	h := &harness.Harness{Agent: "test.md"}
 	files := HookFiles(h)
-	assert.Len(t, files, 3)
+	assert.Len(t, files, 4)
 	assert.Contains(t, files, "tirith_check.py")
 	assert.Contains(t, files, "ssrf_pretool.py")
 	assert.Contains(t, files, "secret_redact_posttool.py")
+	assert.Contains(t, files, "unicode_posttool.py")
 
 	// Verify embedded content is non-empty.
 	for name, content := range files {
@@ -98,12 +106,80 @@ func TestHookFiles_SSRFDisabled(t *testing.T) {
 		},
 	}
 	files := HookFiles(h)
-	assert.Len(t, files, 2)
+	assert.Len(t, files, 3)
 	assert.NotContains(t, files, "ssrf_pretool.py")
+}
+
+func TestHookFiles_UnicodeDisabled(t *testing.T) {
+	disabled := false
+	h := &harness.Harness{
+		Agent: "test.md",
+		Security: &harness.SecurityConfig{
+			SandboxHooks: &harness.SandboxHooks{
+				UnicodePostTool: &disabled,
+			},
+		},
+	}
+	files := HookFiles(h)
+	assert.Len(t, files, 3)
+	assert.NotContains(t, files, "unicode_posttool.py")
 }
 
 func TestEmbeddedHooksNotEmpty(t *testing.T) {
 	assert.NotEmpty(t, SSRFPreToolHook)
 	assert.NotEmpty(t, SecretRedactPostToolHook)
 	assert.NotEmpty(t, TirithCheckHook)
+	assert.NotEmpty(t, UnicodePostToolHook)
+}
+
+func TestGenerateClaudeSettings_UnicodeDisabled(t *testing.T) {
+	disabled := false
+	h := &harness.Harness{
+		Agent: "test.md",
+		Security: &harness.SecurityConfig{
+			SandboxHooks: &harness.SandboxHooks{
+				UnicodePostTool: &disabled,
+			},
+		},
+	}
+	data, err := GenerateClaudeSettings(h)
+	require.NoError(t, err)
+
+	var settings map[string]any
+	require.NoError(t, json.Unmarshal(data, &settings))
+
+	hooks := settings["hooks"].(map[string]any)
+	postTools := hooks["PostToolUse"].([]any)
+	assert.Len(t, postTools, 1) // single matcher
+
+	// With unicode disabled, only secret_redact hook in the chain.
+	matcher := postTools[0].(map[string]any)
+	chainedHooks := matcher["hooks"].([]any)
+	assert.Len(t, chainedHooks, 1) // only secret_redact
+}
+
+func TestGenerateClaudeSettings_SecretRedactDisabled(t *testing.T) {
+	disabled := false
+	h := &harness.Harness{
+		Agent: "test.md",
+		Security: &harness.SecurityConfig{
+			SandboxHooks: &harness.SandboxHooks{
+				SecretRedactPostTool: &disabled,
+			},
+		},
+	}
+	data, err := GenerateClaudeSettings(h)
+	require.NoError(t, err)
+
+	var settings map[string]any
+	require.NoError(t, json.Unmarshal(data, &settings))
+
+	hooks := settings["hooks"].(map[string]any)
+	postTools := hooks["PostToolUse"].([]any)
+	assert.Len(t, postTools, 1) // single matcher
+
+	// With secret_redact disabled, only unicode hook in the chain.
+	matcher := postTools[0].(map[string]any)
+	chainedHooks := matcher["hooks"].([]any)
+	assert.Len(t, chainedHooks, 1) // only unicode
 }
