@@ -69,12 +69,11 @@ describe("fetchOrgs", () => {
   });
 
   it("throws FetchOrgsError for non-401 HTTP failures", async () => {
-    mockOctokit(() => ({
-      [Symbol.asyncIterator]: () => ({
-        next: () =>
-          Promise.reject(Object.assign(new Error("Forbidden"), { status: 403 })),
-      }),
-    }));
+    mockOctokit(() =>
+      (async function* () {
+        throw Object.assign(new Error("Forbidden"), { status: 403 });
+      })(),
+    );
 
     try {
       await fetchOrgs("token", { force: true });
