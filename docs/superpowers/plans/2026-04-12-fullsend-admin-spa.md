@@ -22,6 +22,8 @@
 
 **Task order:** **Tasks 1–14** follow the main build-out (scaffold through mutating wizard). **Task 15** (preview OAuth handoff) sits **after Task 14** and **before Task 16** (local dev doc) so it can be redesigned: **Turnstile on token exchange** (Worker hardening) may be **awkward or incompatible** with how we want **per-PR preview** review sites to behave—capture an explicit workaround before implementing the flow described below. **Task 16** is documentation only.
 
+**Tasks 1–9 snapshot (2026-04-23):** **Tasks 1–6** and **Task 7 OAuth plumbing** (PKCE, SPA entry callback, same-origin exchange, session refresh) are **done** in repo. **Task 4b** [Step 6](#task-4b-ship-task-2b-oauth-worker-with-site-worker--static-assets) (GitHub App callback URL registration for every preview host) stays an **ongoing maintainer checklist**. **Task 7** is **not** yet **UX-spec-complete** per [2026-04-21 UX spec](../specs/2026-04-21-fullsend-admin-spa-ux-design.md) — see the **2026-04-23** table under [Task 7](#task-7-production-sign-in-authorize-url--spa-document-callback). **Task 6** vs that spec: today `fullsend:github-unauthorized` triggers **sign-out**, not a **Re-authenticate** [global banner](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-banners-screen-level-below-the-nav-bar). **Task 9** is **done** for **fetch + filter + `#/orgs` + in-memory cache** (`web/admin/src/lib/orgs/*`, `OrgList.svelte`); it is **not** **UX-spec-complete** for [Organisation selection](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-organisation-selection) — see the **2026-04-23** table under [Task 9](#task-9-org-list-alphabetical-search--in-memory-session-cache).
+
 ---
 
 ## File map
@@ -877,11 +879,25 @@ git commit -m "feat(admin): Octokit factory with 401 event"
 
 **UX spec (for consumers of `fullsend:github-unauthorized`):** [Global banners](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-banners-screen-level-below-the-nav-bar) — persistent banner **below** the future account bar with **Re-authenticate** (and intended-route preservation per architecture spec). Row-level API calls should not silently fail without tying into the same session story.
 
+**Status (2026-04-23, UX audit):** `App.svelte` dispatches **no** banner today — it calls `signOut()` on `fullsend:github-unauthorized`. Treat **Re-authenticate** banner + preserve intended route as **follow-up** aligned with Task 7 shell work (or a small dedicated polish pass) rather than a blocker on marking Task 6 “engine” complete.
+
 ---
 
 ### Task 7: Production sign-in (authorize URL + SPA document callback)
 
-**Status (2026-04-20):** **Complete** in app code (`web/admin/src/lib/auth/oauth.ts`, `session.ts`, `App.svelte`). Spec **Appendix A** rows may still be filled incrementally with later tasks.
+**Status (2026-04-20):** **Complete** for **OAuth mechanics** in app code (`web/admin/src/lib/auth/oauth.ts`, `session.ts`, `App.svelte`): PKCE, Worker-expanded `state`, document `?code=` handoff, `history.replaceState` to `#/`, same-origin token exchange, `saveToken` + `refreshSession`.
+
+**Status (2026-04-23, vs [UX spec](../specs/2026-04-21-fullsend-admin-spa-ux-design.md)):** **Partial** on **presentation and journeys** — implement in a follow-up (same task number or next org-list PR) before calling the login/bootstrap story “UX-complete”:
+
+| UX area | Spec reference | Current gap |
+| --- | --- | --- |
+| Login surface | [Screen: Login](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-login) | **Sign in with GitHub** lives in the header, not a **centered** primary gate; control has **no GitHub mark** |
+| Post–OAuth bootstrap | [Post–OAuth return loading](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#postoauth-return-loading) | Spinner is **in the header** (“Loading session…”), not a **large centered** full-view spinner until bootstrap finishes |
+| Account bar | [Account bar](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-account--navigation-bar) | `GitHubUser` / `/api/github/user` path exposes **login + name** only — **no avatar URL** yet; layout is not the stacked **bold login / normal display name** cluster |
+| OAuth / profile failures | [Global banners](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-banners-screen-level-below-the-nav-bar) | OAuth errors render as a **plain paragraph** under the header, not banner + **Re-authenticate** / **Retry** per table |
+| Deep link after login | [User journeys](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#user-journeys-routes) | **No** `sessionStorage` (or equivalent) stash of pre-login **hash / intent** before `startGithubSignIn`; post-success navigation always lands on `#/` from the callback path |
+
+Spec **Appendix A** rows may still be filled incrementally with later tasks.
 
 **Files:**
 
@@ -910,11 +926,24 @@ git add web/admin
 git commit -m "feat(admin): OAuth callback via SPA entry /admin/"
 ```
 
+- [ ] **Step 4 (UX follow-up vs [2026-04-21 UX spec](../specs/2026-04-21-fullsend-admin-spa-ux-design.md)):** Implement the gaps in the **2026-04-23** table above: **centered** login when unauthenticated (primary **Sign in with GitHub** + GitHub mark); **large centered** indeterminate spinner after OAuth return until token **and** profile fields needed for the account bar exist; extend **`/api/github/user`** + `GitHubUser` for **avatar** (and wire [account bar](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-account--navigation-bar) layout); replace ad-hoc OAuth error copy with [global banner](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-banners-screen-level-below-the-nav-bar) actions (**Re-authenticate** / **Retry**); stash intended **hash** (or path) in `sessionStorage` before `startGithubSignIn` and **restore** after successful bootstrap ([user journeys](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#user-journeys-routes)). Optionally align **Task 6** 401 handling with the same **Re-authenticate** banner instead of immediate `signOut()` only.
+
 ---
 
 ### Task 9: Org list (alphabetical, search) + in-memory session cache
 
-**Status (2026-04-20):** **Complete** — filter + Vitest under `web/admin/src/lib/orgs/`; org list UI + `#/orgs` route; org names derived via **Octokit `paginate`** on `GET https://api.github.com/user/repos` (unique organization owners) for a repo-first flow. In-memory cache cleared on sign-out.
+**Status (2026-04-20):** **Complete** for **engine + minimal UI** — filter + Vitest under `web/admin/src/lib/orgs/`; org list UI + `#/orgs` route; org names derived via **Octokit `paginate`** on **`GET /user/repos`** (unique `Organization` owners) for a repo-first flow. In-memory cache cleared on sign-out.
+
+**Status (2026-04-23, vs [UX spec](../specs/2026-04-21-fullsend-admin-spa-ux-design.md)):** **Partial** on [Organisation selection](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-organisation-selection) chrome, **cap**, and **row model** (deployment states are **Task 10+** until layer engine exists — buttons can stay stubbed/disabled until then, but copy/layout should still move toward the spec).
+
+| UX area | Spec reference | Current gap |
+| --- | --- | --- |
+| Screen title + lede | [Organisation selection — header](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#organisation-selection--header) | Title is **Organizations** with a **technical lede** (`GET /user/repos`), not **`Select an organisation to deploy or configure Fullsend`** |
+| Search field | Same + [Search cap](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#search-and-showing-20-cap-organisation-list) | Placeholder is **Filter by name…**, not **`Type to filter`**; filter is **prefix-only** (`filterOrgsByPrefix`) whereas the spec describes **search-as-you-type** over the full set (substring or product-defined match is still open) |
+| 20-row cap + helper | [Search and “showing 20” cap](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#search-and-showing-20-cap-organisation-list) | UI lists **all** filtered rows — **no cap at 20** and **no** red **`Showing up to 20 organisations`** |
+| Row layout | [Organisation selection — list](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#organisation-selection--list) | Rows show **login text only** — **no** org **avatar**, **no** [trailing cluster](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#organisation-selection--list) (**Configure** / **Deploy Fullsend** / **Cannot deploy** / per-row error) |
+| Empty copy | [Empty states](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#organisation-selection--empty-states) | Uses **No organizations returned…** / **No organizations match…** rather than the spec’s example **No organisations found for this account.** / **No matching organisations.** (align wording + [GitHub terminology](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#github-terminology) spelling where user-visible) |
+| List errors | [Global banners](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-banners-screen-level-below-the-nav-bar) vs row errors | Whole-list fetch failure is a **single inline paragraph** — acceptable as a **global** placeholder until banner chrome exists; **no** per-row evaluation yet (expected until engine lands) |
 
 **UX spec (org selection screen):** [Screen: Organisation selection](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-organisation-selection) + [Global UX patterns](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#global-ux-patterns). When iterating on this route, prefer:
 
@@ -973,7 +1002,7 @@ Expected: PASS.
 
 - [x] **Step 4: Implement `fetchOrgs` and `OrgList.svelte`** (show loading, error, refresh button; wire token from `loadToken()`).
 
-- [x] **Step 5: Append Appendix A** with the exact REST method `GET /user/memberships/orgs` and required OAuth scopes (derive from `internal/forge/github` preflight if present).
+- [x] **Step 5: Append Appendix A** — implemented as **`GET https://api.github.com/user/repos`** (Octokit `paginate`, `affiliation=owner,collaborator,organization_member`) with bearer-token notes in [Appendix A — Permission matrix](../specs/2026-04-06-fullsend-admin-spa-design.md#appendix-a--permission-matrix) (not `GET /user/memberships/orgs`; repo-first org inference).
 
 - [x] **Step 6: Commit**
 
@@ -981,6 +1010,8 @@ Expected: PASS.
 git add admin/src/lib/orgs admin/src/routes/OrgList.svelte admin/src/App.svelte
 git commit -m "feat(admin): org list with search-as-you-type"
 ```
+
+- [ ] **Step 7 (UX follow-up vs [2026-04-21 UX spec](../specs/2026-04-21-fullsend-admin-spa-ux-design.md)):** Match [Organisation selection](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#screen-organisation-selection) header (title, placeholder **`Type to filter`**), implement **≤20** visible rows after filter + **red** helper **`Showing up to 20 organisations`** when matches exceed 20, add **org avatars** (from GitHub org API or cached metadata once available), align **empty-state** strings, and add row **trailing clusters** per spec — **stub or disable** **Configure** / **Deploy Fullsend** / **Cannot deploy** until **Task 10+** supplies deployment truth; wire **spinner** / **per-row error** / **Cannot deploy** patterns when row-scoped fetches exist. Follow [list interaction model](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#list-interaction-model) (**buttons**, not row-as-click-target).
 
 ---
 

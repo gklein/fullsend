@@ -8,15 +8,23 @@ beforeEach(() => {
 describe("fetchGitHubUser", () => {
   it("returns login and name when response is ok", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(JSON.stringify({ login: "u", name: "User Name" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      new Response(
+        JSON.stringify({
+          login: "u",
+          name: "User Name",
+          avatar_url: "https://avatars.githubusercontent.com/u/99?v=4",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
     );
 
     await expect(fetchGitHubUser("secret-token")).resolves.toEqual({
       login: "u",
       name: "User Name",
+      avatarUrl: "https://avatars.githubusercontent.com/u/99?v=4",
     });
     const [url, init] = vi.mocked(fetch).mock.calls[0]!;
     expect(url).toBe("/api/github/user");
@@ -36,6 +44,7 @@ describe("fetchGitHubUser", () => {
     await expect(fetchGitHubUser("t")).resolves.toEqual({
       login: "onlylogin",
       name: null,
+      avatarUrl: null,
     });
   });
 

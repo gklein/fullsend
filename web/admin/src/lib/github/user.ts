@@ -1,6 +1,8 @@
 export type GitHubUser = {
   login: string;
   name: string | null;
+  /** Profile image URL from GitHub `avatar_url`, or null if absent. */
+  avatarUrl: string | null;
 };
 
 export class GitHubUserRequestError extends Error {
@@ -37,5 +39,9 @@ export async function fetchGitHubUser(
     throw new Error("GitHub /user: missing login");
   }
   const name = typeof data.name === "string" ? data.name : null;
-  return { login, name };
+  const avatarUrl =
+    typeof data.avatar_url === "string" && data.avatar_url.length > 0
+      ? data.avatar_url
+      : null;
+  return { login, name, avatarUrl };
 }

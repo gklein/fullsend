@@ -44,6 +44,7 @@ function restoreWindowLocation() {
 const OAUTH_DOC_HANDOFF_KEY = "fullsend_admin_oauth_doc_handoff";
 const OAUTH_STATE_KEY = "fullsend_admin_oauth_state";
 const PKCE_VERIFIER_KEY = "fullsend_admin_pkce_verifier";
+const INTENDED_HASH_KEY = "fullsend_admin_intended_hash";
 
 function workerExpandedStateB64(n: string, k = "0x4AAA_sitekey"): string {
   const payload = { v: 1, n, k };
@@ -85,7 +86,8 @@ describe("startGithubSignIn", () => {
     installLocationStub({
       origin: "https://oauth-start.test",
       search: "",
-      href: "https://oauth-start.test/admin/",
+      hash: "#/orgs",
+      href: "https://oauth-start.test/admin/#/orgs",
       assign,
     });
   });
@@ -116,6 +118,8 @@ describe("startGithubSignIn", () => {
     expect(await challengeS256(verifier!)).toBe(
       u.searchParams.get("code_challenge"),
     );
+
+    expect(sessionStorage.getItem(INTENDED_HASH_KEY)).toBe("#/orgs");
   });
 });
 
