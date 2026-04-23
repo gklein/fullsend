@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseOrgConfigYaml, validateOrgConfig } from "./orgConfigParse";
+import {
+  agentsFromConfig,
+  enabledReposFromConfig,
+  parseOrgConfigYaml,
+  validateOrgConfig,
+} from "./orgConfigParse";
 
 describe("validateOrgConfig", () => {
   it("accepts minimal valid config", () => {
@@ -23,5 +28,27 @@ dispatch:
 `),
       ),
     ).toContain("unsupported version");
+  });
+
+  it("lists agents and enabled repos from config", () => {
+    const cfg = parseOrgConfigYaml(`version: "1"
+dispatch:
+  platform: github-actions
+defaults:
+  roles: [fullsend]
+agents:
+  - role: triage
+    slug: t
+repos:
+  zed:
+    enabled: false
+  alpha:
+    enabled: true
+  beta:
+    enabled: true
+`);
+    expect(validateOrgConfig(cfg)).toBeNull();
+    expect(agentsFromConfig(cfg)).toEqual([{ role: "triage" }]);
+    expect(enabledReposFromConfig(cfg)).toEqual(["alpha", "beta"]);
   });
 });

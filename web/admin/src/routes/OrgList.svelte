@@ -2,11 +2,17 @@
   import { onMount } from "svelte";
   import { githubUser } from "../lib/auth/session";
   import { loadToken } from "../lib/auth/tokenStore";
+  import { createUserOctokit } from "../lib/github/client";
   import {
     FetchOrgsError,
     fetchOrgsWithProgress,
   } from "../lib/orgs/fetchOrgs";
   import { filterOrgsBySearch, type OrgRow } from "../lib/orgs/filter";
+  import {
+    analyzeOrgForOrgList,
+    orgListRowFromAnalysis,
+    type OrgListRowCluster,
+  } from "../lib/orgs/orgListRow";
 
   /** Max visible rows after filter (matches UX spec). */
   const DISPLAY_CAP = 15;
@@ -57,6 +63,70 @@
 
   let loadGeneration = 0;
   let loadAbort: AbortController | null = null;
+
+  type RowUiEntry = OrgListRowCluster | "pending";
+
+  let rowUi = $state<Record<string, RowUiEntry>>({});
+  let rowEvalGen = 0;
+
+  async function refreshOrgRow(login: string): Promise<void> {
+    const token = loadToken()?.accessToken;
+    if (!token) return;
+    rowUi = { ...rowUi, [login]: "pending" };
+    try {
+      const octokit = createUserOctokit(token);
+      const res = await analyzeOrgForOrgList(login, octokit);
+      rowUi = { ...rowUi, [login]: orgListRowFromAnalysis(res) };
+    } catch (e) {
+      rowUi = {
+        ...rowUi,
+        [login]: {
+          kind: "error",
+          message:
+            e instanceof Error ? e.message : "Failed to evaluate organisation.",
+        },
+      };
+    }
+  }
+
+  /** Debounced: search-as-you-type must not re-hit GitHub for every keystroke. */
+  const ROW_ANALYSIS_DEBOUNCE_MS = 280;
+
+  $effect(() => {
+    const orgs = displayedOrgs;
+    const token = loadToken()?.accessToken;
+    const user = $githubUser;
+    if (!token || !user) {
+      rowUi = {};
+      return;
+    }
+
+    let alive = true;
+    const gen = (rowEvalGen += 1);
+    const octokit = createUserOctokit(token);
+
+    const t = setTimeout(() => {
+      if (!alive) return;
+      const pending: Record<string, RowUiEntry> = {};
+      for (const o of orgs) {
+        pending[o.login] = "pending";
+      }
+      rowUi = pending;
+
+      void Promise.all(
+        orgs.map(async (o) => {
+          const res = await analyzeOrgForOrgList(o.login, octokit);
+          if (!alive || gen !== rowEvalGen) return;
+          rowUi = { ...rowUi, [o.login]: orgListRowFromAnalysis(res) };
+        }),
+      );
+    }, ROW_ANALYSIS_DEBOUNCE_MS);
+
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  });
 
   async function loadOrgs(force: boolean) {
     const token = loadToken()?.accessToken;
@@ -211,6 +281,7 @@
       {:else}
         <ul class="list">
           {#each displayedOrgs as o (o.login)}
+            {@const ui = rowUi[o.login]}
             <li class="row">
               <div class="row-main">
                 <img
@@ -224,12 +295,59 @@
                 <span class="org-name">{o.login}</span>
               </div>
               <div class="row-actions">
-                <button type="button" class="btn btn-muted" disabled title="Coming soon">
-                  Configure
-                </button>
-                <button type="button" class="btn btn-primary" disabled title="Coming soon">
-                  Deploy Fullsend
-                </button>
+                {#if ui === undefined || ui === "pending"}
+                  <div
+                    class="row-spinner"
+                    role="status"
+                    aria-live="polite"
+                    aria-busy="true"
+                    aria-label="Checking deployment state"
+                  >
+                    <span class="row-spinner-disc" aria-hidden="true"></span>
+                  </div>
+                {:else if ui.kind === "configure"}
+                  <a
+                    class="btn btn-muted"
+                    href="#/org/{encodeURIComponent(o.login)}"
+                  >
+                    Configure
+                  </a>
+                {:else if ui.kind === "deploy"}
+                  <a
+                    class="btn btn-primary"
+                    href="#/install/{encodeURIComponent(o.login)}"
+                  >
+                    Deploy Fullsend
+                  </a>
+                {:else if ui.kind === "cannot_deploy"}
+                  <div class="cannot-deploy">
+                    <span class="warn-icon" aria-hidden="true">⚠</span>
+                    <span class="cannot-deploy-label">Cannot deploy</span>
+                    <button
+                      type="button"
+                      class="info-btn"
+                      title={ui.reason}
+                      aria-label={`Why this organisation cannot deploy: ${ui.reason}`}
+                    >
+                      i
+                    </button>
+                  </div>
+                {:else if ui.kind === "error"}
+                  <div class="row-err">
+                    <span class="err-icon" aria-hidden="true">▲</span>
+                    <span class="row-err-label">Error</span>
+                    <span class="row-err-msg" title={ui.message}>
+                      {ui.message}
+                    </span>
+                    <button
+                      type="button"
+                      class="btn row-err-retry"
+                      onclick={() => void refreshOrgRow(o.login)}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                {/if}
               </div>
             </li>
           {/each}
@@ -346,6 +464,12 @@
     opacity: 0.55;
     cursor: not-allowed;
   }
+  .row-actions a.btn {
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+  }
   .btn-muted {
     background: #eaeaea;
     border-color: #bbb;
@@ -407,6 +531,85 @@
     flex-wrap: wrap;
     gap: 0.4rem;
     align-items: center;
+    min-height: 2.25rem;
+  }
+  .row-spinner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+  }
+  .row-spinner-disc {
+    display: block;
+    width: 1.25rem;
+    height: 1.25rem;
+    border: 2px solid #d0d7de;
+    border-top-color: #24292f;
+    border-radius: 50%;
+    animation: org-spin 0.75s linear infinite;
+  }
+  .cannot-deploy {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.88rem;
+    color: #9a6700;
+  }
+  .warn-icon {
+    font-size: 1rem;
+    line-height: 1;
+  }
+  .cannot-deploy-label {
+    font-weight: 600;
+  }
+  .info-btn {
+    box-sizing: border-box;
+    min-width: 1.35rem;
+    height: 1.35rem;
+    padding: 0;
+    border-radius: 999px;
+    border: 1px solid #bf8700;
+    background: #fff8c5;
+    color: #7d4e00;
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-style: italic;
+    cursor: help;
+    line-height: 1;
+  }
+  .info-btn:focus-visible {
+    outline: 2px solid #0969da;
+    outline-offset: 2px;
+  }
+  .row-err {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 18rem;
+    font-size: 0.85rem;
+    color: #a40e26;
+  }
+  .err-icon {
+    font-size: 0.75rem;
+    line-height: 1;
+  }
+  .row-err-label {
+    font-weight: 700;
+  }
+  .row-err-msg {
+    flex: 1 1 8rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row-err-retry {
+    flex-shrink: 0;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.82rem;
   }
   .muted {
     color: #555;

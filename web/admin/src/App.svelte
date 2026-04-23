@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Router from "svelte-spa-router";
+  import InstallEntryStub from "./routes/InstallEntryStub.svelte";
+  import OrgDashboardStub from "./routes/OrgDashboardStub.svelte";
   import OrgList from "./routes/OrgList.svelte";
   import {
     authBootPending,
@@ -22,6 +24,8 @@
   const routes = {
     "/": OrgList,
     "/orgs": OrgList,
+    "/org/:org": OrgDashboardStub,
+    "/install/:org": InstallEntryStub,
   };
 
   let oauthErr = $state<string | null>(null);

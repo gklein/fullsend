@@ -42,3 +42,17 @@ export function validateOrgConfig(cfg: OrgConfigYaml): string | null {
   }
   return null;
 }
+
+/** Agent rows for secrets-layer analyze (mirrors `config.OrgConfig.Agents`). */
+export function agentsFromConfig(cfg: OrgConfigYaml): { role: string }[] {
+  return (cfg.agents ?? []).map((a) => ({ role: a.role }));
+}
+
+/** Enabled repo names for enrollment-layer analyze (sorted). */
+export function enabledReposFromConfig(cfg: OrgConfigYaml): string[] {
+  const repos = cfg.repos ?? {};
+  return Object.entries(repos)
+    .filter(([, v]) => v?.enabled === true)
+    .map(([name]) => name)
+    .sort((a, b) => a.localeCompare(b));
+}
