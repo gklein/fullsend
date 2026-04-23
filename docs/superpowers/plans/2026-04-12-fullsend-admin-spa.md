@@ -1017,6 +1017,8 @@ git commit -m "feat(admin): org list with search-as-you-type"
 
 ### Task 10: Read-only layer status engine (first layer: `ConfigRepoLayer` semantics)
 
+**Status (2026-04-23):** **Complete** — `web/admin/src/lib/layers/configRepo.ts` (+ Vitest, `fixtures/configrepo/config-valid.yaml`), shared `LayerGithub` / Octokit adapter (`githubClient.ts`), and YAML parse/validate (`orgConfigParse.ts`, `yaml` dependency).
+
 **Files:**
 
 - Create: `admin/src/lib/layers/configRepo.ts` — TS port of **read-only** checks from `internal/layers/configrepo.go` `Analyze` (only what is inferable via public GitHub APIs)
@@ -1026,11 +1028,11 @@ git commit -m "feat(admin): org list with search-as-you-type"
 
 **Instruction:** Open `internal/layers/configrepo.go` and for each API used in `Analyze`, add a TypeScript function and a Vitest table-driven test with **fixture JSON** checked into `admin/src/lib/layers/fixtures/configrepo/*.json`.
 
-- [ ] **Step 1: Write failing test for expected `LayerReport` shape** given fixture “no repo”.
+- [x] **Step 1: Write failing test for expected `LayerReport` shape** given fixture “no repo”.
 
-- [ ] **Step 2: Implement minimal analyze.
+- [x] **Step 2: Implement minimal analyze.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add admin/src/lib/layers
@@ -1041,19 +1043,21 @@ git commit -m "feat(admin): read-only config repo layer analyze in TS"
 
 ### Task 11: Repeat layer ports (one commit per layer)
 
+**Status (2026-04-23):** **Complete** — TS `Analyze` ports under `web/admin/src/lib/layers/` for **workflows**, **secrets**, **enrollment**, **dispatch-token**; `rollupOrgLayerStatus` / `mergeLayerStatuses` in `web/admin/src/lib/status/engine.ts`; `analyzeOrgLayers` in `analyzeOrg.ts`; browser **preflight** helpers in `preflight.ts` (`HEAD /user` scope header); Appendix A rows in [2026-04-06-fullsend-admin-spa-design.md](../specs/2026-04-06-fullsend-admin-spa-design.md). **Preflight** is not a `LayerReport` producer (matches Go: separate from `AnalyzeAll`).
+
 For each file `internal/layers/workflows.go`, `secrets.go`, `enrollment.go`, `dispatch.go`, and `internal/layers/preflight.go` (if applicable to browser token):
 
 **Files:**
 
 - Create: `admin/src/lib/layers/<name>.ts` + `admin/src/lib/layers/<name>.test.ts` + fixtures
 
-- [ ] **Step 1: Port `Analyze` REST/GraphQL dependencies only** (no mutating `Install` yet unless same PR scope).
+- [x] **Step 1: Port `Analyze` REST/GraphQL dependencies only** (no mutating `Install` yet unless same PR scope).
 
-- [ ] **Step 2: Extend `admin/src/lib/status/engine.ts` to merge layer reports into org-level rollup** (`not installed` / `degraded` / `installed` wording matches CLI). **UX:** merged org-level state feeds the [Fullsend status pane](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#pane-a--fullsend-status) (same label set as Task 10).
+- [x] **Step 2: Extend `admin/src/lib/status/engine.ts` to merge layer reports into org-level rollup** (`not installed` / `degraded` / `installed` wording matches CLI). **UX:** merged org-level state feeds the [Fullsend status pane](../specs/2026-04-21-fullsend-admin-spa-ux-design.md#pane-a--fullsend-status) (same label set as Task 10).
 
-- [ ] **Step 3: Update Appendix A** with each new endpoint.
+- [x] **Step 3: Update Appendix A** with each new endpoint.
 
-- [ ] **Step 4: Commit per layer**
+- [x] **Step 4: Commit per layer**
 
 ```bash
 git commit -m "feat(admin): TS analyze for workflows layer"
