@@ -105,7 +105,8 @@ def post_summary(repo, pr_number, body, dry_run=False):
         return True
     try:
         subprocess.run(
-            ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body", body],
+            ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body-file", "-"],
+            input=body,
             check=True,
             capture_output=True,
             text=True,

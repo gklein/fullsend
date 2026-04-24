@@ -181,11 +181,13 @@ jobs:
               INSTRUCTION="none"
             fi
           fi
-          # Use heredoc delimiter for multiline-safe output.
+          # Use a random heredoc delimiter so a /fix comment containing
+          # the literal delimiter string cannot inject GITHUB_OUTPUT values.
+          DELIM="INSTRUCTION_$(openssl rand -hex 8)"
           {
-            echo "instruction<<INSTRUCTION_EOF"
+            echo "instruction<<${DELIM}"
             echo "${INSTRUCTION}"
-            echo "INSTRUCTION_EOF"
+            echo "${DELIM}"
           } >> "${GITHUB_OUTPUT}"
 
           # Count previous fix-agent commits on this PR to determine iteration.
