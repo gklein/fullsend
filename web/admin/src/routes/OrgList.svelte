@@ -2,7 +2,9 @@
   import { onMount } from "svelte";
   import { githubUser } from "../lib/auth/session";
   import { loadToken } from "../lib/auth/tokenStore";
+  import { batchOrganizationsFullsendRepoExists } from "../lib/orgs/batchOrganizationsFullsendRepoGraphql";
   import { createUserOctokit } from "../lib/github/client";
+  import { readTokenScopesHeaderCached } from "../lib/layers/preflight";
   import {
     FetchOrgsError,
     fetchOrgsWithProgress,
@@ -10,9 +12,19 @@
   import { filterOrgsBySearch, type OrgRow } from "../lib/orgs/filter";
   import {
     analyzeOrgForOrgList,
+    buildDeployPreflight,
     orgListRowFromAnalysis,
+    type OrgListDeployRowContext,
     type OrgListRowCluster,
   } from "../lib/orgs/orgListRow";
+  import {
+    clearOrgListAnalysisCache,
+    getOrgListAnalysisCached,
+    hasOrgListAnalysisCacheEntry,
+    invalidateOrgListAnalysisCacheEntry,
+    setOrgListAnalysisCached,
+  } from "../lib/orgs/orgListAnalysisCache";
+  import type { Octokit } from "@octokit/rest";
 
   /** Max visible rows after filter (matches UX spec). */
   const DISPLAY_CAP = 15;
@@ -69,14 +81,46 @@
   let rowUi = $state<Record<string, RowUiEntry>>({});
   let rowEvalGen = 0;
 
+  async function readDeployPreflightOrSkipped(octokit: Octokit, accessToken: string) {
+    try {
+      return buildDeployPreflight(
+        await readTokenScopesHeaderCached(octokit, accessToken),
+      );
+    } catch {
+      return buildDeployPreflight(null);
+    }
+  }
+
+  function orgRowContext(login: string): OrgListDeployRowContext {
+    const row =
+      serverOrgs.find((x) => x.login === login) ??
+      displayedOrgs.find((x) => x.login === login);
+    return {
+      hasWritePathInOrg: row?.hasWritePathInOrg ?? false,
+      membershipCanCreateRepository: row?.membershipCanCreateRepository ?? null,
+    };
+  }
+
   async function refreshOrgRow(login: string): Promise<void> {
     const token = loadToken()?.accessToken;
     if (!token) return;
+    invalidateOrgListAnalysisCacheEntry(login);
     rowUi = { ...rowUi, [login]: "pending" };
     try {
       const octokit = createUserOctokit(token);
-      const res = await analyzeOrgForOrgList(login, octokit);
-      rowUi = { ...rowUi, [login]: orgListRowFromAnalysis(res) };
+      const deployPreflight = await readDeployPreflightOrSkipped(octokit, token);
+      const hints = await batchOrganizationsFullsendRepoExists(octokit, [login]);
+      const hint = hints.get(login.trim().toLowerCase()) ?? null;
+      const res = await analyzeOrgForOrgList(login, octokit, {
+        fullsendRepoExistsHint: hint,
+      });
+      if (res.kind === "ok") {
+        setOrgListAnalysisCached(login, res);
+      }
+      rowUi = {
+        ...rowUi,
+        [login]: orgListRowFromAnalysis(res, deployPreflight, orgRowContext(login)),
+      };
     } catch (e) {
       rowUi = {
         ...rowUi,
@@ -89,8 +133,15 @@
     }
   }
 
+  /** Stable `id` / `popovertarget` token for each org row (GitHub logins are `[A-Za-z0-9-]`). */
+  function cannotDeployPopoverId(login: string): string {
+    return `cd-${login.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  }
+
   /** Debounced: search-as-you-type must not re-hit GitHub for every keystroke. */
   const ROW_ANALYSIS_DEBOUNCE_MS = 280;
+  /** Pause between sequential org analyses (display order) to avoid REST bursts. */
+  const ORG_ROW_ANALYSIS_THROTTLE_MS = 400;
 
   $effect(() => {
     const orgs = displayedOrgs;
@@ -113,13 +164,50 @@
       }
       rowUi = pending;
 
-      void Promise.all(
-        orgs.map(async (o) => {
-          const res = await analyzeOrgForOrgList(o.login, octokit);
+      void (async () => {
+        const deployPreflight = await readDeployPreflightOrSkipped(octokit, token);
+        if (!alive || gen !== rowEvalGen) return;
+
+        const pending: Record<string, RowUiEntry> = {};
+        for (const o of orgs) {
+          const cached = getOrgListAnalysisCached(o.login);
+          pending[o.login] = cached
+            ? orgListRowFromAnalysis(cached, deployPreflight, orgRowContext(o.login))
+            : "pending";
+        }
+        rowUi = pending;
+
+        const needNetwork = orgs.filter((o) => !hasOrgListAnalysisCacheEntry(o.login));
+        let hints = new Map<string, boolean | null>();
+        if (needNetwork.length > 0) {
+          hints = await batchOrganizationsFullsendRepoExists(
+            octokit,
+            needNetwork.map((o) => o.login),
+          );
+        }
+        if (!alive || gen !== rowEvalGen) return;
+
+        for (let idx = 0; idx < needNetwork.length; idx++) {
+          const o = needNetwork[idx]!;
           if (!alive || gen !== rowEvalGen) return;
-          rowUi = { ...rowUi, [o.login]: orgListRowFromAnalysis(res) };
-        }),
-      );
+          const hintKey = o.login.trim().toLowerCase();
+          const hint = hints.get(hintKey) ?? null;
+          const res = await analyzeOrgForOrgList(o.login, octokit, {
+            fullsendRepoExistsHint: hint,
+          });
+          if (!alive || gen !== rowEvalGen) return;
+          if (res.kind === "ok") {
+            setOrgListAnalysisCached(o.login, res);
+          }
+          rowUi = {
+            ...rowUi,
+            [o.login]: orgListRowFromAnalysis(res, deployPreflight, orgRowContext(o.login)),
+          };
+          if (idx < needNetwork.length - 1) {
+            await new Promise((r) => setTimeout(r, ORG_ROW_ANALYSIS_THROTTLE_MS));
+          }
+        }
+      })();
     }, ROW_ANALYSIS_DEBOUNCE_MS);
 
     return () => {
@@ -141,6 +229,9 @@
       emptyHint = null;
       loading = false;
       return;
+    }
+    if (force) {
+      clearOrgListAnalysisCache();
     }
     loadAbort?.abort();
     loadAbort = new AbortController();
@@ -320,17 +411,41 @@
                     Deploy Fullsend
                   </a>
                 {:else if ui.kind === "cannot_deploy"}
+                  {@const cdId = cannotDeployPopoverId(o.login)}
                   <div class="cannot-deploy">
                     <span class="warn-icon" aria-hidden="true">⚠</span>
                     <span class="cannot-deploy-label">Cannot deploy</span>
                     <button
                       type="button"
                       class="info-btn"
-                      title={ui.reason}
-                      aria-label={`Why this organisation cannot deploy: ${ui.reason}`}
+                      popovertarget={cdId}
+                      aria-haspopup="dialog"
+                      aria-label={`Details for why ${o.login} cannot deploy`}
                     >
                       i
                     </button>
+                    <div id={cdId} class="cannot-deploy-popover" popover>
+                      <p class="cannot-deploy-popover-lead">{ui.reason}</p>
+                      {#if ui.githubApiMessage}
+                        <p class="cannot-deploy-popover-api">{ui.githubApiMessage}</p>
+                      {/if}
+                      {#if ui.missingPermissionLines?.length}
+                        <p class="cannot-deploy-popover-sub">Details from GitHub:</p>
+                        <ul class="cannot-deploy-popover-list">
+                          {#each ui.missingPermissionLines as line}
+                            <li>{line}</li>
+                          {/each}
+                        </ul>
+                      {/if}
+                      {#if ui.helpBullets?.length}
+                        <p class="cannot-deploy-popover-sub">What you can try:</p>
+                        <ul class="cannot-deploy-popover-list">
+                          {#each ui.helpBullets as line}
+                            <li>{line}</li>
+                          {/each}
+                        </ul>
+                      {/if}
+                    </div>
                   </div>
                 {:else if ui.kind === "error"}
                   <div class="row-err">
@@ -582,6 +697,39 @@
   .info-btn:focus-visible {
     outline: 2px solid #0969da;
     outline-offset: 2px;
+  }
+  .cannot-deploy-popover {
+    max-width: min(22rem, calc(100vw - 2rem));
+    padding: 0.75rem 0.85rem;
+    border: 1px solid #d4a72c;
+    border-radius: 8px;
+    background: #fffef5;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    color: #24292f;
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+  .cannot-deploy-popover-lead {
+    margin: 0 0 0.5rem;
+    font-weight: 500;
+  }
+  .cannot-deploy-popover-api {
+    margin: 0 0 0.5rem;
+    font-size: 0.8rem;
+    color: #57606a;
+    word-break: break-word;
+  }
+  .cannot-deploy-popover-sub {
+    margin: 0.5rem 0 0.35rem;
+    font-weight: 600;
+    font-size: 0.82rem;
+  }
+  .cannot-deploy-popover-list {
+    margin: 0;
+    padding-left: 1.15rem;
+  }
+  .cannot-deploy-popover-list li {
+    margin: 0.2rem 0;
   }
   .row-err {
     display: flex;
