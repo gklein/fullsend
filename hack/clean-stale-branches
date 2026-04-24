@@ -15,11 +15,12 @@
 #   STALE_DAYS         - days of inactivity before a branch is considered stale (default: 30)
 #   PROTECTED_PATTERNS - space-separated branch patterns to skip (default: "main master release/*")
 #   MAX_BRANCHES       - maximum number of branches to process per run (default: 100)
+#   DRY_RUN            - set to "true" to preview deletions (alternative to --dry-run flag)
 
 set -euo pipefail
 
 dry_run=false
-if [[ "${1:-}" == "--dry-run" ]]; then
+if [[ "${1:-}" == "--dry-run" ]] || [[ "${DRY_RUN:-}" == "true" ]]; then
   dry_run=true
 fi
 
