@@ -118,6 +118,9 @@ jobs:
           CRED_CONFIG="$GOOGLE_APPLICATION_CREDENTIALS"
           CRED_TYPE=$(jq -r '.type // empty' "$CRED_CONFIG" 2>/dev/null || true)
           if [[ "$CRED_TYPE" == "external_account" ]]; then
+            # The auth action writes credential_source.url (not .file) pointing to
+            # GitHub's OIDC endpoint. The sandbox cannot reach that endpoint, so we
+            # pre-fetch the OIDC token here and create a file-based credential config.
             OIDC_URL=$(jq -r '.credential_source.url // empty' "$CRED_CONFIG")
             OIDC_AUTH=$(jq -r '.credential_source.headers.Authorization // empty' "$CRED_CONFIG")
             if [[ -z "$OIDC_URL" || -z "$OIDC_AUTH" ]]; then

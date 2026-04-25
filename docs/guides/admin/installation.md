@@ -60,7 +60,12 @@ gcloud iam workload-identity-pools providers create-oidc github \
   --project="$GCP_PROJECT"
 ```
 
-The `attribute-condition` restricts access to workflows running in your GitHub organization. For tighter control, you can restrict to a specific repository:
+The `attribute-condition` restricts which GitHub Actions workflows can exchange OIDC tokens for GCP credentials.
+
+- **Org-wide** (`repository_owner`): any repo in the org can authenticate. Simpler to maintain but means a compromised or misconfigured workflow in *any* repo could obtain Vertex AI credentials.
+- **Repo-scoped** (`repository`): only the `.fullsend` repo can authenticate. Limits blast radius — recommended for orgs where not all repos are equally trusted.
+
+For repo-scoped access, replace the `attribute-condition` above with:
 
 ```
 --attribute-condition="assertion.repository == '$ORG_NAME/.fullsend'"
