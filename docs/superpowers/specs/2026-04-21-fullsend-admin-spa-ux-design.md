@@ -39,7 +39,7 @@ This spec uses a **screen catalog**: one section per major screen, with **state 
 
 ## User journeys (routes)
 
-1. **Anonymous deep link:** user opens any `/admin` URL → **Login** → after successful auth and profile load → **original URL** is restored; if none was stored, land on **Organisation selection**.
+1. **Anonymous deep link:** user opens any `/admin` URL → **Login** → after successful auth and profile load → **original URL** is restored; if none was stored, land on **Organisation selection**. **Intended route** is stored as the SPA **hash** (for example `#/org/acme`) in `sessionStorage` before OAuth redirects, matching hash-based client routing under `base: '/admin/'` (not separate path segments outside the hash).
 2. **Authenticated browse:** user opens `/admin` → **Organisation selection** (unless a more specific route exists and is implemented).
 3. **Org dashboard:** user chooses **Configure** from an org row (or equivalent navigation) → **Organisation dashboard** for that org.
 4. **Sign out:** user clicks **Sign out** in the nav bar → session cleared per companion spec → return to **Login** (recommended default for consistency).
@@ -59,6 +59,8 @@ After GitHub redirects back to the app, show a **large centered indeterminate sp
 
 If this bootstrap **fails**, use the **global banner** pattern (below) with **Retry** where safe, or **Re-authenticate** when the failure is auth-shaped (401 / invalid code). Do not leave a blank screen.
 
+During this bootstrap screen, implementations **may** offer **Sign in with a different account** (or equivalent) that aborts the in-flight exchange and returns the user to a clean **Login** state without leaving a stuck half-session.
+
 ### Global banners (screen-level, below the nav bar)
 
 | Condition | Presentation | Primary actions |
@@ -67,8 +69,11 @@ If this bootstrap **fails**, use the **global banner** pattern (below) with **Re
 | **GitHub rate limiting** | Non-blocking banner; copy may include retry timing if headers expose it | **Dismiss** (optional), automatic backoff on **Refresh** / row retries |
 | **Worker / network / 5xx** for non-row-scoped fetches | Banner with short human-readable message | **Retry** |
 | **Turnstile / Worker misconfiguration** (`missing_turnstile_keys`, etc.) | Banner | **Retry** only when meaningful; otherwise explain that the deployment is misconfigured |
+| **Profile unavailable** (access token stored; same-origin `/api/github/user` or equivalent failed with a **non-401** error) | Full-view or top-of-screen recovery region | **Retry** (reload profile), **Sign out** (clear token) |
 
 Row-level fetches **do not** duplicate a paragraph of error text inline on the row.
+
+**Open — GitHub rate limiting (org discovery):** Whether org-scoped discovery should drive a **global** banner (and whether copy can include a trustworthy **retry-after** for the user) depends on consistent, actionable signals from GitHub; **deferred** until that is validated—row-level or refresh-driven messaging may remain the primary surface meanwhile.
 
 ### Per-row error pattern (org list and repo list)
 
@@ -89,7 +94,7 @@ When Fullsend is **not** deployed and the user **cannot** deploy, use:
 
 ### Search and “showing 15” cap (organisation list)
 
-- **Search-as-you-type** filters the **full** organisation set the user has access to, then the UI displays **at most 15** matching rows (sorted **alphabetically** by organisation name unless product later defines another stable sort).
+- **Search-as-you-type** filters the **full** organisation set the user has access to using a **case-insensitive substring** match on the organisation **login** (not prefix-only), then the UI displays **at most 15** matching rows (sorted **alphabetically** by organisation name unless product later defines another stable sort).
 - If the filtered set has **more than 15** matches, show **red** helper text beneath the search field: **`Showing up to 15 organisations`** (exact string).
 
 ### Search and “showing 15” cap (repository list)
@@ -102,6 +107,7 @@ On the **organisation dashboard** repository list (**Pane B**), apply the same p
 ### List interaction model
 
 - **Primary navigation** from list rows is via **explicit buttons** (for example **Configure**, **Deploy Fullsend**, **Onboard**, **Repair**, **Remove**, **Retry**), not by clicking the row background. **Links** (PR numbers) remain directly clickable.
+- **SPA hash routes:** When navigation stays inside the admin app (for example `#/org/acme` or `#/install/acme`), **Configure** / **Deploy Fullsend** (and similar) **may** be implemented as **`<a href="#/…">` elements styled as buttons**, as long as they meet the same **keyboard** and **visible focus** expectations as real **`<button>`** elements in [Accessibility and keyboard notes](#accessibility-and-keyboard-notes-minimum-bar).
 
 ---
 
@@ -144,6 +150,8 @@ Top of **every** authenticated admin screen (hidden on **Login**).
 - When a **repository** context is selected (if the product exposes repo-scoped routes): append **repository name** after the organisation segment.
 - Between each **area** segment (user block counts as one area; org; repo), show a **`/`** separator with **generous horizontal spacing** on both sides.
 
+**Implementation timing:** The org (and repo) breadcrumb segments **must** appear on the live **Organisation dashboard** (and any repo-scoped admin routes) once those screens exist. **Placeholder** or stub dashboard routes **may** omit the org segment until the dashboard ships, as long as the **Organisation selection** row actions still communicate which org will be opened.
+
 ### Account bar — sign out
 
 - **`Sign out`** button.
@@ -167,7 +175,7 @@ Pick an organisation to **deploy** Fullsend into, **configure** an existing depl
 - Up to **15** rows after filtering (see **Global UX patterns**).
 - While the organisation set is still being discovered (for example paginated **`GET /user/repos`**), **paint organisations as soon as they are known**, subject to the **progressive display rule** below.
 - **Progressive display:** once **10** rows are on screen, **hold** further row updates until either discovery **finishes** or **at least five** additional filtered rows are available to show, then continue updating — always capped at **15** visible rows. (This reduces layout churn when many organisations appear quickly.)
-- **In-list loading:** when discovery may still be in flight and at least one row is already visible, show an **indeterminate spinner** in the blank area **below** the list; reserve vertical space similar to **five** row heights so users see that loading continues.
+- **In-list loading:** when discovery may still be in flight and at least one row is already visible, show an **indeterminate spinner** in the blank area **below** the list; reserve vertical space similar to **five** row heights so users see that loading continues. Implementations **may** use a lightly bordered or dashed **reserved region** (rather than only whitespace) so the continuation affordance is obvious during fast scans.
 - Each row, **left:** organisation **logo/avatar** + **organisation name**.
 - Each row, **right** (mutually exclusive **trailing** cluster):
 
@@ -183,6 +191,7 @@ Pick an organisation to **deploy** Fullsend into, **configure** an existing depl
 
 - Loaded successfully, user has **zero** organisations: neutral empty state copy (implementation wording): e.g. **No organisations found for this account.**
 - Search active, **zero** matches: **No matching organisations.**
+- Implementations **may** add a short **hint** block (for example OAuth scope guidance or a single link to GitHub settings) **below** the neutral copy when it materially helps users fix “empty because of permissions” cases—keep it visually secondary to the main empty message.
 
 ---
 
