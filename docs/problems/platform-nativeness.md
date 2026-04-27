@@ -45,9 +45,9 @@ gh-aw enrollment is adding a markdown file to your repo. `gh aw run` generates t
 
 The bulk of the Go CLI's complexity is an ordered, idempotent layer stack: config repo creation, workflow writing, secret provisioning, dispatch token setup, and enrollment ([ADR 0006](../ADRs/0006-ordered-layer-model.md)). Each layer has install, uninstall, analyze, and preflight operations. Uninstall runs in reverse order and collects errors. App deletion cannot be automated via API and requires manual browser interaction.
 
-gh-aw: `gh extension install github/gh-aw`. Done.
+gh-aw's CLI installs with `gh extension install github/gh-aw`, but per-repo setup is not trivial: each repo needs a markdown workflow file (~50 lines of frontmatter + ~200 lines of agent instructions), compilation via `gh aw compile` to produce a hardened `.lock.yml` (a ~1,300-line, 5-job Actions pipeline: pre_activation → activation → agent → detection → safe_outputs), and both files committed to the repo. This must be repeated for every repo and every workflow. There is no org-level mechanism for cross-repo consistency — shared configuration requires manual imports (`owner/repo/path@ref`).
 
-**Compensating value:** The layer model is well-engineered and idempotent. But it exists to manage infrastructure that a native system doesn't need.
+**Compensating value:** The layer model is well-engineered and idempotent. The per-repo setup cost of gh-aw is real but linear and local — each repo is self-contained. Fullsend's install stack manages cross-repo coordination infrastructure (dispatch tokens, centralized config, enrollment shims) that a native system doesn't need, but its centralized model does provide org-wide consistency that gh-aw lacks.
 
 ### Credential isolation architecture
 
@@ -137,10 +137,16 @@ gh-aw's container isolation is strong for its use case, but the isolation bounda
 
 - **Where is the boundary between containment and judgment?** gh-aw solves containment well. Fullsend's unique value is judgment. Should fullsend's implementation focus exclusively on the judgment layer and delegate containment to native platform features wherever possible?
 
-## Recommended next step
+## Possible next step: gh-aw containment POC
 
-Build a proof-of-concept that implements one fullsend pipeline stage (e.g. triage or review) as a gh-aw workflow. This would test whether gh-aw's containment model, orchestration primitives, and safe-outputs are sufficient as a substrate for fullsend's judgment layer, without requiring any of the custom infrastructure (Apps, dispatch tokens, enrollment shims, L7 proxies) that the current Go CLI manages.
+One way to test the native-vs-external trade-off empirically would be to implement one fullsend pipeline stage (e.g. triage or review) as a gh-aw workflow, checking whether gh-aw's containment model, orchestration primitives, and safe-outputs are sufficient as a substrate for fullsend's judgment layer.
 
-gh-aw provides an [MCP server for CLI access](https://github.github.com/gh-aw/reference/gh-aw-as-mcp-server/) (compiling, running, and managing workflows), and we have configured a [gh-aw docs MCP server](https://github.github.com/gh-aw/llms.txt) in the fullsend development environment that agents can use to fetch gh-aw reference material (security architecture, safe-outputs spec, frontmatter reference, design patterns, etc.) while authoring workflow markdown. This means the POC can be largely agent-driven — an agent with access to both the fullsend codebase context and the gh-aw documentation can draft and iterate on workflow definitions without requiring a human to learn the gh-aw authoring model first.
+gh-aw provides an [MCP server for CLI access](https://github.github.com/gh-aw/reference/gh-aw-as-mcp-server/) (compiling, running, and managing workflows), and we have configured a [gh-aw docs MCP server](https://github.github.com/gh-aw/llms.txt) in the fullsend development environment that agents can use to fetch gh-aw reference material (security architecture, safe-outputs spec, frontmatter reference, design patterns, etc.) while authoring workflow markdown. This means a POC could be largely agent-driven.
 
-If the POC validates the approach, it would inform whether fullsend's implementation effort should shift from building containment infrastructure to building judgment-layer capabilities on top of gh-aw.
+However, this approach carries real tensions that should be weighed:
+
+- **ADR 0005 conflict:** The accepted [forge abstraction layer](../ADRs/0005-forge-abstraction-layer.md) decision assumes fullsend remains portable across GitHub, GitLab, and Forgejo. Adopting gh-aw as the containment layer would lock fullsend at the runtime and security architecture level — deeper than what the forge abstraction was designed to abstract over. A POC should be evaluated against whether it invalidates, defers, or supersedes ADR 0005.
+- **Pre-GA platform risk:** gh-aw is in technical preview (~68 releases in 8 months), Linux-only, and may change significantly before GA. Building on it means depending on GitHub's product decisions, deprecation timeline, and feature stability.
+- **Philosophical opposition:** GitHub has [explicitly positioned](https://github.blog/ai-and-ml/generative-ai/code-review-in-the-age-of-ai-why-developers-will-always-own-the-merge-button/) against autonomous merge — fullsend's core thesis. Using gh-aw as the containment layer while building merge authority on top of it means depending on a platform whose maintainers oppose the end goal.
+
+If pursued, the POC would inform whether fullsend's implementation effort should shift from building containment infrastructure to building judgment-layer capabilities on top of gh-aw — but it should be treated as an experiment, not a commitment.
