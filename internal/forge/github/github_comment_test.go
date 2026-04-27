@@ -142,90 +142,50 @@ func TestListIssueComments_APIError(t *testing.T) {
 }
 
 func TestMinimizeComment(t *testing.T) {
-	callNum := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callNum++
-		switch callNum {
-		case 1:
-			// GET comment to retrieve node_id
-			assert.Equal(t, "GET", r.Method)
-			assert.Equal(t, "/repos/owner/repo/issues/comments/789", r.URL.Path)
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":      789,
-				"node_id": "IC_kwDOTest",
-			})
-		case 2:
-			// POST GraphQL mutation
-			assert.Equal(t, "POST", r.Method)
-			assert.Equal(t, "/graphql", r.URL.Path)
+		assert.Equal(t, "POST", r.Method)
+		assert.Equal(t, "/graphql", r.URL.Path)
 
-			var body map[string]any
-			json.NewDecoder(r.Body).Decode(&body)
-			assert.Contains(t, body["query"], "minimizeComment")
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		assert.Contains(t, body["query"], "minimizeComment")
 
-			vars := body["variables"].(map[string]any)
-			assert.Equal(t, "IC_kwDOTest", vars["id"])
-			assert.Equal(t, "OUTDATED", vars["reason"])
+		vars := body["variables"].(map[string]any)
+		assert.Equal(t, "IC_kwDOTest", vars["id"])
+		assert.Equal(t, "OUTDATED", vars["reason"])
 
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]any{
-				"data": map[string]any{
-					"minimizeComment": map[string]any{
-						"minimizedComment": map[string]any{
-							"isMinimized": true,
-						},
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"minimizeComment": map[string]any{
+					"minimizedComment": map[string]any{
+						"isMinimized": true,
 					},
 				},
-			})
-		}
+			},
+		})
 	}))
 	defer srv.Close()
 
 	client := newTestClient(t, srv)
-	err := client.MinimizeComment(context.Background(), "owner", "repo", 789, "OUTDATED")
+	err := client.MinimizeComment(context.Background(), "IC_kwDOTest", "OUTDATED")
 	require.NoError(t, err)
-	assert.Equal(t, 2, callNum)
 }
 
 func TestMinimizeComment_GraphQLError(t *testing.T) {
-	callNum := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callNum++
-		switch callNum {
-		case 1:
-			// GET comment node_id — success.
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":      789,
-				"node_id": "IC_kwDOTest",
-			})
-		case 2:
-			// POST GraphQL mutation — returns a GraphQL-level error.
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]any{
-				"errors": []map[string]any{
-					{"message": "Could not resolve to a node with the global id of 'IC_kwDOTest'"},
-				},
-			})
-		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{
+			"errors": []map[string]any{
+				{"message": "Could not resolve to a node with the global id of 'IC_kwDOTest'"},
+			},
+		})
 	}))
 	defer srv.Close()
 
 	client := newTestClient(t, srv)
-	err := client.MinimizeComment(context.Background(), "owner", "repo", 789, "OUTDATED")
+	err := client.MinimizeComment(context.Background(), "IC_kwDOTest", "OUTDATED")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "minimize comment 789")
+	assert.Contains(t, err.Error(), "minimize comment IC_kwDOTest")
 	assert.Contains(t, err.Error(), "Could not resolve to a node")
-}
-
-func TestMinimizeComment_GetNodeIDError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv)
-	err := client.MinimizeComment(context.Background(), "owner", "repo", 999, "OUTDATED")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "get comment 999 for minimize")
 }

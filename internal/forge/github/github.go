@@ -966,9 +966,10 @@ func (c *LiveClient) ListIssueComments(ctx context.Context, owner, repo string, 
 			return nil, fmt.Errorf("list issue comments page %d: %w", page, err)
 		}
 		var raw []struct {
-			ID   int    `json:"id"`
-			Body string `json:"body"`
-			User struct {
+			ID     int    `json:"id"`
+			NodeID string `json:"node_id"`
+			Body   string `json:"body"`
+			User   struct {
 				Login string `json:"login"`
 			} `json:"user"`
 			CreatedAt string `json:"created_at"`
@@ -980,6 +981,7 @@ func (c *LiveClient) ListIssueComments(ctx context.Context, owner, repo string, 
 		for _, r := range raw {
 			result = append(result, forge.IssueComment{
 				ID:        r.ID,
+				NodeID:    r.NodeID,
 				Body:      r.Body,
 				Author:    r.User.Login,
 				CreatedAt: r.CreatedAt,
@@ -1001,9 +1003,10 @@ func (c *LiveClient) CreateIssueComment(ctx context.Context, owner, repo string,
 		return nil, fmt.Errorf("create issue comment on #%d: %w", number, err)
 	}
 	var result struct {
-		ID   int    `json:"id"`
-		Body string `json:"body"`
-		User struct {
+		ID     int    `json:"id"`
+		NodeID string `json:"node_id"`
+		Body   string `json:"body"`
+		User   struct {
 			Login string `json:"login"`
 		} `json:"user"`
 		CreatedAt string `json:"created_at"`
@@ -1013,6 +1016,7 @@ func (c *LiveClient) CreateIssueComment(ctx context.Context, owner, repo string,
 	}
 	return &forge.IssueComment{
 		ID:        result.ID,
+		NodeID:    result.NodeID,
 		Body:      result.Body,
 		Author:    result.User.Login,
 		CreatedAt: result.CreatedAt,
@@ -1031,25 +1035,11 @@ func (c *LiveClient) UpdateIssueComment(ctx context.Context, owner, repo string,
 }
 
 // MinimizeComment minimizes (hides) an issue or review comment via the
-// GitHub GraphQL API. The reason must be one of: ABUSE, OFF_TOPIC,
-// OUTDATED, RESOLVED, DUPLICATE, SPAM.
-//
-// This uses the REST-to-GraphQL bridge: POST /graphql with a mutation.
-// The comment's GraphQL node ID is fetched first via the REST API.
-func (c *LiveClient) MinimizeComment(ctx context.Context, owner, repo string, commentID int, reason string) error {
-	// Step 1: Get the GraphQL node ID for this comment.
-	resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/issues/comments/%d", owner, repo, commentID))
-	if err != nil {
-		return fmt.Errorf("get comment %d for minimize: %w", commentID, err)
-	}
-	var comment struct {
-		NodeID string `json:"node_id"`
-	}
-	if err := decodeJSON(resp, &comment); err != nil {
-		return fmt.Errorf("decode comment %d node_id: %w", commentID, err)
-	}
-
-	// Step 2: Call the minimizeComment GraphQL mutation.
+// GitHub GraphQL API. The caller provides the GraphQL node ID directly
+// (available in IssueComment.NodeID and PullRequestReview.NodeID).
+// The reason must be one of: ABUSE, OFF_TOPIC, OUTDATED, RESOLVED,
+// DUPLICATE, SPAM.
+func (c *LiveClient) MinimizeComment(ctx context.Context, nodeID, reason string) error {
 	query := `mutation($id: ID!, $reason: ReportedContentClassifiers!) {
 		minimizeComment(input: {subjectId: $id, classifier: $reason}) {
 			minimizedComment { isMinimized }
@@ -1058,13 +1048,13 @@ func (c *LiveClient) MinimizeComment(ctx context.Context, owner, repo string, co
 	gqlPayload := map[string]any{
 		"query": query,
 		"variables": map[string]string{
-			"id":     comment.NodeID,
+			"id":     nodeID,
 			"reason": reason,
 		},
 	}
 	gqlResp, err := c.post(ctx, "/graphql", gqlPayload)
 	if err != nil {
-		return fmt.Errorf("minimize comment %d: %w", commentID, err)
+		return fmt.Errorf("minimize comment %s: %w", nodeID, err)
 	}
 	var gqlResult struct {
 		Errors []struct {
@@ -1075,7 +1065,7 @@ func (c *LiveClient) MinimizeComment(ctx context.Context, owner, repo string, co
 		return fmt.Errorf("decode minimize response: %w", err)
 	}
 	if len(gqlResult.Errors) > 0 {
-		return fmt.Errorf("minimize comment %d: %s", commentID, gqlResult.Errors[0].Message)
+		return fmt.Errorf("minimize comment %s: %s", nodeID, gqlResult.Errors[0].Message)
 	}
 	return nil
 }
@@ -1105,8 +1095,9 @@ func (c *LiveClient) ListPullRequestReviews(ctx context.Context, owner, repo str
 			return nil, fmt.Errorf("list pull request reviews page %d: %w", page, err)
 		}
 		var raw []struct {
-			ID   int    `json:"id"`
-			User struct {
+			ID     int    `json:"id"`
+			NodeID string `json:"node_id"`
+			User   struct {
 				Login string `json:"login"`
 			} `json:"user"`
 			State       string `json:"state"`
@@ -1120,6 +1111,7 @@ func (c *LiveClient) ListPullRequestReviews(ctx context.Context, owner, repo str
 		for _, r := range raw {
 			result = append(result, forge.PullRequestReview{
 				ID:          r.ID,
+				NodeID:      r.NodeID,
 				User:        r.User.Login,
 				State:       r.State,
 				Body:        r.Body,

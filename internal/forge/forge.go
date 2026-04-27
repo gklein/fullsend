@@ -58,6 +58,7 @@ type Issue struct {
 // IssueComment represents a comment on an issue.
 type IssueComment struct {
 	ID        int
+	NodeID    string
 	Body      string
 	Author    string
 	CreatedAt string
@@ -65,10 +66,11 @@ type IssueComment struct {
 
 // PullRequestReview represents a formal review on a pull request.
 type PullRequestReview struct {
-	ID        int
-	User      string
-	State     string // "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"
-	Body      string
+	ID          int
+	NodeID      string
+	User        string
+	State       string // "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"
+	Body        string
 	SubmittedAt string
 }
 
@@ -144,7 +146,7 @@ type Client interface {
 	ListIssueComments(ctx context.Context, owner, repo string, number int) ([]IssueComment, error)
 	CreateIssueComment(ctx context.Context, owner, repo string, number int, body string) (*IssueComment, error)
 	UpdateIssueComment(ctx context.Context, owner, repo string, commentID int, body string) error
-	MinimizeComment(ctx context.Context, owner, repo string, commentID int, reason string) error
+	MinimizeComment(ctx context.Context, nodeID, reason string) error
 
 	// Pull request review operations
 	CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body string) error

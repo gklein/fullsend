@@ -71,9 +71,9 @@ func TestSubmitFormalReview_CreatesAndMinimizesStale(t *testing.T) {
 	fc.AuthenticatedUser = "fullsend-bot"
 	fc.PRReviews = map[string][]forge.PullRequestReview{
 		"acme/repo/1": {
-			{ID: 100, User: "fullsend-bot", State: "COMMENTED", Body: "old review 1"},
-			{ID: 200, User: "someone-else", State: "APPROVED", Body: "lgtm"},
-			{ID: 300, User: "fullsend-bot", State: "APPROVED", Body: "old review 2"},
+			{ID: 100, NodeID: "PRR_100", User: "fullsend-bot", State: "COMMENTED", Body: "old review 1"},
+			{ID: 200, NodeID: "PRR_200", User: "someone-else", State: "APPROVED", Body: "lgtm"},
+			{ID: 300, NodeID: "PRR_300", User: "fullsend-bot", State: "APPROVED", Body: "old review 2"},
 		},
 	}
 
@@ -86,16 +86,13 @@ func TestSubmitFormalReview_CreatesAndMinimizesStale(t *testing.T) {
 	require.Len(t, fc.CreatedReviews, 1)
 	assert.Equal(t, "APPROVE", fc.CreatedReviews[0].Event)
 
-	// Should have minimized 2 stale reviews (IDs 100 and 300), skipping
-	// the one we just created (which is now the last in the list after
-	// ListPullRequestReviews returns the pre-populated + new one).
-	// But since FakeClient's ListPullRequestReviews returns the pre-populated
-	// reviews (3 by fullsend-bot: 100, 300, plus the newly created one is NOT
-	// in PRReviews), we expect 2 reviews by fullsend-bot, and we skip the last
-	// one (300), minimizing only 100.
-	require.Len(t, fc.MinimizedComments, 1)
-	assert.Equal(t, 100, fc.MinimizedComments[0].CommentID)
+	// Stale reviews are minimized BEFORE creating the new one, so both
+	// existing reviews by fullsend-bot (IDs 100, 300) are minimized.
+	require.Len(t, fc.MinimizedComments, 2)
+	assert.Equal(t, "PRR_100", fc.MinimizedComments[0].NodeID)
 	assert.Equal(t, "OUTDATED", fc.MinimizedComments[0].Reason)
+	assert.Equal(t, "PRR_300", fc.MinimizedComments[1].NodeID)
+	assert.Equal(t, "OUTDATED", fc.MinimizedComments[1].Reason)
 }
 
 func TestSubmitFormalReview_DryRun(t *testing.T) {
@@ -118,14 +115,26 @@ func TestSubmitFormalReview_UnknownAction(t *testing.T) {
 	assert.Empty(t, fc.CreatedReviews)
 }
 
-func TestMinimizeStaleReviews_NoStaleReviews(t *testing.T) {
+func TestMinimizeStaleReviews_MinimizesAll(t *testing.T) {
 	fc := forge.NewFakeClient()
 	fc.AuthenticatedUser = "fullsend-bot"
 	fc.PRReviews = map[string][]forge.PullRequestReview{
 		"acme/repo/1": {
-			{ID: 100, User: "fullsend-bot", State: "APPROVED", Body: "only review"},
+			{ID: 100, NodeID: "PRR_100", User: "fullsend-bot", State: "APPROVED", Body: "only review"},
 		},
 	}
+
+	printer := ui.New(io.Discard)
+	err := minimizeStaleReviews(context.Background(), fc, "acme", "repo", 1, printer)
+	require.NoError(t, err)
+	// Called before creating a new review, so the single existing review is stale.
+	require.Len(t, fc.MinimizedComments, 1)
+	assert.Equal(t, "PRR_100", fc.MinimizedComments[0].NodeID)
+}
+
+func TestMinimizeStaleReviews_NoReviews(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
 
 	printer := ui.New(io.Discard)
 	err := minimizeStaleReviews(context.Background(), fc, "acme", "repo", 1, printer)

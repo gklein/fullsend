@@ -110,8 +110,9 @@ func reviewActionToEvent(action string) (string, bool) {
 	}
 }
 
-// submitFormalReview submits a GitHub PR review and minimizes stale reviews
-// by the same user.
+// submitFormalReview minimizes stale reviews by the same user, then
+// submits a new GitHub PR review. Minimizing first avoids a TOCTOU race
+// where the just-created review might not appear in the list yet.
 func submitFormalReview(ctx context.Context, client forge.Client, owner, repo string, pr int, parsed ReviewResult, dryRun bool, printer *ui.Printer) error {
 	event, ok := reviewActionToEvent(parsed.Action)
 	if !ok {
@@ -124,19 +125,22 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 		return nil
 	}
 
-	printer.StepStart(fmt.Sprintf("Submitting %s review", event))
+	if err := minimizeStaleReviews(ctx, client, owner, repo, pr, printer); err != nil {
+		return err
+	}
 
+	printer.StepStart(fmt.Sprintf("Submitting %s review", event))
 	reviewBody := "See the review comment above for full details."
 	if err := client.CreatePullRequestReview(ctx, owner, repo, pr, event, reviewBody); err != nil {
 		return fmt.Errorf("submitting review: %w", err)
 	}
 	printer.StepDone("Review submitted")
-
-	return minimizeStaleReviews(ctx, client, owner, repo, pr, printer)
+	return nil
 }
 
 // minimizeStaleReviews lists all reviews on the PR, finds previous reviews
-// by the authenticated user, and minimizes them to reduce noise.
+// by the authenticated user, and minimizes them. Called before creating a
+// new review, so all existing reviews by this user are stale.
 func minimizeStaleReviews(ctx context.Context, client forge.Client, owner, repo string, pr int, printer *ui.Printer) error {
 	user, err := client.GetAuthenticatedUser(ctx)
 	if err != nil {
@@ -150,8 +154,6 @@ func minimizeStaleReviews(ctx context.Context, client forge.Client, owner, repo 
 		return nil
 	}
 
-	// The most recent review is the one we just posted — skip it.
-	// Minimize all other reviews by the same user.
 	var stale []forge.PullRequestReview
 	for _, r := range reviews {
 		if r.User == user {
@@ -159,17 +161,14 @@ func minimizeStaleReviews(ctx context.Context, client forge.Client, owner, repo 
 		}
 	}
 
-	if len(stale) <= 1 {
+	if len(stale) == 0 {
 		return nil
 	}
 
-	// Skip the last one (most recent = the one we just created).
-	stale = stale[:len(stale)-1]
-
 	printer.StepStart(fmt.Sprintf("Minimizing %d stale review(s)", len(stale)))
 	for _, r := range stale {
-		if err := client.MinimizeComment(ctx, owner, repo, r.ID, "OUTDATED"); err != nil {
-			printer.StepInfo(fmt.Sprintf("Warning: could not minimize review %d: %v", r.ID, err))
+		if err := client.MinimizeComment(ctx, r.NodeID, "OUTDATED"); err != nil {
+			printer.StepInfo(fmt.Sprintf("Warning: could not minimize review %s: %v", r.NodeID, err))
 		}
 	}
 	printer.StepDone("Stale reviews minimized")

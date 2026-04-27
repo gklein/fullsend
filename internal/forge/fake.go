@@ -51,9 +51,8 @@ type UpdatedCommentRecord struct {
 
 // MinimizedCommentRecord records a comment minimize call.
 type MinimizedCommentRecord struct {
-	Owner, Repo string
-	CommentID   int
-	Reason      string
+	NodeID string
+	Reason string
 }
 
 // ReviewRecord records a pull request review creation call.
@@ -601,17 +600,15 @@ func (f *FakeClient) UpdateIssueComment(_ context.Context, owner, repo string, c
 	return nil
 }
 
-func (f *FakeClient) MinimizeComment(_ context.Context, owner, repo string, commentID int, reason string) error {
+func (f *FakeClient) MinimizeComment(_ context.Context, nodeID, reason string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if e := f.err("MinimizeComment"); e != nil {
 		return e
 	}
 	f.MinimizedComments = append(f.MinimizedComments, MinimizedCommentRecord{
-		Owner:     owner,
-		Repo:      repo,
-		CommentID: commentID,
-		Reason:    reason,
+		NodeID: nodeID,
+		Reason: reason,
 	})
 	return nil
 }
@@ -629,6 +626,19 @@ func (f *FakeClient) CreatePullRequestReview(_ context.Context, owner, repo stri
 		Event:  event,
 		Body:   body,
 	})
+
+	review := PullRequestReview{
+		ID:     len(f.CreatedReviews) + 1000,
+		NodeID: fmt.Sprintf("PRR_fake_%d", len(f.CreatedReviews)+1000),
+		User:   f.AuthenticatedUser,
+		State:  event,
+		Body:   body,
+	}
+	key := fmt.Sprintf("%s/%s/%d", owner, repo, number)
+	if f.PRReviews == nil {
+		f.PRReviews = make(map[string][]PullRequestReview)
+	}
+	f.PRReviews[key] = append(f.PRReviews[key], review)
 	return nil
 }
 
