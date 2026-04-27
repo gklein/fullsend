@@ -100,6 +100,7 @@ go-tidy:
 script-test:
 	bash internal/scaffold/fullsend-repo/scripts/post-triage-test.sh
 	bash internal/scaffold/fullsend-repo/scripts/validate-output-schema-test.sh
+	bash internal/scaffold/fullsend-repo/scripts/pre-code-test.sh
 
 test: lint go-vet go-test script-test
 
