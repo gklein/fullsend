@@ -51,10 +51,11 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_HTML_URL: ${{ github.event.issue.html_url }}
         run: |
+          set -euo pipefail
           PAYLOAD=$(jq -cn \
-            --arg in "$ISSUE_NUMBER" \
-            --arg iu "$ISSUE_HTML_URL" \
-            '{issue: {number: ($in | tonumber), html_url: $iu}}')
+            --arg in "${ISSUE_NUMBER:-}" \
+            --arg iu "${ISSUE_HTML_URL:-}" \
+            '{issue: {number: (if $in != "" then ($in | tonumber) else null end), html_url: (if $iu != "" then $iu else null end)}}')
           echo "json=$PAYLOAD" >> "$GITHUB_OUTPUT"
       - name: Dispatch triage
         env:
@@ -86,10 +87,11 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_HTML_URL: ${{ github.event.issue.html_url }}
         run: |
+          set -euo pipefail
           PAYLOAD=$(jq -cn \
-            --arg in "$ISSUE_NUMBER" \
-            --arg iu "$ISSUE_HTML_URL" \
-            '{issue: {number: ($in | tonumber), html_url: $iu}}')
+            --arg in "${ISSUE_NUMBER:-}" \
+            --arg iu "${ISSUE_HTML_URL:-}" \
+            '{issue: {number: (if $in != "" then ($in | tonumber) else null end), html_url: (if $iu != "" then $iu else null end)}}')
           echo "json=$PAYLOAD" >> "$GITHUB_OUTPUT"
       - name: Dispatch code
         env:
@@ -124,6 +126,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HTML_URL: ${{ github.event.pull_request.html_url }}
         run: |
+          set -euo pipefail
           PAYLOAD=$(jq -cn \
             --arg in "${ISSUE_NUMBER:-}" \
             --arg iu "${ISSUE_HTML_URL:-}" \
