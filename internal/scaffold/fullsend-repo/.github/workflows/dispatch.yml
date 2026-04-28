@@ -24,6 +24,10 @@ on:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -45,14 +49,20 @@ jobs:
           SOURCE_REPO: ${{ inputs.source_repo }}
           EVENT_PAYLOAD: ${{ inputs.event_payload }}
         run: |
+          set -euo pipefail
+
           echo "Scanning for workflows with stage: $STAGE"
+
+          dispatched=0
 
           for workflow in .github/workflows/*.yml .github/workflows/*.yaml; do
             # Skip if file doesn't exist (glob expansion when no matches)
             [[ -f "$workflow" ]] || continue
 
             # Extract stage from comment (first line with # fullsend-stage:)
-            workflow_stage=$(grep -E '^# fullsend-stage:' "$workflow" | head -1 | cut -d: -f2 | tr -d ' ')
+            # Format: # fullsend-stage: <stage-name>
+            # Stage names must not contain colons
+            workflow_stage=$(grep -E '^# fullsend-stage:' "$workflow" | head -1 | sed -n 's/^# fullsend-stage: *\(.*\)/\1/p')
 
             # Skip if no stage marker or doesn't match
             [[ -z "$workflow_stage" ]] && continue
@@ -61,9 +71,21 @@ jobs:
             workflow_name=$(basename "$workflow")
             echo "Triggering $workflow_name for stage $STAGE"
 
-            gh workflow run "$workflow_name" \
+            if gh workflow run "$workflow_name" \
               --repo "$GITHUB_REPOSITORY" \
               -f event_type="$EVENT_TYPE" \
               -f source_repo="$SOURCE_REPO" \
-              -f event_payload="$EVENT_PAYLOAD"
+              -f event_payload="$EVENT_PAYLOAD"; then
+              dispatched=$((dispatched + 1))
+            else
+              echo "::error::Failed to dispatch $workflow_name"
+              exit 1
+            fi
           done
+
+          if [[ $dispatched -eq 0 ]]; then
+            echo "::error::No workflows found for stage: $STAGE"
+            exit 1
+          fi
+
+          echo "Successfully dispatched $dispatched workflow(s) for stage $STAGE"

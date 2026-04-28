@@ -79,6 +79,13 @@ func TestDispatchWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "gh workflow run")
 	assert.Contains(t, s, "FULLSEND_FULLSEND_CLIENT_ID")
 	assert.Contains(t, s, "FULLSEND_FULLSEND_APP_PRIVATE_KEY")
+	assert.Contains(t, s, "permissions:")
+	assert.Contains(t, s, "actions: write")
+	assert.Contains(t, s, "contents: read")
+	assert.Contains(t, s, "id-token: write")
+	assert.Contains(t, s, "set -euo pipefail")
+	assert.Contains(t, s, "dispatched=0")
+	assert.Contains(t, s, "No workflows found for stage")
 }
 
 func TestWalkFullsendRepo(t *testing.T) {
