@@ -393,7 +393,7 @@ Independent orgs can optionally collaborate across the forge boundary. A downstr
                        │    ┌─────────────────────────────────────┐    │
                        │    │ Refinement ► Prioritization ► Exec  │    │
                        │    │ ╱                                ╲  │    │
-                       │    │ Feedback ◄── Delivery ◄── Review    │    │
+                       │    │ Feedback ◄ Monitor ◄── Delivery     │    │
                        │    └─────────────────────────────────────┘    │
                        │                                               │
                        │  Receives proposals as issues/PRs.            │
