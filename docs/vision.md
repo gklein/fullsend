@@ -14,25 +14,25 @@ Everything else is autonomous.
 Software development is a continuous loop. The left side discovers *what* to build; the right side *builds* it. Fullsend's scope covers the full loop — agents participate in every phase, not just code generation.
 
 ```
-                       ◄─ what to build ──►          ◄── how to build it ──►
+             ◄── what to build ──►          ◄── how to build it ──►
 
                    Refinement ──► Prioritization ──► Execution
                   ╱                                          ╲
          Discovery                                            Verification
                   ╲                                          ╱
-         Feedback ◄── Monitor ◄──────── Delivery
+                   Feedback ◄────── Monitor ◄─────── Delivery
 ```
 
 The current bugfix workflow spans three phases. The remaining phases are planned:
 
 ```
-                       ◄─ what to build ──►          ◄── how to build it ──►
+             ◄── what to build ──►          ◄── how to build it ──►
 
                    Refinement ───► Prioritization ──► ***Execution***
                   ╱                                          ╲
          Discovery                                      ***Verification***
                   ╲                                          ╱
-    ***Feedback*** ◄── Monitor ◄──────── Delivery
+                ***Feedback*** ◄─── Monitor ◄─────── Delivery
 ```
 
 **Current (bugfix workflow):** An issue reports a bug (***feedback***). An agent triages, implements a fix (***execution***), and validates it against tests and review (***verification***). Humans set strategic intent and approve guarded paths; everything else is autonomous.
