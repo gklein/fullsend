@@ -151,8 +151,10 @@ type Client interface {
 	// Pull request operations
 	GetPullRequestHeadSHA(ctx context.Context, owner, repo string, number int) (string, error)
 
-	// Pull request review operations
-	CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body string) error
+	// Pull request review operations.
+	// commitSHA, when non-empty, pins the review to a specific commit.
+	// GitHub rejects the request if the commit is not the PR's current HEAD.
+	CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body, commitSHA string) error
 	ListPullRequestReviews(ctx context.Context, owner, repo string, number int) ([]PullRequestReview, error)
 
 	// Change proposal merge

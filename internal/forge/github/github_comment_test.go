@@ -206,6 +206,7 @@ func TestCreatePullRequestReview(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&body)
 		assert.Equal(t, "APPROVE", body["event"])
 		assert.Equal(t, "Looks good!", body["body"])
+		assert.Equal(t, "abc123", body["commit_id"])
 
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]any{"id": 999})
@@ -213,7 +214,25 @@ func TestCreatePullRequestReview(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv)
-	err := client.CreatePullRequestReview(context.Background(), "owner", "repo", 7, "APPROVE", "Looks good!")
+	err := client.CreatePullRequestReview(context.Background(), "owner", "repo", 7, "APPROVE", "Looks good!", "abc123")
+	require.NoError(t, err)
+}
+
+func TestCreatePullRequestReview_NoCommitSHA(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		assert.Equal(t, "APPROVE", body["event"])
+		_, hasCommitID := body["commit_id"]
+		assert.False(t, hasCommitID, "commit_id should not be present when empty")
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"id": 999})
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	err := client.CreatePullRequestReview(context.Background(), "owner", "repo", 7, "APPROVE", "Looks good!", "")
 	require.NoError(t, err)
 }
 

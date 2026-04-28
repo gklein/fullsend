@@ -60,6 +60,7 @@ type ReviewRecord struct {
 	Owner, Repo string
 	Number      int
 	Event, Body string
+	CommitSHA   string
 }
 
 // FakeClient is a thread-safe test double for forge.Client.
@@ -636,18 +637,19 @@ func (f *FakeClient) GetPullRequestHeadSHA(_ context.Context, _, _ string, _ int
 	return f.PullRequestHeadSHA, nil
 }
 
-func (f *FakeClient) CreatePullRequestReview(_ context.Context, owner, repo string, number int, event, body string) error {
+func (f *FakeClient) CreatePullRequestReview(_ context.Context, owner, repo string, number int, event, body, commitSHA string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if e := f.err("CreatePullRequestReview"); e != nil {
 		return e
 	}
 	f.CreatedReviews = append(f.CreatedReviews, ReviewRecord{
-		Owner:  owner,
-		Repo:   repo,
-		Number: number,
-		Event:  event,
-		Body:   body,
+		Owner:     owner,
+		Repo:      repo,
+		Number:    number,
+		Event:     event,
+		Body:      body,
+		CommitSHA: commitSHA,
 	})
 
 	review := PullRequestReview{

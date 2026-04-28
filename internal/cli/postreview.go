@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -16,6 +17,8 @@ import (
 )
 
 const reviewMarker = "<!-- fullsend:review-agent -->"
+
+var hexSHARe = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 
 func newPostReviewCmd() *cobra.Command {
 	var (
@@ -80,6 +83,9 @@ has moved, a stale-head failure is posted instead.`,
 			if headSHA != "" {
 				parsed.HeadSHA = headSHA
 			}
+			if parsed.HeadSHA != "" && !hexSHARe.MatchString(parsed.HeadSHA) {
+				return fmt.Errorf("head SHA must be a hex string (7-64 chars), got %q", parsed.HeadSHA)
+			}
 
 			printer.Header("Post Review")
 
@@ -111,7 +117,7 @@ has moved, a stale-head failure is posted instead.`,
 				return err
 			}
 
-			return submitFormalReview(cmd.Context(), client, owner, repoName, pr, parsed, dryRun, printer)
+			return submitFormalReview(cmd.Context(), client, owner, repoName, pr, parsed.Action, parsed.HeadSHA, dryRun, printer)
 		},
 	}
 
@@ -167,19 +173,12 @@ func checkStaleHead(ctx context.Context, client forge.Client, owner, repo string
 	}
 
 	if currentSHA != reviewedSHA {
-		printer.StepInfo(fmt.Sprintf("Stale: reviewed %s but HEAD is now %s", reviewedSHA[:minLen(len(reviewedSHA), 12)], currentSHA[:minLen(len(currentSHA), 12)]))
+		printer.StepInfo(fmt.Sprintf("Stale: reviewed %s but HEAD is now %s", reviewedSHA[:min(len(reviewedSHA), 12)], currentSHA[:min(len(currentSHA), 12)]))
 		return true, currentSHA, nil
 	}
 
 	printer.StepDone("HEAD matches reviewed SHA")
 	return false, currentSHA, nil
-}
-
-func minLen(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // postStaleHeadNotice posts a failure comment when the PR HEAD has moved
@@ -222,12 +221,13 @@ This PR was NOT reviewed. Do not count this as an approval.`, parsed.Reason)
 }
 
 // submitFormalReview minimizes stale reviews by the same user, then
-// submits a new GitHub PR review. Minimizing first avoids a TOCTOU race
-// where the just-created review might not appear in the list yet.
-func submitFormalReview(ctx context.Context, client forge.Client, owner, repo string, pr int, parsed ReviewResult, dryRun bool, printer *ui.Printer) error {
-	event, ok := reviewActionToEvent(parsed.Action)
+// submits a new GitHub PR review. When commitSHA is non-empty, the
+// review is pinned to that commit via the commit_id field, closing
+// the TOCTOU gap between the stale-head check and review submission.
+func submitFormalReview(ctx context.Context, client forge.Client, owner, repo string, pr int, action, commitSHA string, dryRun bool, printer *ui.Printer) error {
+	event, ok := reviewActionToEvent(action)
 	if !ok {
-		printer.StepInfo(fmt.Sprintf("Unknown review action %q, skipping formal review", parsed.Action))
+		printer.StepInfo(fmt.Sprintf("Unknown review action %q, skipping formal review", action))
 		return nil
 	}
 
@@ -242,7 +242,7 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 
 	printer.StepStart(fmt.Sprintf("Submitting %s review", event))
 	reviewBody := "See the review comment above for full details."
-	if err := client.CreatePullRequestReview(ctx, owner, repo, pr, event, reviewBody); err != nil {
+	if err := client.CreatePullRequestReview(ctx, owner, repo, pr, event, reviewBody, commitSHA); err != nil {
 		return fmt.Errorf("submitting review: %w", err)
 	}
 	printer.StepDone("Review submitted")

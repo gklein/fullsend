@@ -1096,7 +1096,11 @@ func (c *LiveClient) GetPullRequestHeadSHA(ctx context.Context, owner, repo stri
 
 // CreatePullRequestReview submits a formal review on a pull request.
 // The event must be one of: APPROVE, REQUEST_CHANGES, COMMENT.
-func (c *LiveClient) CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body string) error {
+// When commitSHA is non-empty it is sent as commit_id, pinning the
+// review to that commit. GitHub rejects the request if the commit is
+// not the PR's current HEAD, closing the TOCTOU gap between the
+// stale-head check and review submission.
+func (c *LiveClient) CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body, commitSHA string) error {
 	switch event {
 	case "APPROVE", "REQUEST_CHANGES", "COMMENT":
 	default:
@@ -1106,6 +1110,9 @@ func (c *LiveClient) CreatePullRequestReview(ctx context.Context, owner, repo st
 	payload := map[string]string{
 		"event": event,
 		"body":  body,
+	}
+	if commitSHA != "" {
+		payload["commit_id"] = commitSHA
 	}
 	resp, err := c.post(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo, number), payload)
 	if err != nil {

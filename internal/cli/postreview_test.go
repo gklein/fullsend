@@ -175,12 +175,12 @@ func TestSubmitFormalReview_CreatesAndMinimizesStale(t *testing.T) {
 	}
 
 	printer := ui.New(io.Discard)
-	parsed := ReviewResult{Body: "New findings", Action: "approve"}
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, parsed, false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "abc123def456", false, printer)
 	require.NoError(t, err)
 
 	require.Len(t, fc.CreatedReviews, 1)
 	assert.Equal(t, "APPROVE", fc.CreatedReviews[0].Event)
+	assert.Equal(t, "abc123def456", fc.CreatedReviews[0].CommitSHA)
 
 	require.Len(t, fc.MinimizedComments, 2)
 	assert.Equal(t, "PRR_100", fc.MinimizedComments[0].NodeID)
@@ -192,9 +192,8 @@ func TestSubmitFormalReview_CreatesAndMinimizesStale(t *testing.T) {
 func TestSubmitFormalReview_DryRun(t *testing.T) {
 	fc := forge.NewFakeClient()
 	printer := ui.New(io.Discard)
-	parsed := ReviewResult{Body: "Findings", Action: "approve"}
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, parsed, true, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", true, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.CreatedReviews)
 }
@@ -202,9 +201,8 @@ func TestSubmitFormalReview_DryRun(t *testing.T) {
 func TestSubmitFormalReview_UnknownAction(t *testing.T) {
 	fc := forge.NewFakeClient()
 	printer := ui.New(io.Discard)
-	parsed := ReviewResult{Body: "Findings", Action: "unknown-action"}
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, parsed, false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "unknown-action", "", false, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.CreatedReviews)
 }
@@ -249,4 +247,52 @@ func TestMinimizeStaleReviews_NoReviews(t *testing.T) {
 	err := minimizeStaleReviews(context.Background(), fc, "acme", "repo", 1, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.MinimizedComments)
+}
+
+func TestHexSHAValidation(t *testing.T) {
+	tests := []struct {
+		sha   string
+		valid bool
+	}{
+		{"abc123f", true},
+		{"abc123def456", true},
+		{"abc123def456abc123def456abc123def456abc123", true},
+		{"", true}, // empty is valid (means "no SHA provided")
+		{"not-hex!", false},
+		{"abc 123", false},
+		{"abc123`inject", false},
+		{"ABC123DEF456", true},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("sha=%q", tt.sha), func(t *testing.T) {
+			if tt.sha == "" {
+				assert.True(t, tt.valid)
+				return
+			}
+			assert.Equal(t, tt.valid, hexSHARe.MatchString(tt.sha))
+		})
+	}
+}
+
+func TestSubmitFormalReview_PassesCommitSHA(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	printer := ui.New(io.Discard)
+
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "deadbeef1234", false, printer)
+	require.NoError(t, err)
+	require.Len(t, fc.CreatedReviews, 1)
+	assert.Equal(t, "COMMENT", fc.CreatedReviews[0].Event)
+	assert.Equal(t, "deadbeef1234", fc.CreatedReviews[0].CommitSHA)
+}
+
+func TestSubmitFormalReview_EmptyCommitSHA(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	printer := ui.New(io.Discard)
+
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", false, printer)
+	require.NoError(t, err)
+	require.Len(t, fc.CreatedReviews, 1)
+	assert.Equal(t, "", fc.CreatedReviews[0].CommitSHA)
 }
