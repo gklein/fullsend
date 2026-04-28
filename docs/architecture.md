@@ -276,28 +276,9 @@ ADR 0002: [Building block 13](ADRs/0002-initial-fullsend-design.md#13-observabil
 Fullsend uses a three-tier inheritance model for all configuration: agent definitions, skills, policies, harness definitions, and guardrails. Each tier can extend or override the one below it. Guardrails can only be tightened, never weakened.
 
 ```
-  ┌───────────────────────────────────────────────────────────────────┐
-  │  <org>/<repo>/.fullsend/                    (directory in repo)  │
-  │                                                                  │
-  │  Repo-specific overrides:                                        │
-  │    AGENTS.md          per-repo agent instructions                │
-  │    skills/            repo-specific skills (domain knowledge)    │
-  │    config overrides   tighten policies, adjust timeouts          │
-  │                                                                  │
-  │  Owned by: repo maintainers (CODEOWNERS)                         │
-  ├───────────────────────────────────────────────────────────────────┤
-  │  <org>/.fullsend                              (dedicated repo)   │
-  │                                                                  │
-  │  Org-wide configuration:                                         │
-  │    agents/            org agent definitions (.md)                 │
-  │    skills/            org skills (shared across repos)            │
-  │    policies/          sandbox network/filesystem policies         │
-  │    harness/           per-agent harness configs (.yaml)           │
-  │    guardrails.yaml    org-wide guardrails (can only be tightened) │
-  │    config.yaml        intent repo, runtime, infrastructure       │
-  │                                                                  │
-  │  Owned by: org platform team (CODEOWNERS, human-only)            │
-  ├───────────────────────────────────────────────────────────────────┤
+
+
+  ┌──────────────────────────────────────────────────────────────────┐
   │  fullsend-ai/fullsend                    (upstream open source)  │
   │                                                                  │
   │  Framework defaults:                                             │
@@ -306,13 +287,34 @@ Fullsend uses a three-tier inheritance model for all configuration: agent defini
   │    scaffold templates, security scanners                         │
   │                                                                  │
   │  Owned by: fullsend project maintainers                          │
-  └───────────────────────────────────────────────────────────────────┘
+  ├──────────────────────────────────────────────────────────────────┤
+  │  <org>/.fullsend                              (dedicated repo)   │
+  │                                                                  │
+  │  Org-wide configuration:                                         │
+  │    agents/            org agent definitions (.md)                │
+  │    skills/            org skills (shared across repos)           │
+  │    policies/          sandbox network/filesystem policies        │
+  │    harness/           per-agent harness configs (.yaml)          │
+  │    guardrails.yaml    org-wide guardrails (can only be tightened)│
+  │    config.yaml        intent repo, runtime, infrastructure       │
+  │                                                                  │
+  │  Owned by: org platform team (CODEOWNERS, human-only)            │
+  ├──────────────────────────────────────────────────────────────────┤
+  │  <org>/<repo>                               (directory in repo)  │
+  │                                                                  │
+  │  Repo-specific overrides:                                        │
+  │    AGENTS.md          per-repo agent instructions                │
+  │    skills/            repo-specific skills (domain knowledge)    │
+  │    .fullsend/config   overrides -  adjust timeouts, prompts      │
+  │                                                                  │
+  │  Owned by: repo maintainers (CODEOWNERS)                         │
+  └──────────────────────────────────────────────────────────────────┘
 
   Inheritance:  fullsend defaults  <  org .fullsend config  <  per-repo overrides
                 (base)                (extend/override)        (extend/tighten)
 ```
 
-Skills flow upward through this stack. A repo-level skill might encode domain knowledge ("this repo uses a custom ORM — here's how queries work"). An org-level skill might encode org conventions ("all services use structured logging via zerolog"). Upstream fullsend provides foundational skills (code implementation, triage coordination, testing conventions).
+Skills flow downward through this stack. A repo-level skill might encode domain knowledge ("this repo uses a custom ORM — here's how queries work"). An org-level skill might encode org conventions ("all services use structured logging via zerolog"). Upstream fullsend provides foundational skills (code implementation, triage coordination, testing conventions).
 
 AGENTS.md files follow the same layering. A repo's `.fullsend/AGENTS.md` gives agents repo-specific instructions (build commands, test patterns, architectural constraints). The org's `.fullsend/agents/` directory provides role-specific agent definitions that apply across all enrolled repos.
 
@@ -340,11 +342,11 @@ Each organization that adopts fullsend operates independently. There is no share
   │                      │  │                      │  │                      │
   └──────────┬───────────┘  └──────────┬───────────┘  └──────────┬───────────┘
              │                         │                         │
-             │        no relationship between orgs               │
+             │            no relationship between orgs           │
              │                         │                         │
              └─────────────────────────┼─────────────────────────┘
                                        │
-                            ┌──────────┴──────────┐
+                            ┌──────────┴───────────┐
                             │  fullsend-ai/fullsend│
                             │                      │
                             │  Open source project │
@@ -363,46 +365,46 @@ Each org is a fully independent instance. They choose when to upgrade. They conf
 Independent orgs can optionally collaborate across the forge boundary. A downstream org — a vendor, contributor, or consumer — runs its own fullsend instance for internal work. An agent in that downstream instance can push feature proposals upstream to a project that has its own full SDLC.
 
 ```
-  ┌─── Downstream Org (vendor/consumer) ──────────────────────────────────┐
-  │                                                                       │
-  │  Own fullsend instance                                                │
-  │                                                                       │
-  │  ┌──────────────────────────────────┐                                 │
-  │  │ Internal SDLC loop              │                                  │
-  │  │                                 │                                  │
-  │  │  Backlog prioritization         │  Business priorities drive       │
-  │  │  Refinement + scoping           │  what to propose upstream        │
-  │  │  Feature proposal drafting      │                                  │
-  │  └──────────────┬───────────────────┘                                 │
-  │                 │                                                      │
-  │  ┌──────────────▼───────────────────┐       forge boundary            │
-  │  │ Upstreaming agent               │       (issues, PRs)             │
-  │  │                                 ├─────────────────────────────┐    │
-  │  │ Runs in downstream instance.    │                             │    │
-  │  │ Drafts proposals, opens issues  │                             │    │
-  │  │ or PRs on upstream project.     │                             │    │
-  │  └─────────────────────────────────┘                             │    │
-  │                                                                  │    │
-  └──────────────────────────────────────────────────────────────────│────┘
+  ┌─── Downstream Org (vendor/consumer) ─────────────────────────────────┐
+  │                                                                      │
+  │  Own fullsend instance                                               │
+  │                                                                      │
+  │  ┌──────────────────────────────────┐                                │
+  │  │ Internal SDLC loop               │                                │
+  │  │                                  │                                │
+  │  │  Backlog prioritization          │  Business priorities drive     │
+  │  │  Refinement + scoping            │  what to propose upstream      │
+  │  │  Feature proposal drafting       │                                │
+  │  └──────────────┬───────────────────┘                                │
+  │                 │                                                    │
+  │  ┌──────────────▼───────────────────┐       forge boundary           │
+  │  │ Upstreaming agent                │       (issues, PRs)            │
+  │  │                                  ├───────────────────────────┐    │
+  │  │ Runs in downstream instance.     │                           │    │
+  │  │ Drafts proposals, opens issues   │                           │    │
+  │  │ or PRs on upstream project.      │                           │    │
+  │  └──────────────────────────────────┘                           │    │
+  │                                                                 │    │
+  └─────────────────────────────────────────────────────────────────│────┘
                                                                     │
-                       ┌────────────────────────────────────────────▼──┐
-                       │  Upstream Project                             │
-                       │                                               │
-                       │  Own SDLC loop (fullsend, or any other tool)  │
-                       │                                               │
-                       │    ┌─────────────────────────────────────┐    │
-                       │    │ Refinement ► Prioritization ► Exec  │    │
-                       │    │ ╱                                ╲  │    │
-                       │    │ Feedback ◄ Monitor ◄── Delivery     │    │
-                       │    └─────────────────────────────────────┘    │
-                       │                                               │
-                       │  Receives proposals as issues/PRs.            │
-                       │  Evaluates against its own priorities,        │
-                       │  architectural invariants, and governance.    │
-                       │  May accept, reject, or request changes —     │
-                       │  just like any other contribution.            │
-                       │                                               │
-                       └───────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────▼────┐
+  │  Upstream Project                                                    │
+  │                                                                      │
+  │  Own SDLC loop (fullsend, or any other tool)                         │
+  │                                                                      │
+  │    ┌─────────────────────────────────────┐                           │
+  │    │ Refinement ► Prioritization ► Exec  │                           │
+  │    │ ╱                                ╲  │                           │
+  │    │ Feedback ◄ Monitor ◄── Delivery     │                           │
+  │    └─────────────────────────────────────┘                           │
+  │                                                                      │
+  │  Receives proposals as issues/PRs.                                   │
+  │  Evaluates against its own priorities,                               │
+  │  architectural invariants, and governance.                           │
+  │  May accept, reject, or request changes —                            │
+  │  just like any other contribution.                                   │
+  │                                                                      │
+  └──────────────────────────────────────────────────────────────────────┘
 ```
 
 The forge (GitHub) is the interface between downstream and upstream. The downstream org's upstreaming agent creates issues or PRs on the upstream project. The upstream project evaluates those contributions through its own SDLC — the same way it evaluates any human or agent contribution. The upstream project doesn't need to know or care that the proposal was generated by an agent in a downstream fullsend instance.
