@@ -365,30 +365,29 @@ Each org is a fully independent instance. They choose when to upgrade. They conf
 Independent orgs can optionally collaborate across the forge boundary. A downstream org — a vendor, contributor, or consumer — runs its own fullsend instance for internal work. An agent in that downstream instance can push feature proposals upstream to a project that has its own full SDLC.
 
 ```
-  ┌─── Downstream Org (vendor/consumer) ───────────────────────────────────┐
-  │                                                                        │
-  │         Refinement ──► Prioritization ──► Execution  ───────────────┐  │
-  │        ╱                                                            │  │
-  │  Discovery                                       Verification       │  │
-  │        ╲                                        ╱      ▲            │  │
-  │         Feedback ◄─── Monitor ◄─────── Delivery        │            │  │
-  │                                                        │            │  │
-  └────────────────────────────────────────────────────────│────────────│──┘
-                                                           │            │
-                                                           │            │
-                                                           │            │
-                                                           │            │
-                                                        ┌──│────────────│────────────────────────────────────────────────────────┐
-                                                        │  │            ▼                                                        │
-                                                        │  │            Refinement ──► Prioritization ──► Execution              │
-                                                        │  │           ╱                                          ╲              │
-                                                        │  │     Discovery                                         Verification  │
-                                                        │  │           ╲                                          ╱              │
-                                                        │  │           Feedback ◄────── Monitor ◄──────── Release                │
-                                                        │  │                                                 │                   │
-                                                        │  └─────────────────────────────────────────────────┘                   │
-                                                        │                                                                        │
-                                                        └───────── Upstream Project ─────────────────────────────────────────────┘
+  ┌─── Upstream Project ───────────────────────────────────────────┐
+  │                                                                │
+  │       Refinement ──► Prioritization ──► Execution              │
+  │      ╱                                           ╲             │
+  │  Discovery                                        Verification │
+  │      ╲                                           ╱             │
+  │       Feedback ◄─────── Monitor ◄──────── Release              │
+  │          ▲                                   │                 │
+  └──────────│───────────────────────────────────│─────────────────┘
+             │                                   └─────────┐
+             │      upstreaming agent                      │
+             │     proposes enhancement                    │ release
+             └────────────────────────────────┐            │
+                                              │            │
+  ┌─── Downstream Org (vendor/consumer) ──────│────────────│───────┐
+  │                                           │            │       │
+  │       Refinement ──► Prioritization ──► Execution      │       │
+  │      ╱                                                 ▼       │
+  │  Discovery                                        Verification │
+  │      ╲                                           ╱             │
+  │       Feedback ◄──── Monitor ◄──────── Delivery                │
+  │                                                                │
+  └────────────────────────────────────────────────────────────────┘
 ```
 
 Both orgs run the full [SDLC loop](vision.md#the-agentic-sdlc). The two cross-org handoff points are:
