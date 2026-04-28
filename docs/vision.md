@@ -9,6 +9,36 @@ A GitHub organization's repos operate with fully autonomous agents handling the 
 
 Everything else is autonomous.
 
+## The agentic SDLC
+
+Software development is a continuous loop. The left side discovers *what* to build; the right side *builds* it. Fullsend's scope covers the full loop — agents participate in every phase, not just code generation.
+
+```
+                          ◄─ what to build ──►          ◄── how to build it ──►
+
+                      Refinement ──► Prioritization ──► Execution
+                     ╱                                          ╲
+            Discovery                                            Verification
+                     ╲                                          ╱
+                      Feedback ◄──────── Delivery ◄──── Review
+```
+
+The current bugfix workflow spans three phases. The remaining phases are planned:
+
+```
+                          ◄─ what to build ──►          ◄── how to build it ──►
+
+                      Refinement ───► Prioritization ──► ***Execution***
+                     ╱                                          ╲
+            Discovery                                      ***Verification***
+                     ╲                                          ╱
+                 ***Feedback*** ◄──── Delivery ◄──────── Review
+```
+
+**Current (bugfix workflow):** An issue reports a bug (***feedback***). An agent triages, implements a fix (***execution***), and validates it against tests and review (***verification***). Humans set strategic intent and approve guarded paths; everything else is autonomous.
+
+**Planned:** Discovery (identifying what needs work from production signals and tech debt), refinement (scoping and decomposing work), prioritization (ordering the backlog), review (multi-agent code review with security sub-agents), and delivery (merge-to-production with graduated autonomy).
+
 ## Why
 
 Modern coding agents have largely solved the code generation problem. Given a well-scoped task and a codebase with decent tests, agents can produce working implementations reliably. But generation is only one piece of the development lifecycle. The hard unsolved problems are:
