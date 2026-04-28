@@ -3,6 +3,10 @@
 # using the name with the prefix stripped (multiline-safe). AGENT_PREFIX must end
 # with '_' (e.g. TRIAGE_). The workflow step should set AGENT_PREFIX and any
 # AGENT_PREFIX* variables (e.g. secrets mapped under prefixed names).
+#
+# Note: The fullsend repository's own .github/scripts/setup-agent-env.sh uses
+# STAGE_PREFIX instead of AGENT_PREFIX for its dogfooding workflows. This
+# scaffold version uses AGENT_PREFIX to match the agent role naming convention.
 
 set -euo pipefail
 
