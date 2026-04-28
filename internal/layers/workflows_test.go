@@ -36,8 +36,8 @@ func TestWorkflowsLayer_Install_WritesAllFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should have created scaffold files + CODEOWNERS in the .fullsend repo
-	require.True(t, len(client.CreatedFiles) >= 23,
-		"expected at least 23 files (22 scaffold + CODEOWNERS), got %d", len(client.CreatedFiles))
+	require.True(t, len(client.CreatedFiles) >= len(managedFiles),
+		"expected at least %d files (scaffold + CODEOWNERS), got %d", len(managedFiles), len(client.CreatedFiles))
 
 	paths := make(map[string]string) // path -> content
 	for _, f := range client.CreatedFiles {

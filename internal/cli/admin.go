@@ -87,6 +87,8 @@ func newInstallCmd() *cobra.Command {
 	var gcpRegion string
 	var gcpServiceAccount string
 	var gcpCredentialsFile string
+	var gcpWIFProvider string
+	var gcpWIFSAEmail string
 
 	cmd := &cobra.Command{
 		Use:   "install <org>",
@@ -120,40 +122,55 @@ func newInstallCmd() *cobra.Command {
 			}
 
 			// Validate GCP flag dependencies.
-			if gcpProject == "" && (gcpServiceAccount != "" || gcpCredentialsFile != "" || gcpRegion != "") {
-				return fmt.Errorf("--gcp-service-account, --gcp-credentials-file, and --gcp-region require --gcp-project to be set")
+			if gcpProject == "" && (gcpServiceAccount != "" || gcpCredentialsFile != "" || gcpRegion != "" || gcpWIFProvider != "" || gcpWIFSAEmail != "") {
+				return fmt.Errorf("--gcp-service-account, --gcp-credentials-file, --gcp-wif-provider, --gcp-wif-sa-email, and --gcp-region require --gcp-project to be set")
 			}
 			if gcpProject != "" && gcpRegion == "" {
 				return fmt.Errorf("--gcp-region is required when --gcp-project is set")
+			}
+			if gcpWIFProvider != "" && gcpCredentialsFile != "" {
+				return fmt.Errorf("--gcp-wif-provider and --gcp-credentials-file are mutually exclusive: use WIF or SA key, not both")
+			}
+			if gcpWIFProvider != "" && gcpServiceAccount != "" {
+				return fmt.Errorf("--gcp-wif-provider and --gcp-service-account are mutually exclusive")
+			}
+			if (gcpWIFProvider != "") != (gcpWIFSAEmail != "") {
+				return fmt.Errorf("--gcp-wif-provider and --gcp-wif-sa-email must be provided together")
 			}
 
 			// Build inference provider from GCP flags.
 			var inferenceProvider inference.Provider
 			var inferenceProviderName string
 			if gcpProject != "" {
-				vcfg := vertex.Config{ProjectID: gcpProject, Region: gcpRegion, ServiceAccountName: gcpServiceAccount}
-				if gcpCredentialsFile != "" {
-					info, statErr := os.Lstat(gcpCredentialsFile)
-					if statErr != nil {
-						return fmt.Errorf("checking credentials file: %w", statErr)
-					}
-					if !info.Mode().IsRegular() {
-						return fmt.Errorf("credentials file %s must be a regular file", gcpCredentialsFile)
-					}
-					credData, readErr := os.ReadFile(gcpCredentialsFile)
-					if readErr != nil {
-						return fmt.Errorf("reading credentials file: %w", readErr)
-					}
-					// Zero credential bytes when done to limit exposure in memory.
-					defer func() {
-						for i := range credData {
-							credData[i] = 0
+				vcfg := vertex.Config{ProjectID: gcpProject, Region: gcpRegion}
+				if gcpWIFProvider != "" {
+					vcfg.Mode = vertex.AuthModeWIF
+					vcfg.WIFProvider = gcpWIFProvider
+					vcfg.WIFServiceAccount = gcpWIFSAEmail
+				} else {
+					vcfg.ServiceAccountName = gcpServiceAccount
+					if gcpCredentialsFile != "" {
+						info, statErr := os.Lstat(gcpCredentialsFile)
+						if statErr != nil {
+							return fmt.Errorf("checking credentials file: %w", statErr)
 						}
-					}()
-					if err := validateCredentialJSON(credData); err != nil {
-						return err
+						if !info.Mode().IsRegular() {
+							return fmt.Errorf("credentials file %s must be a regular file", gcpCredentialsFile)
+						}
+						credData, readErr := os.ReadFile(gcpCredentialsFile)
+						if readErr != nil {
+							return fmt.Errorf("reading credentials file: %w", readErr)
+						}
+						defer func() {
+							for i := range credData {
+								credData[i] = 0
+							}
+						}()
+						if err := validateCredentialJSON(credData); err != nil {
+							return err
+						}
+						vcfg.CredentialJSON = credData
 					}
-					vcfg.CredentialJSON = credData
 				}
 				inferenceProvider = vertex.New(vcfg, vertex.NewLiveGCPClient())
 				inferenceProviderName = "vertex"
@@ -189,6 +206,8 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().StringVar(&gcpRegion, "gcp-region", "", "GCP region for Vertex AI (e.g. global, required with --gcp-project)")
 	cmd.Flags().StringVar(&gcpServiceAccount, "gcp-service-account", "", "existing GCP service account name (optional, used with --gcp-project)")
 	cmd.Flags().StringVar(&gcpCredentialsFile, "gcp-credentials-file", "", "path to pre-made GCP service account key JSON (optional, used with --gcp-project)")
+	cmd.Flags().StringVar(&gcpWIFProvider, "gcp-wif-provider", "", "full Workload Identity Federation provider resource name (e.g. projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER)")
+	cmd.Flags().StringVar(&gcpWIFSAEmail, "gcp-wif-sa-email", "", "GCP service account email for WIF impersonation (required with --gcp-wif-provider)")
 
 	return cmd
 }
@@ -329,6 +348,11 @@ func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, or
 	repoNames := repoNameList(allRepos)
 	hasPrivate := hasPrivateRepos(allRepos)
 
+	// Validate that every --repo value matches a discovered repo.
+	if err := validateEnabledRepos(enabledRepos, repoNames); err != nil {
+		return err
+	}
+
 	// Build config with empty agents for analysis.
 	cfg := config.NewOrgConfig(repoNames, enabledRepos, roles, nil, inferenceProviderName)
 
@@ -400,6 +424,31 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 	return creds, nil
 }
 
+// validateEnabledRepos checks that every --repo value exists in the
+// discovered (eligible) repo list. Repos filtered out by ListOrgRepos
+// (forks, archived) will not appear in discoveredNames, so this catches
+// the case where a user targets a fork or archived repo.
+func validateEnabledRepos(enabledRepos, discoveredNames []string) error {
+	if len(enabledRepos) == 0 {
+		return nil
+	}
+	discovered := make(map[string]bool, len(discoveredNames))
+	for _, name := range discoveredNames {
+		discovered[name] = true
+	}
+	var missing []string
+	for _, name := range enabledRepos {
+		if !discovered[name] {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("repos not found in %s: %s — they may be forks, archived, or misspelled",
+			"the discovered repo list", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // runInstall performs the full installation.
 func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, agentCreds []layers.AgentCredentials, inferenceProvider inference.Provider, inferenceProviderName string, vendorBinary bool) error {
 	printer.Header("Discovering repositories")
@@ -414,6 +463,11 @@ func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, o
 
 	printer.StepDone(fmt.Sprintf("Found %d repositories", len(allRepos)))
 	printer.Blank()
+
+	// Validate that every --repo value matches a discovered repo.
+	if err := validateEnabledRepos(enabledRepos, repoNames); err != nil {
+		return err
+	}
 
 	// Collect IDs for repos that will be enrolled.
 	enrolledRepoIDs := collectEnrolledRepoIDs(allRepos, enabledRepos)
@@ -602,10 +656,17 @@ func runAnalyze(ctx context.Context, client forge.Client, printer *ui.Printer, o
 		return fmt.Errorf("getting authenticated user: %w", err)
 	}
 
-	// Detect inference provider from existing config.
+	// Detect inference provider and auth mode from existing config.
 	var inferenceProvider inference.Provider
 	if providerName := loadExistingInferenceProvider(ctx, client, org); providerName != "" {
-		inferenceProvider = vertex.NewAnalyzeOnly()
+		mode := vertex.AuthModeSAKey
+		wifExists, err := client.RepoSecretExists(ctx, org, forge.ConfigRepoName, vertex.SecretWIFProvider)
+		if err != nil {
+			printer.StepWarn(fmt.Sprintf("Could not check WIF secret: %v (defaulting to SA key mode)", err))
+		} else if wifExists {
+			mode = vertex.AuthModeWIF
+		}
+		inferenceProvider = vertex.NewAnalyzeOnly(mode)
 	}
 
 	stack := buildLayerStack(org, client, cfg, printer, user, hasPrivate, nil, agentCreds, nil, inferenceProvider, false, nil, nil)
@@ -814,12 +875,11 @@ func promptDispatchToken(ctx context.Context, client forge.Client, printer *ui.P
 	)
 
 	printer.StepStart("Opening browser for dispatch token creation")
+	printer.StepInfo("URL: " + patURL)
 
 	browser := appsetup.DefaultBrowser{}
 	if err := browser.Open(ctx, patURL); err != nil {
 		printer.StepWarn(fmt.Sprintf("Could not open browser: %v", err))
-		printer.StepInfo("Open this URL manually:")
-		printer.StepInfo("  " + patURL)
 	} else {
 		printer.StepDone("Opened token creation page")
 	}

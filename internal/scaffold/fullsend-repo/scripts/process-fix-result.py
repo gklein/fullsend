@@ -10,6 +10,7 @@ Usage:
 Exit codes:
     0 — summary posted (or dry-run completed)
     1 — invalid arguments or unreadable input file
+    2 — failed to post summary comment (push may have already succeeded)
 """
 
 import json

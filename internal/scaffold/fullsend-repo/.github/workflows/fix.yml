@@ -44,6 +44,7 @@ jobs:
     permissions:
       actions: write
       contents: write
+      id-token: write
       issues: write
       packages: read
       pull-requests: write
@@ -194,7 +195,8 @@ jobs:
           # Uses the API (no checkout needed) to count commits authored by the
           # fix agent identity. Falls back to 1 if the query fails.
           FIX_COMMITS="$(gh api "repos/${SOURCE_REPO}/pulls/${PR_NUM}/commits" \
-            --paginate --jq '[.[] | select(.commit.author.name == "fullsend-fix")] | length' 2>/dev/null || echo "0")"
+            --paginate --jq '[.[] | select(.commit.author.name == "fullsend-fix")] | length' 2>/dev/null)" \
+            || { echo "::warning::Could not count prior fix commits — defaulting to cap"; FIX_COMMITS="${ITERATION_CAP:-5}"; }
           ITERATION=$(( FIX_COMMITS + 1 ))
           echo "Fix iteration: ${ITERATION} (${FIX_COMMITS} previous fix commits)" >&2
           echo "iteration=${ITERATION}" >> "${GITHUB_OUTPUT}"
@@ -220,6 +222,14 @@ jobs:
           persist-credentials: false
           ref: ${{ steps.context.outputs.head_ref }}
 
+      - name: Record pre-agent HEAD
+        id: pre-agent
+        working-directory: target-repo
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          echo "Pre-agent HEAD: ${SHA}"
+          echo "head=${SHA}" >> "${GITHUB_OUTPUT}"
+
       - name: Pre-fetch review body
         id: review-body
         env:
@@ -227,10 +237,12 @@ jobs:
           SOURCE_REPO: ${{ inputs.source_repo }}
           PR_NUM: ${{ steps.context.outputs.pr_number }}
           TRIGGER_SOURCE: ${{ inputs.trigger_source }}
+          ORG_NAME: ${{ github.repository_owner }}
         run: |
           REVIEW_FILE="${GITHUB_WORKSPACE}/review-body.txt"
+          REVIEW_BOT="${ORG_NAME}-review[bot]"
           gh api "repos/${SOURCE_REPO}/pulls/${PR_NUM}/reviews" \
-            --jq '[.[] | select(.state == "CHANGES_REQUESTED")] | last | .body // ""' \
+            --jq "[.[] | select(.state == \"CHANGES_REQUESTED\" and .user.login == \"${REVIEW_BOT}\")] | last | .body // \"\"" \
             > "${REVIEW_FILE}" 2>/dev/null || echo "" > "${REVIEW_FILE}"
           BYTE_COUNT="$(wc -c < "${REVIEW_FILE}")"
           echo "Pre-fetched review body: ${BYTE_COUNT} bytes"
@@ -254,7 +266,15 @@ jobs:
           HUMAN_INSTRUCTION: ${{ steps.context.outputs.instruction }}
         run: bash scripts/pre-fix.sh
 
-      - name: Authenticate to Google Cloud
+      - name: Authenticate to Google Cloud (WIF)
+        if: vars.FULLSEND_GCP_AUTH_MODE == 'wif'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.FULLSEND_GCP_WIF_SA_EMAIL }}
+
+      - name: Authenticate to Google Cloud (SA key)
+        if: vars.FULLSEND_GCP_AUTH_MODE != 'wif'
         uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.FULLSEND_GCP_SA_KEY_JSON }}
@@ -267,6 +287,9 @@ jobs:
               echo "::add-mask::${val}"
             fi
           done
+
+      - name: Prepare sandbox credentials
+        run: bash scripts/prepare-sandbox-credentials.sh
 
       - name: Setup agent environment
         env:
@@ -294,5 +317,6 @@ jobs:
           HUMAN_INSTRUCTION: ${{ steps.context.outputs.instruction }}
           FIX_ITERATION: ${{ steps.context.outputs.iteration }}
           REVIEW_BODY_FILE: ${{ steps.review-body.outputs.review_file }}
+          PRE_AGENT_HEAD: ${{ steps.pre-agent.outputs.head }}
         with:
           agent: fix

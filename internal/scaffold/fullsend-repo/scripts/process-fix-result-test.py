@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Tests for process-fix-result.py."""
 
+import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -159,8 +162,6 @@ class TestCommentTruncation(unittest.TestCase):
             "actions": [],
         }
         body = build_summary_body(data)
-        import io
-
         captured = io.StringIO()
         sys.stdout = captured
         post_summary("org/repo", "1", body, dry_run=True)
@@ -195,14 +196,38 @@ class TestUnknownActionType(unittest.TestCase):
             json.dump(data, f)
             f.flush()
             try:
-                import io
-
                 captured = io.StringIO()
                 sys.stderr = captured
                 result = main([f.name, "org/repo", "1", "--dry-run"])
                 sys.stderr = sys.__stderr__
                 self.assertEqual(result, 0)
                 self.assertIn("Unknown action type 'exfiltrate'", captured.getvalue())
+            finally:
+                os.unlink(f.name)
+
+
+class TestPostSummaryFailure(unittest.TestCase):
+    def test_returns_2_when_comment_post_fails(self):
+        data = {
+            "pr_number": 42,
+            "trigger_source": "bot",
+            "actions": [
+                {"type": "fix", "finding": "nil check", "description": "Fixed"},
+            ],
+            "summary": "All good.",
+            "tests_passed": True,
+            "files_changed": ["foo.go"],
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            f.flush()
+            try:
+                with patch(
+                    "subprocess.run",
+                    side_effect=subprocess.CalledProcessError(1, "gh", stderr="API error"),
+                ):
+                    result = main([f.name, "org/repo", "42"])
+                self.assertEqual(result, 2)
             finally:
                 os.unlink(f.name)
 
