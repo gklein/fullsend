@@ -875,12 +875,11 @@ func promptDispatchToken(ctx context.Context, client forge.Client, printer *ui.P
 	)
 
 	printer.StepStart("Opening browser for dispatch token creation")
+	printer.StepInfo("URL: " + patURL)
 
 	browser := appsetup.DefaultBrowser{}
 	if err := browser.Open(ctx, patURL); err != nil {
 		printer.StepWarn(fmt.Sprintf("Could not open browser: %v", err))
-		printer.StepInfo("Open this URL manually:")
-		printer.StepInfo("  " + patURL)
 	} else {
 		printer.StepDone("Opened token creation page")
 	}
