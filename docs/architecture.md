@@ -365,49 +365,39 @@ Each org is a fully independent instance. They choose when to upgrade. They conf
 Independent orgs can optionally collaborate across the forge boundary. A downstream org — a vendor, contributor, or consumer — runs its own fullsend instance for internal work. An agent in that downstream instance can push feature proposals upstream to a project that has its own full SDLC.
 
 ```
-  ┌─── Downstream Org (vendor/consumer) ─────────────────────────────────┐
-  │                                                                      │
-  │  Own fullsend instance                                               │
-  │                                                                      │
-  │  ┌──────────────────────────────────┐                                │
-  │  │ Internal SDLC loop               │                                │
-  │  │                                  │                                │
-  │  │  Backlog prioritization          │  Business priorities drive     │
-  │  │  Refinement + scoping            │  what to propose upstream      │
-  │  │  Feature proposal drafting       │                                │
-  │  └──────────────┬───────────────────┘                                │
-  │                 │                                                    │
-  │  ┌──────────────▼───────────────────┐       forge boundary           │
-  │  │ Upstreaming agent                │       (issues, PRs)            │
-  │  │                                  ├───────────────────────────┐    │
-  │  │ Runs in downstream instance.     │                           │    │
-  │  │ Drafts proposals, opens issues   │                           │    │
-  │  │ or PRs on upstream project.      │                           │    │
-  │  └──────────────────────────────────┘                           │    │
-  │                                                                 │    │
-  └─────────────────────────────────────────────────────────────────│────┘
-                                                                    │
-  ┌─────────────────────────────────────────────────────────────────▼────┐
-  │  Upstream Project                                                    │
-  │                                                                      │
-  │  Own SDLC loop (fullsend, or any other tool)                         │
-  │                                                                      │
-  │    ┌─────────────────────────────────────┐                           │
-  │    │ Refinement ► Prioritization ► Exec  │                           │
-  │    │ ╱                                ╲  │                           │
-  │    │ Feedback ◄ Monitor ◄── Delivery     │                           │
-  │    └─────────────────────────────────────┘                           │
-  │                                                                      │
-  │  Receives proposals as issues/PRs.                                   │
-  │  Evaluates against its own priorities,                               │
-  │  architectural invariants, and governance.                           │
-  │  May accept, reject, or request changes —                            │
-  │  just like any other contribution.                                   │
-  │                                                                      │
-  └──────────────────────────────────────────────────────────────────────┘
+  ┌─── Downstream Org (vendor/consumer) ───────────────────────────────────┐
+  │                                                                        │
+  │         Refinement ──► Prioritization ──► Execution  ───────────────┐  │
+  │        ╱                                                            │  │
+  │  Discovery                                       Verification       │  │
+  │        ╲                                        ╱      ▲            │  │
+  │         Feedback ◄─── Monitor ◄─────── Delivery        │            │  │
+  │                                                        │            │  │
+  └────────────────────────────────────────────────────────│────────────│──┘
+                                                           │            │
+                                                           │            │
+                                                           │            │
+                                                           │            │
+                                                        ┌──│────────────│────────────────────────────────────────────────────────┐
+                                                        │  │            ▼                                                        │
+                                                        │  │            Refinement ──► Prioritization ──► Execution              │
+                                                        │  │           ╱                                          ╲              │
+                                                        │  │     Discovery                                         Verification  │
+                                                        │  │           ╲                                          ╱              │
+                                                        │  │           Feedback ◄────── Monitor ◄──────── Release                │
+                                                        │  │                                                 │                   │
+                                                        │  └─────────────────────────────────────────────────┘                   │
+                                                        │                                                                        │
+                                                        └───────── Upstream Project ─────────────────────────────────────────────┘
 ```
 
-The forge (GitHub) is the interface between downstream and upstream. The downstream org's upstreaming agent creates issues or PRs on the upstream project. The upstream project evaluates those contributions through its own SDLC — the same way it evaluates any human or agent contribution. The upstream project doesn't need to know or care that the proposal was generated by an agent in a downstream fullsend instance.
+Both orgs run the full [SDLC loop](vision.md#the-agentic-sdlc). The two cross-org handoff points are:
+
+1. **Downstream Prioritization → Upstreaming agent → Upstream Refinement.** When the downstream org's SDLC prioritizes work that belongs upstream, the handoff at Prioritization → Execution goes to an *upstreaming agent* instead of a coding agent. This agent drafts proposals (issues or PRs) and ferries them into the upstream project's Refinement or Prioritization process via the forge.
+
+2. **Upstream Delivery → Downstream Verification.** When the upstream project delivers a release, the downstream org consumes it. The new release enters the downstream SDLC at Verification — the downstream validates against its own integration tests, compatibility requirements, and deployment constraints.
+
+The forge (GitHub) is the interface between the two orgs. The upstream project doesn't need to know or care that the proposal was generated by an agent in a downstream fullsend instance — it evaluates contributions through its own SDLC the same way it evaluates any human or agent contribution.
 
 This connects to the [downstream/upstream problem doc](problems/downstream-upstream.md), which explores how competing sources of strategic intent get reconciled when multiple downstream contributors propose features into the same upstream project.
 
