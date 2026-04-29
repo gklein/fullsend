@@ -74,6 +74,7 @@ jobs:
           echo "Scanning for workflows with stage: $STAGE"
 
           dispatched=0
+          dispatched_workflows=()
 
           for workflow in .github/workflows/*.yml .github/workflows/*.yaml; do
             # Skip if file doesn't exist (glob expansion when no matches)
@@ -101,6 +102,7 @@ jobs:
               exit 1
             fi
             dispatched=$((dispatched + 1))
+            dispatched_workflows+=("$workflow_name")
           done
 
           if [[ $dispatched -eq 0 ]]; then
@@ -108,4 +110,4 @@ jobs:
             exit 1
           fi
 
-          echo "Successfully dispatched $dispatched workflow(s) for stage $STAGE"
+          echo "Successfully dispatched $dispatched workflow(s) for stage $STAGE: ${dispatched_workflows[*]}"

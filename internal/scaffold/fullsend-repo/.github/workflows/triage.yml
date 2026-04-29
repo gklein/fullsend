@@ -90,8 +90,8 @@ jobs:
       - name: Set GCP_OIDC_TOKEN_FILE for non-WIF
         if: vars.FULLSEND_GCP_AUTH_MODE != 'wif'
         run: |
-          touch /tmp/empty-oidc-token
-          echo "GCP_OIDC_TOKEN_FILE=/tmp/empty-oidc-token" >> "${GITHUB_ENV}"
+          touch "$RUNNER_TEMP/empty-oidc-token"
+          echo "GCP_OIDC_TOKEN_FILE=$RUNNER_TEMP/empty-oidc-token" >> "${GITHUB_ENV}"
 
       - name: Mask GCP credential file paths
         run: |

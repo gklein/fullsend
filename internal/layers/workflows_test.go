@@ -162,11 +162,7 @@ func TestWorkflowsLayer_Analyze_AllPresent(t *testing.T) {
 
 	assert.Equal(t, "workflows", report.Name)
 	assert.Equal(t, StatusInstalled, report.Status)
-<<<<<<< HEAD
 	assert.Len(t, report.Details, len(managedFiles))
-=======
-	assert.Len(t, report.Details, 39)
->>>>>>> 6d9f91f (Add dispatch workflow architecture with workflow_dispatch triggers)
 }
 
 func TestWorkflowsLayer_Analyze_NonePresent(t *testing.T) {
@@ -180,11 +176,7 @@ func TestWorkflowsLayer_Analyze_NonePresent(t *testing.T) {
 
 	assert.Equal(t, "workflows", report.Name)
 	assert.Equal(t, StatusNotInstalled, report.Status)
-<<<<<<< HEAD
 	assert.Len(t, report.WouldInstall, len(managedFiles))
-=======
-	assert.Len(t, report.WouldInstall, 39)
->>>>>>> 6d9f91f (Add dispatch workflow architecture with workflow_dispatch triggers)
 }
 
 func TestWorkflowsLayer_Analyze_Partial(t *testing.T) {
