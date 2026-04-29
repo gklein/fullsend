@@ -85,6 +85,8 @@ func TestDispatchWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "set -euo pipefail")
 	assert.Contains(t, s, "dispatched=0")
 	assert.Contains(t, s, "No workflows found for stage")
+	assert.Contains(t, s, "|| true")
+	assert.Contains(t, s, "permissions: {}")
 }
 
 func TestWalkFullsendRepo(t *testing.T) {

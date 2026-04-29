@@ -21,6 +21,8 @@ on:
         required: true
         type: string
 
+permissions: {}
+
 jobs:
   dispatch:
     runs-on: ubuntu-latest
@@ -65,7 +67,8 @@ jobs:
             # Extract stage from comment (first line with # fullsend-stage:)
             # Format: # fullsend-stage: <stage-name>
             # Stage names must not contain colons or trailing whitespace
-            workflow_stage=$(grep -E '^# fullsend-stage:' "$workflow" | head -1 | sed -n 's/^# fullsend-stage: *\([^ ]*\).*/\1/p')
+            # || true prevents pipefail abort when grep finds no match
+            workflow_stage=$(grep -E '^# fullsend-stage:' "$workflow" | head -1 | sed -n 's/^# fullsend-stage: *\([^ ]*\).*/\1/p' || true)
 
             # Skip if no stage marker or doesn't match
             [[ -z "$workflow_stage" ]] && continue
