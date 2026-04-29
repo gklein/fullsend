@@ -166,10 +166,28 @@ jobs:
         && github.event.review.user.login == format('{0}-review[bot]', github.repository_owner)
         && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
     steps:
+      - name: Build minimal payload
+        id: payload
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+        run: |
+          set -euo pipefail
+          PAYLOAD=$(jq -cn \
+            --arg pn "${PR_NUMBER}" \
+            --arg hr "${HEAD_REF}" \
+            --arg br "${BASE_REF}" \
+            --arg hrepo "${HEAD_REPO}" \
+            --arg brepo "${BASE_REPO}" \
+            '{pull_request: {number: ($pn | tonumber), head: {ref: $hr, repo: {full_name: $hrepo}}, base: {ref: $br, repo: {full_name: $brepo}}}}')
+          echo "json=$PAYLOAD" >> "$GITHUB_OUTPUT"
       - name: Dispatch fix (bot-triggered)
         env:
           GH_TOKEN: ${{ secrets.FULLSEND_DISPATCH_TOKEN }}
-          EVENT_PAYLOAD: ${{ toJSON(github.event) }}
+          EVENT_PAYLOAD: ${{ steps.payload.outputs.json }}
           EVENT_TYPE: ${{ github.event_name }}
           SOURCE_REPO: ${{ github.repository }}
           DISPATCH_REPO: ${{ github.repository_owner }}/.fullsend
@@ -203,18 +221,30 @@ jobs:
       - name: Block fork PRs
         env:
           GH_TOKEN: ${{ secrets.FULLSEND_DISPATCH_TOKEN }}
+          PR_URL: ${{ github.event.issue.pull_request.url }}
         run: |
-          PR_URL="${{ github.event.issue.pull_request.url }}"
           HEAD_REPO="$(gh api "${PR_URL}" --jq '.head.repo.full_name')"
           BASE_REPO="$(gh api "${PR_URL}" --jq '.base.repo.full_name')"
           if [ "${HEAD_REPO}" != "${BASE_REPO}" ]; then
             echo "::error::Fix agent cannot run on fork PRs (${HEAD_REPO} != ${BASE_REPO})"
             exit 1
           fi
+      - name: Build minimal payload
+        id: payload
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          PAYLOAD=$(jq -cn \
+            --arg in "${ISSUE_NUMBER}" \
+            --arg cb "${COMMENT_BODY:-}" \
+            '{issue: {number: ($in | tonumber)}, comment: {body: $cb}}')
+          echo "json=$PAYLOAD" >> "$GITHUB_OUTPUT"
       - name: Dispatch fix (human-triggered)
         env:
           GH_TOKEN: ${{ secrets.FULLSEND_DISPATCH_TOKEN }}
-          EVENT_PAYLOAD: ${{ toJSON(github.event) }}
+          EVENT_PAYLOAD: ${{ steps.payload.outputs.json }}
           EVENT_TYPE: ${{ github.event_name }}
           SOURCE_REPO: ${{ github.repository }}
           DISPATCH_REPO: ${{ github.repository_owner }}/.fullsend

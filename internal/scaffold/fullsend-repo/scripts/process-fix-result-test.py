@@ -99,6 +99,22 @@ class TestBuildSummaryBody(unittest.TestCase):
         self.assertIn("B, C", body)
         self.assertIn("Simpler", body)
 
+    def test_strategy_change_rendered(self):
+        data = {
+            "summary": "Done.",
+            "tests_passed": True,
+            "actions": [{"type": "fix", "finding": "bug", "description": "Fixed"}],
+            "strategy_change": "Switched from inline fix to extract-method approach",
+        }
+        body = build_summary_body(data)
+        self.assertIn("Strategy change:", body)
+        self.assertIn("extract-method approach", body)
+
+    def test_strategy_change_omitted_when_empty(self):
+        data = {"summary": "Done.", "tests_passed": True, "actions": []}
+        body = build_summary_body(data)
+        self.assertNotIn("Strategy change:", body)
+
     def test_no_decision_points(self):
         data = {"summary": "Done.", "tests_passed": True, "actions": []}
         body = build_summary_body(data)
