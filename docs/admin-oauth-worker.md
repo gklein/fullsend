@@ -26,6 +26,10 @@ Using `Referer` (even gated on `Sec-Fetch-Site`) is **weaker** than `Origin` for
 
 **Explicitly:** `Referer` is **not** used to authenticate or authorize the GitHub **token exchange**. Exchange still requires a valid **`Origin`**, PKCE, Turnstile verification, `redirect_uri` allowlist, GitHub `code` + app credentials, and rate limits (see below).
 
+## `GET /api/github/user` response shape
+
+Successful responses are **not** a verbatim pass-through of GitHub’s `/user` JSON. The Worker returns only **`login`**, **`name`**, and **`avatar_url`** (all other GitHub fields are stripped) so the browser receives the smallest profile the admin UI needs, including for follow-on features that display avatars.
+
 ## Why there is no `ADMIN_OAUTH_ENABLED`-style flag
 
 Admin OAuth is not gated on a separate **boolean** environment variable (“feature off”). Instead, **misconfiguration or absence of required secrets** naturally prevents the surface from working or from being meaningfully exploitable:

@@ -16,6 +16,10 @@ describe("isAllowedOAuthRedirectUri", () => {
     ).toBe(true);
   });
 
+  it("allows any HTTPS origin at /admin/ (preview URLs; GitHub-registered callbacks + PKCE gate abuse)", () => {
+    expect(isAllowedOAuthRedirectUri("https://evil.com/admin/")).toBe(true);
+  });
+
   it("allows loopback HTTP with /admin/ path", () => {
     expect(
       isAllowedOAuthRedirectUri("http://localhost:5173/admin/"),

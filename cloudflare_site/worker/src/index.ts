@@ -366,7 +366,12 @@ async function handleOAuthToken(
   );
 }
 
-/** Server-side GitHub /user so the browser never hits api.github.com (no CORS). */
+/**
+ * Server-side GitHub /user so the browser never hits api.github.com (no CORS).
+ * Returns a minimal JSON object (`login`, `name`, `avatar_url`) so the SPA never receives
+ * the full GitHub profile (email, plan, etc.). Shape matches fields consumed today and on
+ * follow-on admin work (e.g. org list UI uses `avatar_url`).
+ */
 async function handleGithubUser(
   request: Request,
   env: Env,
@@ -413,13 +418,36 @@ async function handleGithubUser(
   });
 
   const text = await ghRes.text();
-  return new Response(text, {
-    status: ghRes.status,
-    headers: {
-      "content-type": ghRes.headers.get("content-type") ?? "application/json",
-      ...cors,
-    },
-  });
+  const forwardHeaders = {
+    "content-type": ghRes.headers.get("content-type") ?? "application/json",
+    ...cors,
+  };
+
+  if (!ghRes.ok) {
+    return new Response(text, { status: ghRes.status, headers: forwardHeaders });
+  }
+
+  try {
+    const raw = JSON.parse(text) as Record<string, unknown>;
+    const login = typeof raw.login === "string" ? raw.login : "";
+    if (!login) {
+      return new Response(JSON.stringify({ error: "invalid_github_user_payload" }), {
+        status: 502,
+        headers: { "content-type": "application/json", ...cors },
+      });
+    }
+    const name = typeof raw.name === "string" ? raw.name : null;
+    const avatar_url =
+      typeof raw.avatar_url === "string" && raw.avatar_url.length > 0
+        ? raw.avatar_url
+        : null;
+    return new Response(JSON.stringify({ login, name, avatar_url }), {
+      status: 200,
+      headers: { "content-type": "application/json", ...cors },
+    });
+  } catch {
+    return new Response(text, { status: ghRes.status, headers: forwardHeaders });
+  }
 }
 
 async function handleAdminApi(

@@ -49,6 +49,9 @@ export function isAllowedOAuthRedirectUri(redirectUri: string): boolean {
       u.hostname === "[::1]"
     );
   }
+  // HTTPS: any host with an `/admin/` callback path is allowed so preview Workers URLs work
+  // without listing every hostname. The GitHub App’s registered callback URLs, PKCE, and
+  // tab-binding (`Origin` on token exchange) are the primary redirect protections.
   return u.protocol === "https:";
 }
 

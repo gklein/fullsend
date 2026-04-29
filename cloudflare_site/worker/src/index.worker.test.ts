@@ -218,10 +218,19 @@ describe("site worker admin API", () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.startsWith("https://api.github.com/user")) {
-        return new Response(JSON.stringify({ login: "octocat" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            login: "octocat",
+            name: "Octo Cat",
+            avatar_url: "https://avatars.githubusercontent.com/u/1?v=4",
+            email: "octocat@example.com",
+            two_factor_authentication: true,
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       }
       return new Response(`unexpected fetch: ${url}`, { status: 500 });
     }) as typeof fetch;
@@ -240,8 +249,14 @@ describe("site worker admin API", () => {
     const res = await worker.fetch(req, env, ctx);
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { login?: string };
-    expect(body.login).toBe("octocat");
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({
+      login: "octocat",
+      name: "Octo Cat",
+      avatar_url: "https://avatars.githubusercontent.com/u/1?v=4",
+    });
+    expect(body).not.toHaveProperty("email");
+    expect(body).not.toHaveProperty("two_factor_authentication");
   });
 
   it("returns 429 rate_limited when OAUTH_TOKEN_RATE_LIMITER denies", async () => {

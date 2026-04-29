@@ -39,6 +39,24 @@ describe("fetchGitHubUser", () => {
     });
   });
 
+  it("accepts Worker-narrowed /user JSON including avatar_url (field reserved for follow-on UI)", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          login: "u",
+          name: null,
+          avatar_url: "https://avatars.githubusercontent.com/u/1?v=4",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(fetchGitHubUser("t")).resolves.toEqual({
+      login: "u",
+      name: null,
+    });
+  });
+
   it("throws GitHubUserRequestError when response is not ok", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response("forbidden body", { status: 403 }),
