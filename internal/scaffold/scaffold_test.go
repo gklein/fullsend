@@ -18,6 +18,7 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		".github/workflows/triage.yml",
 		".github/workflows/code.yml",
 		".github/workflows/review.yml",
+		".github/workflows/fix.yml",
 		".github/workflows/repo-maintenance.yml",
 		".github/actions/fullsend/action.yml",
 		".github/scripts/setup-agent-env.sh",
@@ -57,6 +58,7 @@ func TestShimTemplateContent(t *testing.T) {
 	assert.Contains(t, s, "dispatch-triage")
 	assert.Contains(t, s, "dispatch-code")
 	assert.Contains(t, s, "dispatch-review")
+	assert.Contains(t, s, "dispatch-fix")
 	assert.Contains(t, s, "permissions:")
 	assert.Contains(t, s, "contents: read")
 	assert.Contains(t, s, "FULLSEND_DISPATCH_TOKEN")
@@ -64,6 +66,7 @@ func TestShimTemplateContent(t *testing.T) {
 	assert.Contains(t, s, "stage=triage")
 	assert.Contains(t, s, "stage=code")
 	assert.Contains(t, s, "stage=review")
+	assert.Contains(t, s, "stage=fix")
 }
 
 func TestDispatchWorkflowContent(t *testing.T) {
@@ -173,6 +176,26 @@ func TestReviewWorkflowContent(t *testing.T) {
 	// Verify concurrency group prevents overlapping runs
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-review-")
+	assert.Contains(t, s, "cancel-in-progress: true")
+}
+
+func TestFixWorkflowContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/fix.yml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "# fullsend-stage: fix")
+	assert.Contains(t, s, "workflow_dispatch")
+	assert.Contains(t, s, "event_type")
+	assert.Contains(t, s, "source_repo")
+	assert.Contains(t, s, "event_payload")
+	assert.Contains(t, s, "trigger_source")
+	assert.Contains(t, s, "FULLSEND_CODER_CLIENT_ID")
+	assert.Contains(t, s, "sandbox-token")
+	assert.Contains(t, s, "push-token")
+	assert.Contains(t, s, "RUNNER_TEMP/empty-oidc-token")
+	// Verify concurrency group prevents overlapping runs
+	assert.Contains(t, s, "concurrency:")
+	assert.Contains(t, s, "fullsend-fix-")
 	assert.Contains(t, s, "cancel-in-progress: true")
 }
 
