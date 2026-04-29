@@ -1,10 +1,15 @@
 package cli
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fullsend-ai/fullsend/internal/forge"
+	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
 func TestAdminCommand_HasSubcommands(t *testing.T) {
@@ -165,4 +170,41 @@ func TestResolveToken_GitHubTokenFallback(t *testing.T) {
 	token, err := resolveToken()
 	require.NoError(t, err)
 	assert.Equal(t, "github-token-456", token)
+}
+
+type discardWriter struct{}
+
+func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+func TestEnsureConfigRepoExists_CreatesWhenMissing(t *testing.T) {
+	client := forge.NewFakeClient()
+	printer := ui.New(&discardWriter{})
+
+	err := ensureConfigRepoExists(context.Background(), client, printer, "myorg")
+	require.NoError(t, err)
+	require.Len(t, client.CreatedRepos, 1)
+	assert.Equal(t, ".fullsend", client.CreatedRepos[0].Name)
+	assert.True(t, client.CreatedRepos[0].Private)
+}
+
+func TestEnsureConfigRepoExists_NoOpWhenExists(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.Repos = []forge.Repository{
+		{Name: ".fullsend", FullName: "myorg/.fullsend"},
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := ensureConfigRepoExists(context.Background(), client, printer, "myorg")
+	require.NoError(t, err)
+	assert.Empty(t, client.CreatedRepos)
+}
+
+func TestEnsureConfigRepoExists_ReturnsError(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.Errors["GetRepo"] = fmt.Errorf("network error")
+	printer := ui.New(&discardWriter{})
+
+	err := ensureConfigRepoExists(context.Background(), client, printer, "myorg")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "checking for config repo")
 }

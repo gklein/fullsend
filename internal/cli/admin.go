@@ -186,6 +186,9 @@ func newInstallCmd() *cobra.Command {
 			// Collect agent credentials via app setup.
 			var agentCreds []layers.AgentCredentials
 			if !skipAppSetup {
+				if err := ensureConfigRepoExists(ctx, client, printer, org); err != nil {
+					return err
+				}
 				creds, err := runAppSetup(ctx, client, printer, org, roles)
 				if err != nil {
 					return err
@@ -399,6 +402,12 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 		return client.RepoSecretExists(ctx, org, forge.ConfigRepoName, secretName)
 	})
 
+	// Store PEM immediately after app creation to survive partial failures.
+	setup = setup.WithStoreSecret(func(sctx context.Context, role, pem string) error {
+		secretName := fmt.Sprintf("FULLSEND_%s_APP_PRIVATE_KEY", strings.ToUpper(role))
+		return client.CreateRepoSecret(sctx, org, forge.ConfigRepoName, secretName, pem)
+	})
+
 	var creds []layers.AgentCredentials
 	for _, role := range roles {
 		appCreds, err := setup.Run(ctx, org, role)
@@ -422,6 +431,33 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 
 	printer.Blank()
 	return creds, nil
+}
+
+// ensureConfigRepoExists creates the .fullsend config repo if it doesn't
+// already exist. This is called before app setup so PEM secrets can be
+// stored immediately after each app is created.
+func ensureConfigRepoExists(ctx context.Context, client forge.Client, printer *ui.Printer, org string) error {
+	_, err := client.GetRepo(ctx, org, forge.ConfigRepoName)
+	if err == nil {
+		return nil
+	}
+	if !forge.IsNotFound(err) {
+		return fmt.Errorf("checking for config repo: %w", err)
+	}
+
+	printer.StepStart("Creating " + forge.ConfigRepoName + " repository")
+	desc := fmt.Sprintf("fullsend configuration for %s", org)
+	if _, err := client.CreateRepo(ctx, org, forge.ConfigRepoName, desc, true); err != nil {
+		recheck, recheckErr := client.GetRepo(ctx, org, forge.ConfigRepoName)
+		if recheckErr == nil && recheck != nil {
+			printer.StepInfo(forge.ConfigRepoName + " repository already exists")
+			return nil
+		}
+		printer.StepFail("Failed to create " + forge.ConfigRepoName + " repository")
+		return fmt.Errorf("creating config repo: %w", err)
+	}
+	printer.StepDone("Created " + forge.ConfigRepoName + " repository")
+	return nil
 }
 
 // validateEnabledRepos checks that every --repo value exists in the

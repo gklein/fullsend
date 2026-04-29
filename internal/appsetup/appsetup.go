@@ -47,6 +47,9 @@ type BrowserOpener interface {
 // SecretExistsFunc checks if a secret exists for a given role.
 type SecretExistsFunc func(role string) (bool, error)
 
+// StoreSecretFunc stores a PEM secret for a given role immediately after app creation.
+type StoreSecretFunc func(ctx context.Context, role, pem string) error
+
 // DefaultBrowser opens URLs using platform-specific commands.
 type DefaultBrowser struct{}
 
@@ -103,6 +106,7 @@ type Setup struct {
 	ui           *ui.Printer
 	knownSlugs   map[string]string
 	secretExists SecretExistsFunc
+	storeSecret  StoreSecretFunc
 	permErrors   []string
 }
 
@@ -130,14 +134,23 @@ func (s *Setup) WithSecretExists(fn SecretExistsFunc) *Setup {
 	return s
 }
 
+// WithStoreSecret sets the function used to store a PEM secret immediately
+// after creating a new app, before proceeding to the next role.
+func (s *Setup) WithStoreSecret(fn StoreSecretFunc) *Setup {
+	s.storeSecret = fn
+	return s
+}
+
 // Run creates or reuses a GitHub App for the given org and role.
 //
 // The flow:
 //  1. Check for an existing installation matching this org/role.
 //  2. If found and the PEM secret exists, offer to reuse.
 //  3. If found but PEM is lost, return an error.
-//  4. If not found, run the manifest flow to create a new app.
-//  5. After creation, ensure the app is installed on the org.
+//  4. If not installed but app exists (PEM stored, installation missing),
+//     resume by installing the existing app on the org.
+//  5. If not found, run the manifest flow to create a new app.
+//  6. After creation, store the PEM immediately, then install on the org.
 func (s *Setup) Run(ctx context.Context, org, role string) (*AppCredentials, error) {
 	slug := ExpectedAppSlug(org, role)
 	s.ui.StepStart(fmt.Sprintf("Checking for existing app: %s", slug))
@@ -151,11 +164,31 @@ func (s *Setup) Run(ctx context.Context, org, role string) (*AppCredentials, err
 		return s.handleExistingApp(ctx, inst, org, role)
 	}
 
+	// No installation — check if app was created in a previous run that
+	// failed before the app was installed on the org.
+	if recovered, err := s.recoverCreatedApp(ctx, org, role, slug); err != nil {
+		return nil, err
+	} else if recovered != nil {
+		if err := s.ensureInstalled(ctx, org, recovered.Slug); err != nil {
+			return nil, fmt.Errorf("ensuring installation: %w", err)
+		}
+		return recovered, nil
+	}
+
 	// No existing app found — run the manifest flow.
 	s.ui.StepStart(fmt.Sprintf("Creating new GitHub App: %s", slug))
 	creds, err := s.runManifestFlow(ctx, org, role)
 	if err != nil {
 		return nil, fmt.Errorf("manifest flow: %w", err)
+	}
+
+	// Store PEM immediately so it survives partial install failures.
+	if s.storeSecret != nil && creds.PEM != "" {
+		s.ui.StepStart(fmt.Sprintf("Storing private key for %s", role))
+		if err := s.storeSecret(ctx, role, creds.PEM); err != nil {
+			return nil, fmt.Errorf("storing secret for %s: %w", role, err)
+		}
+		s.ui.StepDone(fmt.Sprintf("Stored private key for %s", role))
 	}
 
 	// Ensure the new app is installed on the org.
@@ -164,6 +197,49 @@ func (s *Setup) Run(ctx context.Context, org, role string) (*AppCredentials, err
 	}
 
 	return creds, nil
+}
+
+// recoverCreatedApp handles partial failure recovery: the app was created
+// and its PEM stored, but the process exited before the app was installed
+// on the org. Detects this by checking if the PEM secret exists and the
+// app is reachable via GetAppClientID.
+func (s *Setup) recoverCreatedApp(ctx context.Context, org, role, slug string) (*AppCredentials, error) {
+	if s.secretExists == nil {
+		return nil, nil
+	}
+
+	exists, err := s.secretExists(role)
+	if err != nil {
+		return nil, fmt.Errorf("checking secret for role %s: %w", role, err)
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	// PEM secret exists — try to find the app. Check known slug first,
+	// then expected slug convention.
+	candidates := []string{slug}
+	if s.knownSlugs != nil {
+		if ks, ok := s.knownSlugs[role]; ok {
+			candidates = []string{ks, slug}
+		}
+	}
+
+	for _, candidate := range candidates {
+		clientID, err := s.client.GetAppClientID(ctx, candidate)
+		if err != nil {
+			continue
+		}
+
+		s.ui.StepDone(fmt.Sprintf("Recovering previously created app: %s", candidate))
+		return &AppCredentials{
+			Slug:     candidate,
+			Name:     candidate,
+			ClientID: clientID,
+		}, nil
+	}
+
+	return nil, nil
 }
 
 // findExistingInstallation looks for an installation matching the role,
