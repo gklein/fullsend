@@ -799,3 +799,17 @@ func (f *FakeClient) SetOrgSecretRepos(_ context.Context, org, name string, repo
 	f.OrgSecretRepoIDs[org+"/"+name] = repoIDs
 	return nil
 }
+
+func (f *FakeClient) GetOrgSecretRepos(_ context.Context, org, name string) ([]int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("GetOrgSecretRepos"); e != nil {
+		return nil, e
+	}
+
+	if f.OrgSecretRepoIDs == nil {
+		return nil, nil
+	}
+	return f.OrgSecretRepoIDs[org+"/"+name], nil
+}

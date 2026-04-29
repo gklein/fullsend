@@ -1419,6 +1419,30 @@ func (c *LiveClient) DeleteOrgSecret(ctx context.Context, org, name string) erro
 	return &APIError{StatusCode: resp.StatusCode, Message: "unexpected status deleting org secret"}
 }
 
+// GetOrgSecretRepos returns the repository IDs that have access to an org secret.
+func (c *LiveClient) GetOrgSecretRepos(ctx context.Context, org, name string) ([]int64, error) {
+	resp, err := c.get(ctx, fmt.Sprintf("/orgs/%s/actions/secrets/%s/repositories", org, name))
+	if err != nil {
+		return nil, fmt.Errorf("get org secret repos for %s: %w", name, err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Repositories []struct {
+			ID int64 `json:"id"`
+		} `json:"repositories"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode org secret repos for %s: %w", name, err)
+	}
+
+	ids := make([]int64, len(result.Repositories))
+	for i, r := range result.Repositories {
+		ids[i] = r.ID
+	}
+	return ids, nil
+}
+
 // SetOrgSecretRepos sets the list of repositories that can access an org secret.
 func (c *LiveClient) SetOrgSecretRepos(ctx context.Context, org, name string, repoIDs []int64) error {
 	if repoIDs == nil {

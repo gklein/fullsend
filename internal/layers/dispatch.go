@@ -138,7 +138,8 @@ func (l *DispatchTokenLayer) Uninstall(ctx context.Context) error {
 	return nil
 }
 
-// Analyze checks whether the dispatch token org secret exists.
+// Analyze checks whether the dispatch token org secret exists and is
+// accessible in all enrolled repos.
 func (l *DispatchTokenLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	report := &LayerReport{Name: l.Name()}
 
@@ -147,13 +148,43 @@ func (l *DispatchTokenLayer) Analyze(ctx context.Context) (*LayerReport, error) 
 		return nil, fmt.Errorf("checking org secret %s: %w", dispatchTokenName, err)
 	}
 
-	if exists {
-		report.Status = StatusInstalled
-		report.Details = append(report.Details, dispatchTokenName+" org secret exists")
-	} else {
+	if !exists {
 		report.Status = StatusNotInstalled
 		report.WouldInstall = append(report.WouldInstall, "create "+dispatchTokenName+" org secret")
+		return report, nil
 	}
 
+	report.Details = append(report.Details, dispatchTokenName+" org secret exists")
+
+	// Check that enrolled repos can access the secret.
+	if len(l.enrolledRepoIDs) > 0 {
+		accessibleIDs, err := l.client.GetOrgSecretRepos(ctx, l.org, dispatchTokenName)
+		if err != nil {
+			return nil, fmt.Errorf("checking org secret %s repo access: %w", dispatchTokenName, err)
+		}
+
+		accessible := make(map[int64]bool, len(accessibleIDs))
+		for _, id := range accessibleIDs {
+			accessible[id] = true
+		}
+
+		var inaccessible []int64
+		for _, id := range l.enrolledRepoIDs {
+			if !accessible[id] {
+				inaccessible = append(inaccessible, id)
+			}
+		}
+
+		if len(inaccessible) > 0 {
+			report.Status = StatusDegraded
+			report.Details = append(report.Details,
+				fmt.Sprintf("%s inaccessible in %d enrolled repo(s)", dispatchTokenName, len(inaccessible)))
+			report.WouldFix = append(report.WouldFix,
+				fmt.Sprintf("grant %s access to %d repo(s)", dispatchTokenName, len(inaccessible)))
+			return report, nil
+		}
+	}
+
+	report.Status = StatusInstalled
 	return report, nil
 }
