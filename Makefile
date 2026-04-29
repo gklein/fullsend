@@ -101,6 +101,7 @@ script-test:
 	bash internal/scaffold/fullsend-repo/scripts/post-triage-test.sh
 	bash internal/scaffold/fullsend-repo/scripts/post-code-test.sh
 	bash internal/scaffold/fullsend-repo/scripts/validate-output-schema-test.sh
+	python3 internal/scaffold/fullsend-repo/scripts/process-fix-result-test.py
 
 test: lint go-vet go-test script-test
 
