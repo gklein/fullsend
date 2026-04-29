@@ -40,10 +40,13 @@ func newAdminCmd() *cobra.Command {
 //  3. gh auth token (subprocess call to the GitHub CLI)
 //
 // This chain allows users who are already authenticated with gh to use
-// fullsend without manually exporting tokens. Note that some operations
-// (like repo deletion) require the delete_repo scope, and workflow file
-// writes require the workflow scope — scopes that gh auth doesn't request
-// by default. Use: gh auth refresh -s delete_repo,workflow
+// fullsend without manually exporting tokens. The CLI runs a preflight
+// check before each operation and reports exactly which scopes are
+// missing, so callers do not need to request all scopes upfront.
+//
+// Note that gh auth scopes apply to every organization the account
+// belongs to. Users who want to limit the blast radius can create a
+// fine-grained PAT scoped to a single org and export it as GH_TOKEN.
 func resolveToken() (string, error) {
 	if token := os.Getenv("GH_TOKEN"); token != "" {
 		return token, nil
