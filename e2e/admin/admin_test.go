@@ -317,7 +317,7 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 	require.NoError(t, err, "pre-installing config-repo layer")
 	registerRepoCleanup(t, env.client, testOrg, forge.ConfigRepoName)
 
-	workflowsLayer := layers.NewWorkflowsLayer(testOrg, env.client, env.printer, user)
+	workflowsLayer := layers.NewWorkflowsLayer(testOrg, env.client, env.printer, user, "")
 	err = workflowsLayer.Install(ctx)
 	require.NoError(t, err, "pre-installing workflows layer")
 
@@ -349,7 +349,7 @@ func runUninstall(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewDispatchTokenLayer(testOrg, env.client, "", nil, env.printer, nil),
@@ -366,7 +366,7 @@ func runUninstallAllowNotFound(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewDispatchTokenLayer(testOrg, env.client, "", nil, env.printer, nil),
@@ -522,7 +522,7 @@ func verifyNotInstalled(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewDispatchTokenLayer(testOrg, env.client, "", nil, env.printer, nil),
