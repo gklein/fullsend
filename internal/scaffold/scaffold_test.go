@@ -97,6 +97,15 @@ func TestDispatchWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, `\([a-z][a-z0-9_-]*\)`)
 	// Verify stage name validation uses the same pattern
 	assert.Contains(t, s, `^[a-z][a-z0-9_-]*$`)
+	// Verify trigger_source optional input
+	assert.Contains(t, s, "trigger_source:")
+	assert.Contains(t, s, "required: false")
+	// Verify self-dispatch guard
+	assert.Contains(t, s, "dispatch.yml")
+	assert.Contains(t, s, "self-dispatch guard")
+	// Verify workflow scanning log
+	assert.Contains(t, s, "Scanned")
+	assert.Contains(t, s, "skipped")
 }
 
 func TestWalkFullsendRepo(t *testing.T) {
