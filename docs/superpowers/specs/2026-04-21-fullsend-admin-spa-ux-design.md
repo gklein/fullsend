@@ -68,6 +68,8 @@ If this bootstrap **fails**, use the **global banner** pattern (below) with **Re
 | **Worker / network / 5xx** for non-row-scoped fetches | Banner with short human-readable message | **Retry** |
 | **Turnstile / Worker misconfiguration** (`missing_turnstile_keys`, etc.) | Banner | **Retry** only when meaningful; otherwise explain that the deployment is misconfigured |
 
+**Implementation (401 from user-token GitHub REST in the browser):** Calls made with **`createUserOctokit`** dispatch **`GITHUB_USER_UNAUTHORIZED_EVENT`** (`fullsend:github-unauthorized`) from the request hook before rethrowing. **`fetchOrgs`** (and any other wrapper that surfaces `401`) should call **`notifyGitHubUserUnauthorized()`** from `web/admin/src/lib/auth/githubUnauthorized.ts` so the shell still updates if a future code path bypasses that hook. **`App.svelte`** listens and runs **`signOut({ suggestReauth: true })`**, which shows the banner above. **Do not** handle `401` with a screen-local banner that only offers **Retry** and hides the global **Re-authenticate** path.
+
 Row-level fetches **do not** duplicate a paragraph of error text inline on the row.
 
 ### Per-row error pattern (org list and repo list)

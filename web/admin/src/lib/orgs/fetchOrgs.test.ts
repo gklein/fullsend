@@ -4,6 +4,11 @@ vi.mock("../github/client", () => ({
   createUserOctokit: vi.fn(),
 }));
 
+vi.mock("../auth/githubUnauthorized", () => ({
+  notifyGitHubUserUnauthorized: vi.fn(),
+}));
+
+import { notifyGitHubUserUnauthorized } from "../auth/githubUnauthorized";
 import { createUserOctokit } from "../github/client";
 import {
   clearOrgListMemoryCache,
@@ -30,6 +35,7 @@ describe("fetchOrgs (installations)", () => {
   beforeEach(() => {
     clearOrgListMemoryCache();
     vi.mocked(createUserOctokit).mockReset();
+    vi.mocked(notifyGitHubUserUnauthorized).mockClear();
   });
 
   it("maps installations when page.data is a bare array (paginator shape)", async () => {
@@ -133,6 +139,22 @@ describe("fetchOrgs (installations)", () => {
     expect(r.orgs.map((o) => o.login)).not.toContain("org-page-20");
   });
 
+  it("notifies global unauthorized handler and throws FetchOrgsError for 401", async () => {
+    mockOctokit(() =>
+      (async function* () {
+        throw Object.assign(new Error("Unauthorized"), { status: 401 });
+      })(),
+    );
+
+    await expect(fetchOrgs("token", { force: true })).rejects.toSatisfy(
+      (e: unknown) =>
+        e instanceof FetchOrgsError &&
+        e.status === 401 &&
+        e.message.includes("sign in again"),
+    );
+    expect(notifyGitHubUserUnauthorized).toHaveBeenCalledOnce();
+  });
+
   it("throws FetchOrgsError for 403", async () => {
     mockOctokit(() =>
       (async function* () {
@@ -146,6 +168,7 @@ describe("fetchOrgs (installations)", () => {
         e.status === 403 &&
         e.message.includes("403"),
     );
+    expect(notifyGitHubUserUnauthorized).not.toHaveBeenCalled();
   });
 
   it("throws AbortError when signal is already aborted", async () => {

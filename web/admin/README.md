@@ -45,6 +45,13 @@ The SPA **does not** embed the GitHub App OAuth **client id** at build time. Sig
 
 The committed **`sample.env.local`** at the repository root lists **official Cloudflare dummy Turnstile keys** for local dev plus the GitHub App checklist; copy it to **`.env.local`** (and align **`.dev.vars`** if you store the secret there only).
 
+## Global auth errors (401)
+
+[UX spec — global banners](../../docs/superpowers/specs/2026-04-21-fullsend-admin-spa-ux-design.md): when GitHub returns **401** for a request using the signed-in user’s token, the shell must show **Re-authenticate**, not a local “Retry only” banner.
+
+- **`createUserOctokit`** (`web/admin/src/lib/github/client.ts`) dispatches **`notifyGitHubUserUnauthorized()`** from its request hook (see `web/admin/src/lib/auth/githubUnauthorized.ts`).
+- Any **other** browser call with the user token that can return **401** must call **`notifyGitHubUserUnauthorized()`** as well (or use that Octokit factory) so **`App.svelte`** runs **`signOut({ suggestReauth: true })`** consistently.
+
 ## Production and CI (Cloudflare Workers)
 
 **Build Site** runs **`npm run build`** with no GitHub App id in CI env (the static bundle stays id-agnostic).

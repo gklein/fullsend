@@ -195,6 +195,10 @@
         }
         return;
       }
+      /* 401: createUserOctokit + fetchOrgs already fire global unauthorized handling; no local banner. */
+      if (e instanceof FetchOrgsError && e.status === 401) {
+        return;
+      }
       if (!skipClearLists) {
         serverOrgs = [];
         displayedOrgs = [];

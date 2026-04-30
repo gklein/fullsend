@@ -9,6 +9,7 @@
     refreshSession,
     signOut,
   } from "./lib/auth/session";
+  import { GITHUB_USER_UNAUTHORIZED_EVENT } from "./lib/auth/githubUnauthorized";
   import {
     clearIntendedHashStash,
     clearSigningInBrowserState,
@@ -52,7 +53,7 @@
 
   onMount(() => {
     const onGithub401 = () => signOut({ suggestReauth: true });
-    window.addEventListener("fullsend:github-unauthorized", onGithub401);
+    window.addEventListener(GITHUB_USER_UNAUTHORIZED_EVENT, onGithub401);
 
     const seq = (oauthBootSeq += 1);
     authBootPending.set(true);
@@ -91,7 +92,7 @@
     })();
 
     return () => {
-      window.removeEventListener("fullsend:github-unauthorized", onGithub401);
+      window.removeEventListener(GITHUB_USER_UNAUTHORIZED_EVENT, onGithub401);
       oauthBootAbort?.abort();
       oauthBootAbort = null;
       oauthBootSeq += 1;
