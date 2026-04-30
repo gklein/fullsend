@@ -972,10 +972,11 @@ func (c *LiveClient) ListIssueComments(ctx context.Context, owner, repo string, 
 			return nil, fmt.Errorf("list issue comments page %d: %w", page, err)
 		}
 		var raw []struct {
-			ID     int    `json:"id"`
-			NodeID string `json:"node_id"`
-			Body   string `json:"body"`
-			User   struct {
+			ID      int    `json:"id"`
+			NodeID  string `json:"node_id"`
+			HTMLURL string `json:"html_url"`
+			Body    string `json:"body"`
+			User    struct {
 				Login string `json:"login"`
 			} `json:"user"`
 			CreatedAt string `json:"created_at"`
@@ -988,6 +989,7 @@ func (c *LiveClient) ListIssueComments(ctx context.Context, owner, repo string, 
 			result = append(result, forge.IssueComment{
 				ID:        r.ID,
 				NodeID:    r.NodeID,
+				HTMLURL:   r.HTMLURL,
 				Body:      r.Body,
 				Author:    r.User.Login,
 				CreatedAt: r.CreatedAt,
@@ -1009,10 +1011,11 @@ func (c *LiveClient) CreateIssueComment(ctx context.Context, owner, repo string,
 		return nil, fmt.Errorf("create issue comment on #%d: %w", number, err)
 	}
 	var result struct {
-		ID     int    `json:"id"`
-		NodeID string `json:"node_id"`
-		Body   string `json:"body"`
-		User   struct {
+		ID      int    `json:"id"`
+		NodeID  string `json:"node_id"`
+		HTMLURL string `json:"html_url"`
+		Body    string `json:"body"`
+		User    struct {
 			Login string `json:"login"`
 		} `json:"user"`
 		CreatedAt string `json:"created_at"`
@@ -1023,6 +1026,7 @@ func (c *LiveClient) CreateIssueComment(ctx context.Context, owner, repo string,
 	return &forge.IssueComment{
 		ID:        result.ID,
 		NodeID:    result.NodeID,
+		HTMLURL:   result.HTMLURL,
 		Body:      result.Body,
 		Author:    result.User.Login,
 		CreatedAt: result.CreatedAt,
