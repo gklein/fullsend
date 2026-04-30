@@ -83,8 +83,19 @@ def test_empty_stdin_allows():
     assert code == 0
 
 
-def test_empty_tool_name_allows():
-    code, _stdout = _run_hook(
+def test_empty_tool_name_blocks():
+    code, stdout = _run_hook(
         json.dumps({"tool_name": ""}),
     )
-    assert code == 0
+    assert code == 1
+    response = json.loads(stdout)
+    assert response["decision"] == "block"
+
+
+def test_missing_tool_name_blocks():
+    code, stdout = _run_hook(
+        json.dumps({"tool_input": {"command": "ls"}}),
+    )
+    assert code == 1
+    response = json.loads(stdout)
+    assert response["decision"] == "block"

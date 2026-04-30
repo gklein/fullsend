@@ -301,9 +301,11 @@ func TestGenerateClaudeSettings_ToolAllowlistEnabled(t *testing.T) {
 	preTools := hooks["PreToolUse"].([]any)
 	assert.Len(t, preTools, 4) // tirith + ssrf + canary_pretool + tool_allowlist
 
-	// Tool allowlist should be the last PreToolUse matcher with * scope.
+	// Tool allowlist should be the last PreToolUse matcher.
 	allowlistMatcher := preTools[3].(map[string]any)
 	assert.Equal(t, "*", allowlistMatcher["matcher"])
+	allowlistHooks := allowlistMatcher["hooks"].([]any)
+	assert.Contains(t, allowlistHooks[0].(map[string]any)["command"], "tool_allowlist_pretool.py")
 }
 
 func TestHookFiles_ToolAllowlistEnabled(t *testing.T) {

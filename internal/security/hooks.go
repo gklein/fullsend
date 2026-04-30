@@ -84,11 +84,13 @@ func GenerateClaudeSettings(h *harness.Harness) ([]byte, error) {
 		})
 	}
 
-	// Canary PreToolUse hook (Bash + WebFetch). Catches exfiltration of
-	// the canary token via tool inputs before data leaves the sandbox.
+	// Canary PreToolUse hook (all tools). Catches exfiltration of the
+	// canary token via tool inputs before data leaves the sandbox.
+	// Uses * to cover MCP tools (issue comments, PR bodies, etc.)
+	// in addition to Bash and WebFetch.
 	if canaryPreToolEnabled(sec) {
 		preToolMatchers = append(preToolMatchers, hookMatcher{
-			Matcher: "Bash|WebFetch",
+			Matcher: "*",
 			Hooks: []hookEntry{
 				{Type: "command", Command: "python3 " + SandboxHooksDir + "/canary_pretool.py"},
 			},
