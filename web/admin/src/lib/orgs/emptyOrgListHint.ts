@@ -9,7 +9,7 @@
  */
 export function buildEmptyInstallationsHint(): string {
   return (
-    "This list only includes organisations where the Fullsend Admin app is installed for your signed-in user. " +
-    "Other Fullsend-related apps (for example apps created when you deploy Fullsend to an org) are not listed here."
+    "No GitHub organisations in this list have the Fullsend app installed for your account yet. " +
+    "Use “Add the app…” below to install it on the organisations you administer."
   );
 }
