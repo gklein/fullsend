@@ -20,7 +20,7 @@ The admin organisation picker today **infers organisations** from **`GET /user/r
 3. **No fallback** to the repo-scan org list when the installations API fails: show **accurate** errors and guidance (**Refresh** for transient failures; stable **403/permission** text for deployers vs **install app on orgs** for admins).
 4. **Install guidance:** always-on copy + link to GitHub’s **install the app** flow; when the list is empty, **additional** explanation in the **list region**, **above** that block (see [UI](#ui)).
 5. **App slug for install URL:** **prefer** a slug (or equivalent) from the **installations API response** when present; **otherwise** pass slug in **OAuth `state`** alongside the Turnstile site key (same Worker authorize path as today — not `VITE_*` / not a separate “install redirect” Worker route).
-6. **After install:** **one automatic org-list refresh** when the user returns to the org list, using a **session-scoped flag** set when opening the install URL; expect the simpler API to keep this refresh fast enough that extra caching work is **optional follow-up**, not a prerequisite.
+6. **After install:** users **stay on GitHub** until they navigate back to the admin SPA; they use **Refresh** on the organisation list to reload installations. **No** session flag, automatic redirect, or forced refresh on return.
 
 ## Non-goals
 
@@ -58,11 +58,9 @@ The admin organisation picker today **infers organisations** from **`GET /user/r
 - **Always-on block** below the list: short text that **actions on an org require the Fullsend GitHub App to be installed** on that org, plus a **single link** to GitHub’s install flow (`…/installations/new`), using resolved slug rules above.
 - **Empty list:** in the **list region** (where rows would be): primary empty line, optional secondary hints, then **extra** paragraph that empty can mean **no installs** (not only “no repos”); **above** the always-on install block.
 
-## Post-install refresh
+## Pagination cap
 
-1. When the user activates the install link, set **`sessionStorage`** (or equivalent) **before** navigation to GitHub.
-2. On **`OrgList`** (or route) load, if the flag is set: **force-refresh** the installation list once, then **clear** the flag.
-3. If GitHub’s app **Setup URL** can deep-link back to the SPA later, evaluate as an optional improvement; not required for v1.
+When the implementation stops after a **maximum number** of `GET /user/installations` pages (safety cap), the UI must show a **visible warning** that the organisation list may be incomplete — not a silent truncation.
 
 ## Security and privacy
 

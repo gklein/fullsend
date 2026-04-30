@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace repo-inferred org listing with **`GET /user/installations`** (Octokit `octokit.rest.apps.listInstallationsForAuthenticatedUser`), add install guidance + OAuth **`state`** slug fallback, post-install refresh, and accurate error/empty copy — per [`2026-04-29-admin-spa-org-list-installations-design.md`](../specs/2026-04-29-admin-spa-org-list-installations-design.md).
+**Goal:** Replace repo-inferred org listing with **`GET /user/installations`** (Octokit `octokit.rest.apps.listInstallationsForAuthenticatedUser`), add install guidance + OAuth **`state`** slug fallback, **manual Refresh** after GitHub install (no session flag / auto-refresh), pagination-cap warning when the safety page limit is hit, and accurate error/empty copy — per [`2026-04-29-admin-spa-org-list-installations-design.md`](../specs/2026-04-29-admin-spa-org-list-installations-design.md).
 
 **Architecture:** Browser-only GitHub API calls using the existing user Octokit factory (`web/admin/src/lib/github/client.ts`). Map each installation with `account.type === "Organization"` to `OrgRow`. Resolve install URL slug from the **first installation payload** that exposes `app_slug` / nested `app.slug`, else from **`localStorage`** populated from Worker OAuth `state`. No Worker org-list proxy unless CORS is proven broken (contingency only).
 
@@ -16,20 +16,18 @@
 |------|------------------|
 | `web/admin/src/lib/orgs/installationOrgRows.ts` | Map GitHub installation REST items → `OrgRow[]`, dedupe by login, extract optional app slug string safely. |
 | `web/admin/src/lib/orgs/installationOrgRows.test.ts` | Fixtures: org installs, user install filtered out, duplicate org, slug from `app_slug` vs `app.slug`. |
-| `web/admin/src/lib/orgs/fetchOrgs.ts` | Paginate `listInstallationsForAuthenticatedUser`; progress meta = installation pages; memory cache; `FetchOrgsError` messages for 403 vs transient. |
-| `web/admin/src/lib/orgs/fetchOrgs.test.ts` | Mock `apps.listInstallationsForAuthenticatedUser` iterator; empty list; 403; slug propagation. |
+| `web/admin/src/lib/orgs/fetchOrgs.ts` | Paginate `listInstallationsForAuthenticatedUser`; progress meta = installation pages; memory cache; `installationListTruncated` when page cap hit; `FetchOrgsError` messages for 403 vs transient. |
+| `web/admin/src/lib/orgs/fetchOrgs.test.ts` | Mock iterator; empty list; 403; slug propagation; truncation when page cap exceeded. |
 | `web/admin/src/lib/orgs/emptyOrgListHint.ts` | Replace repo-based empty hints with **installations**-specific copy (or delete unused helpers; keep `headersToRecord` only if still needed — if unused, remove). |
 | `web/admin/src/lib/orgs/emptyOrgListHint.test.ts` | Update or replace tests for new empty-hint builder. |
 | `web/admin/src/lib/github/githubAppInstallLink.ts` | Build `https://github.com/apps/<slug>/installations/new`; validate slug; return `null` if unusable. |
 | `web/admin/src/lib/github/githubAppInstallLink.test.ts` | Slug validation + URL shape. |
-| `web/admin/src/lib/orgs/orgListPostInstallRefresh.ts` | `sessionStorage` key, `setPendingOrgListRefreshAfterInstall()`, `consumePendingOrgListRefresh()`. |
-| `web/admin/src/lib/orgs/orgListPostInstallRefresh.test.ts` | Set/consume/clear behavior. |
 | `web/admin/src/lib/auth/tokenStore.ts` | `persistGithubAppSlugFromOAuth` / `loadGithubAppSlug`; `clearSession` clears slug key. |
 | `web/admin/src/lib/auth/oauth.ts` | Extend Worker-expanded `state` JSON with optional `g` (slug); `tryParseWorkerExpandedOauthState`; call `persistGithubAppSlugFromOAuth` after successful token save. |
 | `web/admin/src/lib/auth/oauth.test.ts` | Parser + persistence tests for `g`. |
 | `cloudflare_site/worker/src/index.ts` | `GITHUB_APP_SLUG` env; `buildGithubState` includes `g` when set. |
 | `cloudflare_site/worker/src/index.worker.test.ts` | Assert authorize redirect `state` decodes to JSON containing `g` when env set. |
-| `web/admin/src/routes/OrgList.svelte` | Empty-region copy order; always-on install block; wire post-install consume + `loadOrgs(true)`; pass resolved slug into link. |
+| `web/admin/src/routes/OrgList.svelte` | Empty-region copy order; always-on install block; red warning when `installationListTruncated`; pass resolved slug into install link. |
 | `sample.env.local` | Document optional `GITHUB_APP_SLUG` for Worker. |
 | `web/admin/README.md` | One paragraph: slug via installations response or OAuth `state`; optional `GITHUB_APP_SLUG` in Worker env. |
 
@@ -215,68 +213,9 @@ git commit -m "feat(admin): validate slug for GitHub app install URL"
 
 ---
 
-### Task 3: Post-install refresh flag (TDD)
+### Task 3: (removed) Post-install session flag
 
-**Files:**
-
-- Create: `web/admin/src/lib/orgs/orgListPostInstallRefresh.ts`
-- Create: `web/admin/src/lib/orgs/orgListPostInstallRefresh.test.ts`
-
-- [ ] **Step 1: Tests**
-
-```typescript
-// web/admin/src/lib/orgs/orgListPostInstallRefresh.test.ts
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  consumePendingOrgListRefresh,
-  setPendingOrgListRefreshAfterInstall,
-} from "./orgListPostInstallRefresh";
-
-afterEach(() => sessionStorage.clear());
-
-describe("orgListPostInstallRefresh", () => {
-  it("consume returns false when not set", () => {
-    expect(consumePendingOrgListRefresh()).toBe(false);
-  });
-
-  it("set then consume returns true once", () => {
-    setPendingOrgListRefreshAfterInstall();
-    expect(consumePendingOrgListRefresh()).toBe(true);
-    expect(consumePendingOrgListRefresh()).toBe(false);
-  });
-});
-```
-
-- [ ] **Step 2: Run — FAIL**
-
-Run: `npm run test -- --run web/admin/src/lib/orgs/orgListPostInstallRefresh.test.ts`
-
-- [ ] **Step 3: Implement**
-
-```typescript
-// web/admin/src/lib/orgs/orgListPostInstallRefresh.ts
-const KEY = "fullsend_admin_org_list_refresh_after_install";
-
-export function setPendingOrgListRefreshAfterInstall(): void {
-  sessionStorage.setItem(KEY, "1");
-}
-
-/** Returns true the first time after install return; then clears the flag. */
-export function consumePendingOrgListRefresh(): boolean {
-  const v = sessionStorage.getItem(KEY);
-  sessionStorage.removeItem(KEY);
-  return v === "1";
-}
-```
-
-- [ ] **Step 4: Run — PASS**
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add web/admin/src/lib/orgs/orgListPostInstallRefresh.ts web/admin/src/lib/orgs/orgListPostInstallRefresh.test.ts
-git commit -m "feat(admin): session flag for org list refresh after app install"
-```
+**Superseded:** Users return from GitHub manually and use **Refresh** on the org list. No `sessionStorage` flag or automatic forced reload on route load.
 
 ---
 
@@ -291,7 +230,7 @@ git commit -m "feat(admin): session flag for org list refresh after app install"
 
 **Contract changes:**
 
-- `FetchOrgsResult` becomes `{ orgs: OrgRow[]; emptyHint: string | null; appSlugFromApi: string | null }`.
+- `FetchOrgsResult` becomes `{ orgs: OrgRow[]; emptyHint: string | null; appSlugFromApi: string | null; installationListTruncated: boolean }`.
 - `FetchOrgsProgressMeta`: rename `repoPagesFetched` → `installationPagesFetched` (update `OrgList.svelte` references if any).
 
 - [ ] **Step 1: Rewrite `fetchOrgs.test.ts`** to mock:
@@ -378,7 +317,7 @@ git commit -m "feat(admin): optional GitHub App slug in OAuth state for install 
 
 ---
 
-### Task 6: `OrgList.svelte` UX (install block, empty order, post-install)
+### Task 6: `OrgList.svelte` UX (install block, empty order, pagination warning)
 
 **Files:**
 
@@ -400,9 +339,9 @@ Track `appSlugFromLastFetch` from `fetchOrgsWithProgress` final result (`r.appSl
 
 - [ ] **Step 2: Empty branch** — when `filteredAll.length === 0` and `serverOrgs.length === 0` and **no error**: show primary muted line, then `emptyHint` if non-null, then **extra** paragraph (spec: empty may mean no installs), **then** do **not** duplicate the always-on block inside empty only — structure: list region contains empty messages; **below** the `{#if error}` / `{:else if filteredAll...}` block’s closing, add a **single** always-on `.install-app` section (or after list `<ul>` when non-empty) so it appears for both empty and non-empty. Match spec: always-on block **below** list area; empty **extra** paragraph **above** that block.
 
-- [ ] **Step 3: Install link** — `<a rel="noopener noreferrer" target="_blank" href={installHref} onclick={() => setPendingOrgListRefreshAfterInstall()}>` — only render `href` when `installHref` non-null; else show muted “Install link unavailable (missing app slug).”
+- [ ] **Step 3: Install link** — `<a rel="noopener noreferrer" target="_blank" href={installHref}>` — only render `href` when `installHref` non-null; else show muted “Install link unavailable (missing app slug).” Copy should tell users to click **Refresh** after returning from GitHub.
 
-- [ ] **Step 4: `onMount`** — after `githubUser` subscription setup, call `if (consumePendingOrgListRefresh()) void loadOrgs(true)`.
+- [ ] **Step 4: Pagination cap** — when `r.installationListTruncated`, show **red** helper text (same severity styling as the “showing 15 organisations” cap) explaining that not all installation pages were loaded.
 
 - [ ] **Step 5: Manual smoke** — `npm run dev`, sign in, open Network: `user/installations` returns 200 from browser origin (CORS). If blocked, stop and document Worker proxy contingency in a short `docs/` note or issue comment — do **not** implement proxy without confirmation.
 
@@ -410,7 +349,7 @@ Track `appSlugFromLastFetch` from `fetchOrgsWithProgress` final result (`r.appSl
 
 ```bash
 git add web/admin/src/routes/OrgList.svelte
-git commit -m "feat(admin): org list install guidance and post-install refresh"
+git commit -m "feat(admin): org list install guidance and pagination-cap warning"
 ```
 
 ---
@@ -445,7 +384,8 @@ git commit -m "docs(admin): document GitHub App slug for install links"
 | Error vs empty | Tasks 4 + 6 |
 | Install UI + empty order | Task 6 |
 | Slug API + OAuth fallback | Tasks 1–2, 4 result, 5, 6 |
-| Post-install refresh | Tasks 3 + 6 |
+| After install: manual Refresh only | Task 6 copy + no session flag |
+| Pagination cap warning | Task 4 `installationListTruncated` + Task 6 |
 | Security slug validation | Tasks 1–2, 5 |
 | Tracking #547 | Mention in PR / commit body |
 

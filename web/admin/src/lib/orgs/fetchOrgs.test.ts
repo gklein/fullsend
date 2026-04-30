@@ -10,6 +10,7 @@ import {
   fetchOrgs,
   fetchOrgsWithProgress,
   FetchOrgsError,
+  MAX_INSTALLATION_LIST_PAGES,
 } from "./fetchOrgs";
 
 function mockOctokit(iterator: () => AsyncIterableIterator<unknown>) {
@@ -50,6 +51,7 @@ describe("fetchOrgs (installations)", () => {
     const r = await fetchOrgs("token", { force: true });
     expect(r.orgs.map((o) => o.login)).toEqual(["array-org"]);
     expect(r.appSlugFromApi).toBe("fullsend-admin");
+    expect(r.installationListTruncated).toBe(false);
   });
 
   it("maps Organization installations and returns appSlugFromApi", async () => {
@@ -79,6 +81,7 @@ describe("fetchOrgs (installations)", () => {
     expect(r.orgs.map((o) => o.login)).toEqual(["alpha", "zebra"]);
     expect(r.emptyHint).toBeNull();
     expect(r.appSlugFromApi).toBe("fullsend-app");
+    expect(r.installationListTruncated).toBe(false);
   });
 
   it("returns emptyHint when no org installations", async () => {
@@ -99,6 +102,35 @@ describe("fetchOrgs (installations)", () => {
     expect(r.orgs).toEqual([]);
     expect(r.emptyHint).toBeTruthy();
     expect(r.appSlugFromApi).toBeNull();
+    expect(r.installationListTruncated).toBe(false);
+  });
+
+  it("sets installationListTruncated when pagination hits the page cap", async () => {
+    mockOctokit(() =>
+      (async function* () {
+        for (let p = 0; p < MAX_INSTALLATION_LIST_PAGES + 1; p++) {
+          yield {
+            status: 200,
+            data: {
+              installations: [
+                {
+                  id: p,
+                  app_slug: "fullsend-app",
+                  account: {
+                    login: `org-page-${p}`,
+                    type: "Organization",
+                  },
+                },
+              ],
+            },
+          };
+        }
+      })(),
+    );
+
+    const r = await fetchOrgs("token", { force: true });
+    expect(r.installationListTruncated).toBe(true);
+    expect(r.orgs.map((o) => o.login)).not.toContain("org-page-20");
   });
 
   it("throws FetchOrgsError for 403", async () => {

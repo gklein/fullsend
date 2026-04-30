@@ -6,12 +6,10 @@
   import {
     FetchOrgsError,
     fetchOrgsWithProgress,
+    INSTALLATIONS_PER_PAGE,
+    MAX_INSTALLATION_LIST_PAGES,
   } from "../lib/orgs/fetchOrgs";
   import { filterOrgsBySearch, type OrgRow } from "../lib/orgs/filter";
-  import {
-    consumePendingOrgListRefresh,
-    setPendingOrgListRefreshAfterInstall,
-  } from "../lib/orgs/orgListPostInstallRefresh";
 
   /** Delays after an empty install list response for silent GitHub API rechecks (ms). */
   const EMPTY_LIST_RECHECK_DELAYS_MS = [14_000, 32_000, 55_000] as const;
@@ -41,6 +39,8 @@
   let emptyHint = $state<string | null>(null);
   /** Slug for GitHub “install app” link: API result merged with OAuth-persisted slug. */
   let resolvedAppSlug = $state<string | null>(null);
+  /** True when `GET /user/installations` pagination stopped at the safety page cap. */
+  let installationListTruncated = $state(false);
 
   /** After the first completed fetch, manual refresh keeps the list on screen (no full-page blink). */
   let hasCompletedOrgFetchOnce = $state(false);
@@ -118,6 +118,7 @@
       error = null;
       emptyHint = null;
       resolvedAppSlug = null;
+      installationListTruncated = false;
       hasCompletedOrgFetchOnce = false;
       inlineListRefresh = false;
       listCheckAt = null;
@@ -131,7 +132,6 @@
       pollSession += 1;
     }
 
-    const forceRefresh = force || consumePendingOrgListRefresh();
     loadAbort?.abort();
     loadAbort = new AbortController();
     const signal = loadAbort.signal;
@@ -144,6 +144,7 @@
     error = null;
     if (!skipClearLists) {
       emptyHint = null;
+      installationListTruncated = false;
       serverOrgs = [];
       displayedOrgs = [];
     }
@@ -159,7 +160,7 @@
       }, ORG_LIST_FETCH_TIMEOUT_MS);
 
       const r = await fetchOrgsWithProgress(token, {
-        force: forceRefresh,
+        force,
         signal,
         onProgress: (orgs, meta) => {
           if (gen !== loadGeneration) return;
@@ -171,6 +172,7 @@
       if (gen !== loadGeneration) return;
       serverOrgs = r.orgs;
       emptyHint = r.emptyHint;
+      installationListTruncated = r.installationListTruncated;
       resolvedAppSlug = r.appSlugFromApi ?? loadGithubAppSlug();
       const capped = filterOrgsBySearch(r.orgs, search).slice(0, DISPLAY_CAP);
       commitDisplayedRowsFromScan(capped, true);
@@ -199,6 +201,7 @@
       }
       scanComplete = false;
       emptyHint = null;
+      installationListTruncated = false;
       resolvedAppSlug = null;
       if (e instanceof FetchOrgsError) {
         error = e.message;
@@ -233,6 +236,7 @@
         error = null;
         emptyHint = null;
         resolvedAppSlug = null;
+        installationListTruncated = false;
         hasCompletedOrgFetchOnce = false;
         inlineListRefresh = false;
         listCheckAt = null;
@@ -320,6 +324,15 @@
         <p class="cap-hint" role="status">Showing up to 15 organisations</p>
       {/if}
 
+      {#if installationListTruncated && !error}
+        <p class="cap-hint" role="status">
+          Organisation list may be incomplete — loading stopped after
+          {MAX_INSTALLATION_LIST_PAGES} pages of GitHub app installations ({INSTALLATIONS_PER_PAGE} per
+          page). Use <strong>Refresh</strong> after you change installs; if you need more rows, ask your
+          operator to raise the page cap in code.
+        </p>
+      {/if}
+
       {#if error}
         <div class="banner banner--err" role="alert">
           <span class="banner-msg">{error}</span>
@@ -386,7 +399,6 @@
               href={installAppHref}
               target="_blank"
               rel="noopener noreferrer"
-              onclick={() => setPendingOrgListRefreshAfterInstall()}
             >
               Install the Fullsend Admin app on GitHub
             </a>
@@ -410,7 +422,6 @@
               href={installAppHref}
               target="_blank"
               rel="noopener noreferrer"
-              onclick={() => setPendingOrgListRefreshAfterInstall()}
             >
               Install the Fullsend Admin app on GitHub
             </a>

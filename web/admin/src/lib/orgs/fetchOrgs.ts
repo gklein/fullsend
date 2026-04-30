@@ -6,10 +6,10 @@ import {
   type MinimalInstallation,
 } from "./installationOrgRows";
 
-const INSTALLATIONS_PER_PAGE = 30;
+export const INSTALLATIONS_PER_PAGE = 30;
 
 /** Cap pages when paginating `GET /user/installations`. */
-const MAX_INSTALLATION_LIST_PAGES = 20;
+export const MAX_INSTALLATION_LIST_PAGES = 20;
 
 export type FetchOrgsResult = {
   orgs: OrgRow[];
@@ -20,6 +20,11 @@ export type FetchOrgsResult = {
   emptyHint: string | null;
   /** First app slug from installation payloads in page order, if any. */
   appSlugFromApi: string | null;
+  /**
+   * True when pagination stopped at {@link MAX_INSTALLATION_LIST_PAGES} because GitHub may
+   * have more installation pages (list may be incomplete).
+   */
+  installationListTruncated: boolean;
 };
 
 export type FetchOrgsProgressMeta = {
@@ -33,6 +38,7 @@ let memoryCache: {
   orgs: OrgRow[];
   emptyHint: string | null;
   appSlugFromApi: string | null;
+  installationListTruncated: boolean;
 } | null = null;
 
 /** Clears the in-memory org list cache (call on sign-out or when switching accounts). */
@@ -105,9 +111,15 @@ export async function fetchOrgsWithProgress(
     if (options.signal?.aborted) {
       throw new DOMException("Aborted", "AbortError");
     }
-    const { orgs, emptyHint, appSlugFromApi } = memoryCache;
+    const { orgs, emptyHint, appSlugFromApi, installationListTruncated } =
+      memoryCache;
     options.onProgress(orgs, { done: true, installationPagesFetched: 0 });
-    return { orgs, emptyHint, appSlugFromApi };
+    return {
+      orgs,
+      emptyHint,
+      appSlugFromApi,
+      installationListTruncated,
+    };
   }
 
   const octokit = createUserOctokit(accessToken);
@@ -143,15 +155,22 @@ export async function fetchOrgsWithProgress(
 
     const { orgs, appSlug } = orgRowsAndSlugFromInstallations(accumulated);
     const emptyHint = orgs.length === 0 ? buildEmptyInstallationsHint() : null;
+    const installationListTruncated = pages > MAX_INSTALLATION_LIST_PAGES;
 
     memoryCache = {
       token: accessToken,
       orgs,
       emptyHint,
       appSlugFromApi: appSlug,
+      installationListTruncated,
     };
     options.onProgress(orgs, { done: true, installationPagesFetched: pages });
-    return { orgs, emptyHint, appSlugFromApi: appSlug };
+    return {
+      orgs,
+      emptyHint,
+      appSlugFromApi: appSlug,
+      installationListTruncated,
+    };
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") {
       throw e;
