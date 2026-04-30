@@ -198,7 +198,7 @@ func (b *PlaywrightBrowserOpener) handleCreateAppPage() error {
 			return nil
 		}
 		saveDebugScreenshot(b.page, b.screenshotDir, "browser-callback-failed", b.logf)
-		return fmt.Errorf("waiting for callback (current URL: %s): %w", safeURL, err)
+		return fmt.Errorf("waiting for callback timed out (current URL: %s)", safeURL)
 	}
 
 	return nil
