@@ -2,14 +2,33 @@
   import { onMount } from "svelte";
   import { githubUser } from "../lib/auth/session";
   import { loadGithubAppSlug, loadToken } from "../lib/auth/tokenStore";
+  import { createUserOctokit } from "../lib/github/client";
   import { githubAppInstallationsNewUrl } from "../lib/github/githubAppInstallLink";
+  import { readTokenScopesHeaderCached } from "../lib/layers/preflight";
   import {
     FetchOrgsError,
     fetchOrgsWithProgress,
     INSTALLATIONS_PER_PAGE,
     MAX_INSTALLATION_LIST_PAGES,
   } from "../lib/orgs/fetchOrgs";
+  import { batchOrganizationsFullsendRepoExists } from "../lib/orgs/batchOrganizationsFullsendRepoGraphql";
   import { filterOrgsBySearch, type OrgRow } from "../lib/orgs/filter";
+  import {
+    analyzeOrgForOrgList,
+    buildDeployPreflight,
+    orgListRowFromAnalysis,
+    type OrgListDeployRowContext,
+    type OrgListRowCluster,
+  } from "../lib/orgs/orgListRow";
+  import {
+    clearOrgListAnalysisCache,
+    getOrgListAnalysisCached,
+    hasOrgListAnalysisCacheEntry,
+    invalidateOrgListAnalysisCacheEntry,
+    setOrgListAnalysisCached,
+  } from "../lib/orgs/orgListAnalysisCache";
+  import { fetchMembershipCreateRepoSignals } from "../lib/orgs/orgMembershipCreateRepo";
+  import type { Octokit } from "@octokit/rest";
 
   /** Delays after an empty install list response for silent GitHub API rechecks (ms). */
   const EMPTY_LIST_RECHECK_DELAYS_MS = [14_000, 32_000, 55_000] as const;
@@ -18,15 +37,12 @@
   const ORG_LIST_FETCH_TIMEOUT_MS = 60_000;
 
   type LoadOrgsOpts = {
-    /** When true and the list is still empty after success, schedule delayed rechecks. */
     allowEmptyFollowUpPoll?: boolean;
-    /** True for scheduled rechecks: do not cancel sibling timers or bump the poll session. */
     internalPoll?: boolean;
   };
 
   /** Max visible rows after filter (matches UX spec). */
   const DISPLAY_CAP = 15;
-  /** After this many rows, batch UI updates until +5 more or scan completes. */
   const BATCH_FIRST = 10;
   const BATCH_INCREMENT = 5;
 
@@ -37,18 +53,12 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
   let emptyHint = $state<string | null>(null);
-  /** Slug for GitHub “install app” link: API result merged with OAuth-persisted slug. */
   let resolvedAppSlug = $state<string | null>(null);
-  /** True when `GET /user/installations` pagination stopped at the safety page cap. */
   let installationListTruncated = $state(false);
 
-  /** After the first completed fetch, manual refresh keeps the list on screen (no full-page blink). */
   let hasCompletedOrgFetchOnce = $state(false);
-  /** True while a non-initial refresh is in flight (list not cleared). */
   let inlineListRefresh = $state(false);
-  /** Epoch ms of last successful installations fetch (for user feedback). */
   let listCheckAt = $state<number | null>(null);
-  /** Bumped on user-facing loads so delayed recheck callbacks from an older session no-op. */
   let pollSession = 0;
   let pollTimeouts: number[] = [];
 
@@ -68,7 +78,6 @@
     }
   }
 
-  /** Batched updates while the repo scan is still running (unfiltered growth from `onProgress`). */
   function commitDisplayedRowsFromScan(capped: OrgRow[], done: boolean): void {
     if (done) {
       scanComplete = true;
@@ -96,13 +105,191 @@
     }
   }
 
-  /** Search/filter changes must not reuse scan batching (can leave rows that no longer match). */
   function applySearchFilterDisplay(): void {
     displayedOrgs = filterOrgsBySearch(serverOrgs, search).slice(0, DISPLAY_CAP);
   }
 
   let loadGeneration = 0;
   let loadAbort: AbortController | null = null;
+
+  type RowUiEntry = OrgListRowCluster | "pending";
+
+  let rowUi = $state<Record<string, RowUiEntry>>({});
+  let rowEvalGen = 0;
+
+  async function hydrateMembershipForOrgs(
+    orgs: OrgRow[],
+    signal: AbortSignal,
+  ): Promise<OrgRow[]> {
+    if (orgs.length === 0) return orgs;
+    const token = loadToken()?.accessToken;
+    if (!token) return orgs;
+    const octokit = createUserOctokit(token);
+    const m = await fetchMembershipCreateRepoSignals(octokit, { signal });
+    if (signal.aborted) return orgs;
+    return orgs.map((o) => ({
+      ...o,
+      membershipCanCreateRepository:
+        m.get(o.login.toLowerCase()) ?? o.membershipCanCreateRepository ?? null,
+    }));
+  }
+
+  async function readDeployPreflightOrSkipped(
+    octokit: Octokit,
+    accessToken: string,
+  ) {
+    try {
+      return buildDeployPreflight(
+        await readTokenScopesHeaderCached(octokit, accessToken),
+      );
+    } catch {
+      return buildDeployPreflight(null);
+    }
+  }
+
+  function orgRowContext(login: string): OrgListDeployRowContext {
+    const row =
+      serverOrgs.find((x) => x.login === login) ??
+      displayedOrgs.find((x) => x.login === login);
+    return {
+      hasWritePathInOrg: row?.hasWritePathInOrg ?? true,
+      membershipCanCreateRepository: row?.membershipCanCreateRepository ?? null,
+    };
+  }
+
+  async function refreshOrgRow(login: string): Promise<void> {
+    const token = loadToken()?.accessToken;
+    if (!token) return;
+    invalidateOrgListAnalysisCacheEntry(login);
+    rowUi = { ...rowUi, [login]: "pending" };
+    try {
+      const octokit = createUserOctokit(token);
+      const deployPreflight = await readDeployPreflightOrSkipped(octokit, token);
+      const hints = await batchOrganizationsFullsendRepoExists(octokit, [login]);
+      const hint = hints.get(login.trim().toLowerCase()) ?? null;
+      const res = await analyzeOrgForOrgList(login, octokit, {
+        fullsendRepoExistsHint: hint,
+      });
+      if (res.kind === "ok") {
+        setOrgListAnalysisCached(login, res);
+      }
+      rowUi = {
+        ...rowUi,
+        [login]: orgListRowFromAnalysis(res, deployPreflight, orgRowContext(login)),
+      };
+    } catch (e) {
+      rowUi = {
+        ...rowUi,
+        [login]: {
+          kind: "error",
+          message:
+            e instanceof Error ? e.message : "Failed to evaluate organisation.",
+        },
+      };
+    }
+  }
+
+  function cannotDeployPopoverId(login: string): string {
+    return `cd-${login.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  }
+
+  function rowErrPopoverId(login: string): string {
+    return `re-${login.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  }
+
+  /** Debounced: filter changes must not re-hit GitHub on every keystroke. */
+  const ROW_ANALYSIS_DEBOUNCE_MS = 280;
+  const ORG_ROW_ANALYSIS_THROTTLE_MS = 400;
+
+  /**
+   * Background org analysis: visible (filtered) rows first, then the rest of the install list
+   * so what the user sees resolves before off-screen orgs.
+   */
+  $effect(() => {
+    const visible = displayedOrgs;
+    const all = serverOrgs;
+    const token = loadToken()?.accessToken;
+    const user = $githubUser;
+    const busyInitialLoad = loading && all.length === 0;
+
+    if (!token || !user) {
+      rowUi = {};
+      return;
+    }
+    if (visible.length === 0 || busyInitialLoad) {
+      return;
+    }
+
+    let alive = true;
+    const gen = (rowEvalGen += 1);
+    const octokit = createUserOctokit(token);
+
+    const visibleLogins = visible.map((o) => o.login);
+    const visibleSet = new Set(visibleLogins.map((l) => l.toLowerCase()));
+    const restLogins = all
+      .map((o) => o.login)
+      .filter((l) => !visibleSet.has(l.toLowerCase()))
+      .sort((a, b) => a.localeCompare(b));
+    const priorityOrder = [...visibleLogins, ...restLogins];
+
+    const t = setTimeout(() => {
+      if (!alive) return;
+
+      void (async () => {
+        const deployPreflight = await readDeployPreflightOrSkipped(octokit, token);
+        if (!alive || gen !== rowEvalGen) return;
+
+        const nextUi: Record<string, RowUiEntry> = {};
+        for (const login of visibleLogins) {
+          const cached = getOrgListAnalysisCached(login);
+          nextUi[login] = cached
+            ? orgListRowFromAnalysis(cached, deployPreflight, orgRowContext(login))
+            : "pending";
+        }
+        rowUi = nextUi;
+
+        const needNetwork = priorityOrder.filter(
+          (login) => !hasOrgListAnalysisCacheEntry(login),
+        );
+        if (needNetwork.length === 0) return;
+
+        const hints = await batchOrganizationsFullsendRepoExists(octokit, needNetwork);
+        if (!alive || gen !== rowEvalGen) return;
+
+        for (let idx = 0; idx < needNetwork.length; idx++) {
+          const login = needNetwork[idx]!;
+          if (!alive || gen !== rowEvalGen) return;
+          const hintKey = login.trim().toLowerCase();
+          const hint = hints.get(hintKey) ?? null;
+          const res = await analyzeOrgForOrgList(login, octokit, {
+            fullsendRepoExistsHint: hint,
+          });
+          if (!alive || gen !== rowEvalGen) return;
+          if (res.kind === "ok") {
+            setOrgListAnalysisCached(login, res);
+          }
+          if (visibleSet.has(login.toLowerCase())) {
+            rowUi = {
+              ...rowUi,
+              [login]: orgListRowFromAnalysis(
+                res,
+                deployPreflight,
+                orgRowContext(login),
+              ),
+            };
+          }
+          if (idx < needNetwork.length - 1) {
+            await new Promise((r) => setTimeout(r, ORG_ROW_ANALYSIS_THROTTLE_MS));
+          }
+        }
+      })();
+    }, ROW_ANALYSIS_DEBOUNCE_MS);
+
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  });
 
   async function loadOrgs(force: boolean, opts?: LoadOrgsOpts) {
     const token = loadToken()?.accessToken;
@@ -123,6 +310,8 @@
       inlineListRefresh = false;
       listCheckAt = null;
       loading = false;
+      rowUi = {};
+      clearOrgListAnalysisCache();
       return;
     }
 
@@ -130,6 +319,10 @@
     if (!internalPoll) {
       clearPollTimeouts();
       pollSession += 1;
+    }
+
+    if (force) {
+      clearOrgListAnalysisCache();
     }
 
     loadAbort?.abort();
@@ -170,11 +363,22 @@
         },
       });
       if (gen !== loadGeneration) return;
-      serverOrgs = r.orgs;
+
+      let hydrated = r.orgs;
+      if (!signal.aborted) {
+        try {
+          hydrated = await hydrateMembershipForOrgs(r.orgs, signal);
+        } catch {
+          hydrated = r.orgs;
+        }
+      }
+      if (gen !== loadGeneration) return;
+
+      serverOrgs = hydrated;
       emptyHint = r.emptyHint;
       installationListTruncated = r.installationListTruncated;
       resolvedAppSlug = r.appSlugFromApi ?? loadGithubAppSlug();
-      const capped = filterOrgsBySearch(r.orgs, search).slice(0, DISPLAY_CAP);
+      const capped = filterOrgsBySearch(hydrated, search).slice(0, DISPLAY_CAP);
       commitDisplayedRowsFromScan(capped, true);
       listCheckAt = Date.now();
       if (
@@ -195,7 +399,6 @@
         }
         return;
       }
-      /* 401: createUserOctokit + fetchOrgs already fire global unauthorized handling; no local banner. */
       if (e instanceof FetchOrgsError && e.status === 401) {
         return;
       }
@@ -245,6 +448,8 @@
         inlineListRefresh = false;
         listCheckAt = null;
         loading = false;
+        rowUi = {};
+        clearOrgListAnalysisCache();
       }
     });
     return unsub;
@@ -361,6 +566,7 @@
       {:else}
         <ul class="list">
           {#each displayedOrgs as o (o.login)}
+            {@const ui = rowUi[o.login]}
             <li class="row">
               <div class="row-main">
                 <img
@@ -374,16 +580,108 @@
                 <span class="org-name">{o.login}</span>
               </div>
               <div class="row-actions">
-                <button type="button" class="btn btn-muted" disabled title="Coming soon">
-                  Configure
-                </button>
-                <button type="button" class="btn btn-primary" disabled title="Coming soon">
-                  Deploy Fullsend
-                </button>
+                {#if ui === undefined || ui === "pending"}
+                  <div
+                    class="row-spinner"
+                    role="status"
+                    aria-live="polite"
+                    aria-busy="true"
+                    aria-label="Checking deployment state"
+                  >
+                    <span class="row-spinner-disc" aria-hidden="true"></span>
+                  </div>
+                {:else if ui.kind === "configure"}
+                  <a
+                    class="btn btn-muted"
+                    href="#/org/{encodeURIComponent(o.login)}"
+                  >
+                    Configure
+                  </a>
+                {:else if ui.kind === "deploy"}
+                  <a
+                    class="btn btn-primary"
+                    href="#/install/{encodeURIComponent(o.login)}"
+                  >
+                    Deploy Fullsend
+                  </a>
+                {:else if ui.kind === "cannot_deploy"}
+                  {@const cdId = cannotDeployPopoverId(o.login)}
+                  <div class="cannot-deploy">
+                    <span class="warn-icon" aria-hidden="true">⚠</span>
+                    <span class="cannot-deploy-label">Cannot deploy</span>
+                    <button
+                      type="button"
+                      class="info-btn"
+                      popovertarget={cdId}
+                      aria-haspopup="dialog"
+                      aria-label={`Details for why ${o.login} cannot deploy`}
+                    >
+                      i
+                    </button>
+                    <div id={cdId} class="cannot-deploy-popover" popover>
+                      <p class="cannot-deploy-popover-lead">{ui.reason}</p>
+                      {#if ui.githubApiMessage}
+                        <p class="cannot-deploy-popover-api">{ui.githubApiMessage}</p>
+                      {/if}
+                      {#if ui.missingPermissionLines?.length}
+                        <p class="cannot-deploy-popover-sub">Details from GitHub:</p>
+                        <ul class="cannot-deploy-popover-list">
+                          {#each ui.missingPermissionLines as line}
+                            <li>{line}</li>
+                          {/each}
+                        </ul>
+                      {/if}
+                      {#if ui.helpBullets?.length}
+                        <p class="cannot-deploy-popover-sub">What you can try:</p>
+                        <ul class="cannot-deploy-popover-list">
+                          {#each ui.helpBullets as line}
+                            <li>{line}</li>
+                          {/each}
+                        </ul>
+                      {/if}
+                    </div>
+                  </div>
+                {:else if ui.kind === "error"}
+                  {@const errId = rowErrPopoverId(o.login)}
+                  <div class="row-err">
+                    <span class="err-icon" aria-hidden="true">▲</span>
+                    <span class="row-err-label">Error</span>
+                    <button
+                      type="button"
+                      class="info-btn info-btn--err"
+                      popovertarget={errId}
+                      aria-haspopup="dialog"
+                      aria-label={`Technical details for error on ${o.login}`}
+                    >
+                      i
+                    </button>
+                    <div id={errId} class="row-err-popover" popover>
+                      <p class="row-err-popover-lead">{ui.message}</p>
+                    </div>
+                    <button
+                      type="button"
+                      class="btn row-err-retry"
+                      onclick={() => void refreshOrgRow(o.login)}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                {/if}
               </div>
             </li>
           {/each}
         </ul>
+        {#if loading && displayedOrgs.length > 0}
+          <div
+            class="org-more-loading"
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
+          >
+            <div class="org-more-spinner" aria-hidden="true"></div>
+            <span class="sr-only">Refreshing organisation list</span>
+          </div>
+        {/if}
       {/if}
     {/if}
 
@@ -479,6 +777,24 @@
       transform: rotate(360deg);
     }
   }
+  .org-more-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(5 * 2.75rem);
+    margin-top: 0.25rem;
+    border: 1px dashed #d0d7de;
+    border-radius: 8px;
+    background: #fafafa;
+  }
+  .org-more-spinner {
+    width: 2rem;
+    height: 2rem;
+    border: 3px solid #d0d7de;
+    border-top-color: #24292f;
+    border-radius: 50%;
+    animation: org-spin 0.75s linear infinite;
+  }
   .toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -544,6 +860,12 @@
   .btn-refresh:disabled {
     opacity: 0.88;
   }
+  .row-actions a.btn {
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+  }
   .btn-muted {
     background: #eaeaea;
     border-color: #bbb;
@@ -605,6 +927,134 @@
     flex-wrap: wrap;
     gap: 0.4rem;
     align-items: center;
+    min-height: 2.25rem;
+  }
+  .row-spinner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+  }
+  .row-spinner-disc {
+    display: block;
+    width: 1.25rem;
+    height: 1.25rem;
+    border: 2px solid #d0d7de;
+    border-top-color: #24292f;
+    border-radius: 50%;
+    animation: org-spin 0.75s linear infinite;
+  }
+  .cannot-deploy {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.88rem;
+    color: #9a6700;
+  }
+  .warn-icon {
+    font-size: 1rem;
+    line-height: 1;
+  }
+  .cannot-deploy-label {
+    font-weight: 600;
+  }
+  .info-btn {
+    box-sizing: border-box;
+    min-width: 1.35rem;
+    height: 1.35rem;
+    padding: 0;
+    border-radius: 999px;
+    border: 1px solid #bf8700;
+    background: #fff8c5;
+    color: #7d4e00;
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-style: italic;
+    cursor: help;
+    line-height: 1;
+  }
+  .info-btn:focus-visible {
+    outline: 2px solid #0969da;
+    outline-offset: 2px;
+  }
+  .info-btn--err {
+    border-color: #cf222e;
+    background: #ffeef0;
+    color: #a40e26;
+    font-style: italic;
+    cursor: pointer;
+  }
+  .cannot-deploy-popover {
+    max-width: min(22rem, calc(100vw - 2rem));
+    padding: 0.75rem 0.85rem;
+    border: 1px solid #d4a72c;
+    border-radius: 8px;
+    background: #fffef5;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    color: #24292f;
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+  .cannot-deploy-popover-lead {
+    margin: 0 0 0.5rem;
+    font-weight: 500;
+  }
+  .cannot-deploy-popover-api {
+    margin: 0 0 0.5rem;
+    font-size: 0.8rem;
+    color: #57606a;
+    word-break: break-word;
+  }
+  .cannot-deploy-popover-sub {
+    margin: 0.5rem 0 0.35rem;
+    font-weight: 600;
+    font-size: 0.82rem;
+  }
+  .cannot-deploy-popover-list {
+    margin: 0;
+    padding-left: 1.15rem;
+  }
+  .cannot-deploy-popover-list li {
+    margin: 0.2rem 0;
+  }
+  .row-err {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 20rem;
+    font-size: 0.85rem;
+    color: #a40e26;
+  }
+  .err-icon {
+    font-size: 0.75rem;
+    line-height: 1;
+  }
+  .row-err-label {
+    font-weight: 700;
+  }
+  .row-err-popover {
+    max-width: min(22rem, calc(100vw - 2rem));
+    padding: 0.75rem 0.85rem;
+    border: 1px solid #f0b2b2;
+    border-radius: 8px;
+    background: #fff8f8;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    color: #24292f;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    word-break: break-word;
+  }
+  .row-err-popover-lead {
+    margin: 0;
+    font-weight: 500;
+  }
+  .row-err-retry {
+    flex-shrink: 0;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.82rem;
   }
   .muted {
     color: #555;
@@ -667,9 +1117,6 @@
     line-height: 1.45;
     max-width: 40rem;
   }
-  /**
-   * Plain inline link — explicit reset so host or UA styles cannot turn this into a “button” link.
-   */
   .orgs-plain-link,
   .orgs-plain-link:visited {
     appearance: none;
