@@ -187,12 +187,18 @@ func (b *PlaywrightBrowserOpener) handleCreateAppPage() error {
 		Timeout: playwright.Float(90000),
 	}); err != nil {
 		pageURL := b.page.URL()
-		b.logf("[browser] Timeout waiting for callback, current URL: %s", pageURL)
+		// Strip query params before logging — the callback URL contains a
+		// temporary authorization code that should not appear in CI logs.
+		safeURL := pageURL
+		if idx := strings.Index(safeURL, "?"); idx != -1 {
+			safeURL = safeURL[:idx]
+		}
+		b.logf("[browser] Timeout waiting for callback, current URL: %s", safeURL)
 		if strings.Contains(pageURL, "/callback") {
 			return nil
 		}
 		saveDebugScreenshot(b.page, b.screenshotDir, "browser-callback-failed", b.logf)
-		return fmt.Errorf("waiting for callback (current URL: %s): %w", pageURL, err)
+		return fmt.Errorf("waiting for callback (current URL: %s): %w", safeURL, err)
 	}
 
 	return nil
