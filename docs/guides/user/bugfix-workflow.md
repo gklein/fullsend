@@ -27,11 +27,12 @@ Issue filed → Triage → ready-to-code → Code Agent → ready-for-review →
 
 ### Writing good bug reports
 
-The triage agent reads **only** the issue title, body, and GitHub-native attachments. It does not read comments. This means:
+The triage agent reads the issue title, body, comments, and GitHub-native attachments. This means:
 
-- Put all relevant information in the issue body — expected behavior, actual behavior, steps to reproduce, version/environment.
+- Put key information in the issue body — expected behavior, actual behavior, steps to reproduce, version/environment.
 - Use GitHub's native file attachments for logs, screenshots, or reproduction scripts.
-- If you need to update the report, **edit the issue body**, don't add a comment. Edits to the title or body trigger triage automatically.
+- You can add details via comments — the triage agent reads those too. Other users can also comment with additional context (e.g., confirming the bug on a different platform).
+- Editing the issue title or body triggers triage automatically. You can also use `/triage` to force a fresh run.
 
 ### Labels are the state machine
 
@@ -40,7 +41,7 @@ These labels track where an issue is in the pipeline:
 | Label | Meaning | What happens next |
 |-------|---------|-------------------|
 | `duplicate` | Same issue already tracked elsewhere | Issue closed, link to canonical issue |
-| `not-ready` | Missing information | Triage comment explains what's needed; edit the issue body to fix |
+| `not-ready` | Missing information | Triage comment explains what's needed; add a comment or edit the issue body to fix |
 | `not-reproducible` | Bug couldn't be reproduced in the sandbox | Human intervention required; triage comment documents what was tried |
 | `ready-to-code` | Triage passed | Code agent picks it up |
 | `ready-for-review` | PR with passing CI ready for review | Review agents evaluate the PR |
@@ -103,7 +104,7 @@ The triage agent:
 4. **Produces a test artifact.** When possible, writes a failing test case aligned with the repo's test framework.
 5. **Hands off.** Labels `ready-to-code` with a summary comment.
 
-**If triage gets it wrong:** Edit the issue body with better information and triage re-runs automatically. Or use `/triage` to force a fresh run — this clears all previous labels and starts from scratch.
+**If triage gets it wrong:** Add a comment with the missing information, or edit the issue body. Edits to the title or body trigger triage automatically. You can also use `/triage` to force a fresh run — this clears all previous labels and starts from scratch.
 
 ### Stage 2: Code
 
