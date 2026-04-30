@@ -439,6 +439,33 @@ describe("site worker admin API", () => {
     expect(body.error).toBe("param_too_long");
   });
 
+  it("redirects authorize to GitHub with state JSON including g when GITHUB_APP_SLUG is set", async () => {
+    const redirect = "http://localhost:5173/admin/";
+    const url = authorizeUrl(redirect);
+    const req = new IncomingRequest(url, {
+      method: "GET",
+      headers: { Origin: new URL(redirect).origin },
+    });
+    const ctx = createExecutionContext();
+    const envWithSlug = { ...env, GITHUB_APP_SLUG: "test-fullsend-app" };
+    const res = await worker.fetch(req, envWithSlug, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(302);
+    const loc = res.headers.get("Location");
+    expect(loc).toBeTruthy();
+    const gh = new URL(loc!);
+    expect(gh.hostname).toBe("github.com");
+    const state = gh.searchParams.get("state");
+    expect(state).toBeTruthy();
+    const pad = state!.length % 4 === 0 ? "" : "=".repeat(4 - (state!.length % 4));
+    const json = atob(state!.replace(/-/g, "+").replace(/_/g, "/") + pad);
+    const o = JSON.parse(json) as Record<string, unknown>;
+    expect(o.v).toBe(1);
+    expect(o.n).toBe("12345678");
+    expect(typeof o.k).toBe("string");
+    expect(o.g).toBe("test-fullsend-app");
+  });
+
   it("returns 400 missing_or_invalid_oauth_params on authorize when code_challenge_method is not S256", async () => {
     const redirect = "http://localhost:5173/admin/";
     const sp = new URLSearchParams({

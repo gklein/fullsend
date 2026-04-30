@@ -19,7 +19,7 @@ import {
   startGithubSignIn,
   tryParseWorkerExpandedOauthState,
 } from "./oauth";
-import { loadToken } from "./tokenStore";
+import { loadGithubAppSlug, loadToken } from "./tokenStore";
 
 const originalWindowLocation = window.location;
 
@@ -46,8 +46,13 @@ const OAUTH_STATE_KEY = "fullsend_admin_oauth_state";
 const PKCE_VERIFIER_KEY = "fullsend_admin_pkce_verifier";
 const INTENDED_HASH_KEY = "fullsend_admin_intended_hash";
 
-function workerExpandedStateB64(n: string, k = "0x4AAA_sitekey"): string {
-  const payload = { v: 1, n, k };
+function workerExpandedStateB64(
+  n: string,
+  k = "0x4AAA_sitekey",
+  g?: string,
+): string {
+  const payload: { v: number; n: string; k: string; g?: string } = { v: 1, n, k };
+  if (g !== undefined) payload.g = g;
   const bytes = new TextEncoder().encode(JSON.stringify(payload));
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
@@ -71,6 +76,21 @@ describe("tryParseWorkerExpandedOauthState", () => {
       n: "nonce-value",
       k: "0x4AAA_sitekey",
     });
+  });
+
+  it("parses optional g when it is a valid app slug", () => {
+    const b64 = workerExpandedStateB64("n1", "k1", "my-app");
+    expect(tryParseWorkerExpandedOauthState(b64)).toEqual({
+      v: 1,
+      n: "n1",
+      k: "k1",
+      g: "my-app",
+    });
+  });
+
+  it("returns null when g is present but not a valid slug", () => {
+    const b64 = workerExpandedStateB64("n1", "k1", "bad slug");
+    expect(tryParseWorkerExpandedOauthState(b64)).toBeNull();
   });
 });
 
@@ -310,6 +330,22 @@ describe("completeGithubOAuthFromHandoff", () => {
       turnstile_token: "ts-token",
     });
     expect(typeof body.redirect_uri).toBe("string");
+  });
+
+  it("persists GitHub App slug from expanded state on success", async () => {
+    const nonce = "55555555-5555-5555-5555-555555555555";
+    const expanded = workerExpandedStateB64(nonce, "site-key-1", "slug-from-state");
+    sessionStorage.setItem(
+      OAUTH_DOC_HANDOFF_KEY,
+      JSON.stringify({ code: "exchange-code", state: expanded }),
+    );
+    sessionStorage.setItem(OAUTH_STATE_KEY, nonce);
+    sessionStorage.setItem(PKCE_VERIFIER_KEY, "pkce-verifier-value");
+
+    const r = await completeGithubOAuthFromHandoff();
+
+    expect(r).toEqual({ ok: true });
+    expect(loadGithubAppSlug()).toBe("slug-from-state");
   });
 
   it("persists null expiresAt when token response omits expires_in", async () => {

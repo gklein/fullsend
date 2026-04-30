@@ -26,6 +26,11 @@ export interface Env {
    */
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
+  /**
+   * Optional. When set (non-empty), folded into OAuth `state` with the Turnstile site key so the
+   * SPA can build GitHub App install links after sign-in (not a Vite `define`).
+   */
+  GITHUB_APP_SLUG?: string;
   OAUTH_TOKEN_RATE_LIMITER: RateLimit;
   GITHUB_USER_RATE_LIMITER: RateLimit;
 }
@@ -87,7 +92,13 @@ function base64UrlEncodeJson(obj: unknown): string {
 
 function buildGithubState(env: Env, clientNonce: string): string | null {
   const siteKey = (env.TURNSTILE_SITE_KEY ?? "").trim();
-  const payload = { v: 1 as const, n: clientNonce, k: siteKey };
+  const appSlug = (env.GITHUB_APP_SLUG ?? "").trim();
+  const payload: { v: 1; n: string; k: string; g?: string } = {
+    v: 1,
+    n: clientNonce,
+    k: siteKey,
+  };
+  if (appSlug) payload.g = appSlug;
   const combined = base64UrlEncodeJson(payload);
   if (combined.length > MAX_GITHUB_STATE_LEN) return null;
   return combined;

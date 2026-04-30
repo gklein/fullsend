@@ -1,7 +1,12 @@
 import { challengeS256, randomVerifier } from "./pkce";
 import { refreshSession } from "./session";
 import { obtainTurnstileToken } from "./turnstile";
-import { clearSession, saveToken } from "./tokenStore";
+import { normalizeSlug } from "../orgs/installationOrgRows";
+import {
+  clearSession,
+  persistGithubAppSlugFromOAuth,
+  saveToken,
+} from "./tokenStore";
 
 const PKCE_VERIFIER_KEY = "fullsend_admin_pkce_verifier";
 const OAUTH_STATE_KEY = "fullsend_admin_oauth_state";
@@ -48,7 +53,7 @@ export function getOAuthRedirectUri(): string {
   return new URL(adminAppBasePath(), window.location.origin).href;
 }
 
-type WorkerExpandedOauthState = { v: 1; n: string; k: string };
+type WorkerExpandedOauthState = { v: 1; n: string; k: string; g?: string };
 
 function base64UrlToUtf8(s: string): string {
   const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
@@ -60,7 +65,7 @@ function base64UrlToUtf8(s: string): string {
 }
 
 /**
- * Parses Worker-built OAuth `state` (base64url JSON `{ v, n, k }`). Returns `null` for malformed
+ * Parses Worker-built OAuth `state` (base64url JSON `{ v, n, k, g? }`). Returns `null` for malformed
  * values or payloads that are not Worker-expanded state.
  */
 export function tryParseWorkerExpandedOauthState(
@@ -78,7 +83,14 @@ export function tryParseWorkerExpandedOauthState(
     const n = typeof r.n === "string" ? r.n : "";
     const k = typeof r.k === "string" ? r.k : "";
     if (!n || !k) return null;
-    return { v: 1, n, k };
+    let g: string | undefined;
+    if ("g" in r) {
+      if (typeof r.g !== "string") return null;
+      const gt = normalizeSlug(r.g);
+      if (!gt) return null;
+      g = gt;
+    }
+    return g ? { v: 1, n, k, g } : { v: 1, n, k };
   } catch {
     return null;
   }
@@ -376,6 +388,7 @@ export async function completeGithubOAuthFromHandoff(
     tokenType: token_type,
     expiresAt,
   });
+  persistGithubAppSlugFromOAuth(expanded.g);
   clearOAuthState();
 
   if (aborted()) {
