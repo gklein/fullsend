@@ -79,6 +79,17 @@ def test_malformed_json_fails_closed():
     assert "malformed" in response["reason"].lower()
 
 
+def test_case_insensitive_canary_blocks():
+    code, stdout = _run_hook(
+        json.dumps({"tool_name": "Bash", "tool_result": "leaked secret_canary_XYZ in output"}),
+        {"FULLSEND_CANARY_TOKEN": "SECRET_CANARY_xyz"},
+    )
+    assert code == 1
+    response = json.loads(stdout)
+    assert response["decision"] == "block"
+    assert "CANARY_LEAKED" in response["reason"]
+
+
 def test_empty_stdin_allows():
     code, stdout = _run_hook(
         "",
