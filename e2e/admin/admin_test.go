@@ -220,9 +220,8 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 		// wait before retrying so the next attempt starts clean.
 		const maxAttempts = 3
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			// Use a per-role timeout so a failed manifest flow doesn't hang
-			// until the Go test timeout (which produces an unhelpful panic).
-			roleCtx, roleCancel := context.WithTimeout(ctx, 3*time.Minute)
+			// 5min covers worst case: 3 attempts × (90s callback + cleanup) + inter-retry delays.
+			roleCtx, roleCancel := context.WithTimeout(ctx, 5*time.Minute)
 			var runErr error
 			appCreds, runErr = setup.Run(roleCtx, testOrg, role)
 			roleCancel()
