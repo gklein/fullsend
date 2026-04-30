@@ -220,8 +220,9 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 		// wait before retrying so the next attempt starts clean.
 		const maxAttempts = 3
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			// 5min covers worst case: 3 attempts × (90s callback + cleanup) + inter-retry delays.
-			roleCtx, roleCancel := context.WithTimeout(ctx, 5*time.Minute)
+			// 6min covers worst case: 3 attempts × (90s callback + ~20s cleanup)
+			// + 2 × 10s inter-retry delays ≈ 350s, with margin for overhead.
+			roleCtx, roleCancel := context.WithTimeout(ctx, 6*time.Minute)
 			var runErr error
 			appCreds, runErr = setup.Run(roleCtx, testOrg, role)
 			roleCancel()
