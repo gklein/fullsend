@@ -1,3 +1,6 @@
+import { clearOAuthScopeHeaderCache } from "../layers/preflight";
+import { clearInstallReadinessProbeCache } from "../orgs/installReadinessProbes";
+
 export type StoredToken = {
   accessToken: string;
   tokenType: string;
@@ -73,4 +76,6 @@ export function loadToken(): StoredToken | null {
 export function clearSession(): void {
   localStorage.removeItem(KEY);
   localStorage.removeItem(GITHUB_APP_SLUG_KEY);
+  clearOAuthScopeHeaderCache();
+  clearInstallReadinessProbeCache();
 }

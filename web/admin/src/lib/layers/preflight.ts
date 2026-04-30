@@ -22,8 +22,9 @@ export function parseXOauthScopesHeader(header: string | undefined): string[] | 
 
 /**
  * Compare required OAuth scopes to granted list.
- * When `granted` is null (fine-grained PAT / GitHub App user token with no header),
- * returns `skipped: true` per Go `Stack.Preflight`.
+ * When `granted` is null (no `X-OAuth-Scopes`, e.g. GitHub App user-to-server tokens),
+ * returns `skipped: true` per Go `Stack.Preflight`. The org list then uses
+ * `installReadinessProbes.ts` instead of assuming classic scopes exist.
  */
 export function computePreflight(required: string[], granted: string[] | null): PreflightResult {
   if (required.length === 0) {

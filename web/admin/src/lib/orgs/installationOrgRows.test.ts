@@ -54,7 +54,7 @@ describe("orgRowsAndSlugFromInstallations", () => {
       { account: null, app_slug: "only-slug" },
       { account: { login: "o", type: "Organization" } },
     ]);
-    expect(orgs).toEqual([{ login: "o", hasWritePathInOrg: true }]);
+    expect(orgs).toEqual([{ login: "o" }]);
     expect(appSlug).toBe("only-slug");
   });
 
@@ -80,7 +80,7 @@ describe("orgRowsAndSlugFromInstallations", () => {
         app_slug: "ci-app",
       },
     ]);
-    expect(orgs).toEqual([{ login: "lower-org", hasWritePathInOrg: true }]);
+    expect(orgs).toEqual([{ login: "lower-org" }]);
     expect(appSlug).toBe("ci-app");
   });
 
@@ -95,7 +95,7 @@ describe("orgRowsAndSlugFromInstallations", () => {
         app_slug: "some-app",
       },
     ]);
-    expect(orgs).toEqual([{ login: "real-org", hasWritePathInOrg: true }]);
+    expect(orgs).toEqual([{ login: "real-org" }]);
     expect(appSlug).toBe("some-app");
   });
 
@@ -110,7 +110,7 @@ describe("orgRowsAndSlugFromInstallations", () => {
         app_slug: "dedupe-app",
       },
     ]);
-    expect(orgs).toEqual([{ login: "dup-org", hasWritePathInOrg: true }]);
+    expect(orgs).toEqual([{ login: "dup-org" }]);
     expect(appSlug).toBe("dedupe-app");
   });
 
@@ -121,7 +121,7 @@ describe("orgRowsAndSlugFromInstallations", () => {
         app: { slug: "from-nested-slug" },
       },
     ]);
-    expect(orgs).toEqual([{ login: "nested-org", hasWritePathInOrg: true }]);
+    expect(orgs).toEqual([{ login: "nested-org" }]);
     expect(appSlug).toBe("from-nested-slug");
   });
 });

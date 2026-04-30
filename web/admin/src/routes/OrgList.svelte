@@ -13,11 +13,10 @@
   } from "../lib/orgs/fetchOrgs";
   import { batchOrganizationsFullsendRepoExists } from "../lib/orgs/batchOrganizationsFullsendRepoGraphql";
   import { filterOrgsBySearch, type OrgRow } from "../lib/orgs/filter";
+  import { resolveOrgListDeployRowCluster } from "../lib/orgs/installReadinessProbes";
   import {
     analyzeOrgForOrgList,
     buildDeployPreflight,
-    orgListRowFromAnalysis,
-    type OrgListDeployRowContext,
     type OrgListRowCluster,
   } from "../lib/orgs/orgListRow";
   import {
@@ -27,7 +26,6 @@
     invalidateOrgListAnalysisCacheEntry,
     setOrgListAnalysisCached,
   } from "../lib/orgs/orgListAnalysisCache";
-  import { fetchMembershipCreateRepoSignals } from "../lib/orgs/orgMembershipCreateRepo";
   import type { Octokit } from "@octokit/rest";
 
   /** Delays after an empty install list response for silent GitHub API rechecks (ms). */
@@ -117,23 +115,6 @@
   let rowUi = $state<Record<string, RowUiEntry>>({});
   let rowEvalGen = 0;
 
-  async function hydrateMembershipForOrgs(
-    orgs: OrgRow[],
-    signal: AbortSignal,
-  ): Promise<OrgRow[]> {
-    if (orgs.length === 0) return orgs;
-    const token = loadToken()?.accessToken;
-    if (!token) return orgs;
-    const octokit = createUserOctokit(token);
-    const m = await fetchMembershipCreateRepoSignals(octokit, { signal });
-    if (signal.aborted) return orgs;
-    return orgs.map((o) => ({
-      ...o,
-      membershipCanCreateRepository:
-        m.get(o.login.toLowerCase()) ?? o.membershipCanCreateRepository ?? null,
-    }));
-  }
-
   async function readDeployPreflightOrSkipped(
     octokit: Octokit,
     accessToken: string,
@@ -145,16 +126,6 @@
     } catch {
       return buildDeployPreflight(null);
     }
-  }
-
-  function orgRowContext(login: string): OrgListDeployRowContext {
-    const row =
-      serverOrgs.find((x) => x.login === login) ??
-      displayedOrgs.find((x) => x.login === login);
-    return {
-      hasWritePathInOrg: row?.hasWritePathInOrg ?? true,
-      membershipCanCreateRepository: row?.membershipCanCreateRepository ?? null,
-    };
   }
 
   async function refreshOrgRow(login: string): Promise<void> {
@@ -175,7 +146,13 @@
       }
       rowUi = {
         ...rowUi,
-        [login]: orgListRowFromAnalysis(res, deployPreflight, orgRowContext(login)),
+        [login]: await resolveOrgListDeployRowCluster(
+          res,
+          deployPreflight,
+          octokit,
+          token,
+          login,
+        ),
       };
     } catch (e) {
       rowUi = {
@@ -242,9 +219,25 @@
         const nextUi: Record<string, RowUiEntry> = {};
         for (const login of visibleLogins) {
           const cached = getOrgListAnalysisCached(login);
-          nextUi[login] = cached
-            ? orgListRowFromAnalysis(cached, deployPreflight, orgRowContext(login))
-            : "pending";
+          if (!cached) {
+            nextUi[login] = "pending";
+          } else {
+            try {
+              nextUi[login] = await resolveOrgListDeployRowCluster(
+                cached,
+                deployPreflight,
+                octokit,
+                token,
+                login,
+              );
+            } catch (e) {
+              nextUi[login] = {
+                kind: "error",
+                message:
+                  e instanceof Error ? e.message : "Failed to evaluate organisation.",
+              };
+            }
+          }
         }
         rowUi = nextUi;
 
@@ -269,14 +262,27 @@
             setOrgListAnalysisCached(login, res);
           }
           if (visibleSet.has(login.toLowerCase())) {
-            rowUi = {
-              ...rowUi,
-              [login]: orgListRowFromAnalysis(
-                res,
-                deployPreflight,
-                orgRowContext(login),
-              ),
-            };
+            try {
+              rowUi = {
+                ...rowUi,
+                [login]: await resolveOrgListDeployRowCluster(
+                  res,
+                  deployPreflight,
+                  octokit,
+                  token,
+                  login,
+                ),
+              };
+            } catch (e) {
+              rowUi = {
+                ...rowUi,
+                [login]: {
+                  kind: "error",
+                  message:
+                    e instanceof Error ? e.message : "Failed to evaluate organisation.",
+                },
+              };
+            }
           }
           if (idx < needNetwork.length - 1) {
             await new Promise((r) => setTimeout(r, ORG_ROW_ANALYSIS_THROTTLE_MS));
@@ -364,21 +370,13 @@
       });
       if (gen !== loadGeneration) return;
 
-      let hydrated = r.orgs;
-      if (!signal.aborted) {
-        try {
-          hydrated = await hydrateMembershipForOrgs(r.orgs, signal);
-        } catch {
-          hydrated = r.orgs;
-        }
-      }
       if (gen !== loadGeneration) return;
 
-      serverOrgs = hydrated;
+      serverOrgs = r.orgs;
       emptyHint = r.emptyHint;
       installationListTruncated = r.installationListTruncated;
       resolvedAppSlug = r.appSlugFromApi ?? loadGithubAppSlug();
-      const capped = filterOrgsBySearch(hydrated, search).slice(0, DISPLAY_CAP);
+      const capped = filterOrgsBySearch(r.orgs, search).slice(0, DISPLAY_CAP);
       commitDisplayedRowsFromScan(capped, true);
       listCheckAt = Date.now();
       if (
@@ -620,19 +618,18 @@
                     </button>
                     <div id={cdId} class="cannot-deploy-popover" popover>
                       <p class="cannot-deploy-popover-lead">{ui.reason}</p>
-                      {#if ui.githubApiMessage}
-                        <p class="cannot-deploy-popover-api">{ui.githubApiMessage}</p>
-                      {/if}
-                      {#if ui.missingPermissionLines?.length}
-                        <p class="cannot-deploy-popover-sub">Details from GitHub:</p>
+                      {#if ui.missingInstallRequirements?.length}
+                        <p class="cannot-deploy-popover-sub">
+                          Access an organisation owner may need to approve:
+                        </p>
                         <ul class="cannot-deploy-popover-list">
-                          {#each ui.missingPermissionLines as line}
+                          {#each ui.missingInstallRequirements as line}
                             <li>{line}</li>
                           {/each}
                         </ul>
                       {/if}
                       {#if ui.helpBullets?.length}
-                        <p class="cannot-deploy-popover-sub">What you can try:</p>
+                        <p class="cannot-deploy-popover-sub">Next steps</p>
                         <ul class="cannot-deploy-popover-list">
                           {#each ui.helpBullets as line}
                             <li>{line}</li>
@@ -1000,12 +997,6 @@
   .cannot-deploy-popover-lead {
     margin: 0 0 0.5rem;
     font-weight: 500;
-  }
-  .cannot-deploy-popover-api {
-    margin: 0 0 0.5rem;
-    font-size: 0.8rem;
-    color: #57606a;
-    word-break: break-word;
   }
   .cannot-deploy-popover-sub {
     margin: 0.5rem 0 0.35rem;

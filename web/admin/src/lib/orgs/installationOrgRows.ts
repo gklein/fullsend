@@ -54,7 +54,7 @@ export function orgRowsAndSlugFromInstallations(
     const login = acc.login.trim();
     if (!login) continue;
     if (!byLogin.has(login)) {
-      byLogin.set(login, { login, hasWritePathInOrg: true });
+      byLogin.set(login, { login });
     }
   }
 

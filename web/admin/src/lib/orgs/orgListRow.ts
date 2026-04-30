@@ -16,16 +16,15 @@ import {
 } from "../layers/orgConfigParse";
 import {
   computePreflight,
-  preflightOk,
   type PreflightResult,
 } from "../layers/preflight";
 import type { LayerReport, LayerStatus } from "../status/types";
 import { deployRequiredOAuthScopes } from "./deployOAuthScopes";
 
-/** Per-org signals from `GET /user/repos` and `GET /user/memberships/orgs` (see {@link OrgRow}). */
-export type OrgListDeployRowContext = {
-  hasWritePathInOrg: boolean;
-  membershipCanCreateRepository: boolean | null;
+/** Result of GitHub App install probes when classic `X-OAuth-Scopes` is absent. */
+export type GitHubAppInstallReadiness = {
+  ok: boolean;
+  missing: string[];
 };
 
 export type OrgListAnalysisOk = {
@@ -50,8 +49,9 @@ export type OrgListAnalysisErr = {
  * (`analyzeOrgLayers`) so permission failures on workflows, Actions, enrollment, or
  * org secrets surface as errors with GitHub hint headers — not only the config repo.
  *
- * `orgListRowFromAnalysis` uses **config-repo** plus OAuth preflight for Deploy vs
- * Configure; other reports stay available for future row UX and debugging.
+ * Deploy vs Configure uses **config-repo** plus install readiness: classic tokens compare
+ * `X-OAuth-Scopes` to {@link deployRequiredOAuthScopes}; GitHub App user tokens use
+ * read-only API probes (see `installReadinessProbes.ts`) instead of assuming OAuth scopes exist.
  */
 export type AnalyzeOrgForOrgListOptions = {
   /**
@@ -140,71 +140,61 @@ export type OrgListRowCluster =
   | {
       kind: "cannot_deploy";
       reason: string;
-      /** GitHub 403 diagnostic lines (headers / accepted permissions) from a failed API call. */
-      missingPermissionLines?: string[];
-      githubApiMessage?: string;
-      /** Short, actionable next steps for people (not raw API diagnostics). */
+      /** Plain-language access gaps to request from an organisation owner when needed. */
+      missingInstallRequirements?: string[];
       helpBullets?: string[];
     }
   | { kind: "error"; message: string };
 
-function cannotDeployClusterForMissingOAuthScopes(): OrgListRowCluster {
-  return {
-    kind: "cannot_deploy",
-    reason:
-      "Your current sign-in does not include all of the GitHub access Fullsend needs to install in this organisation.",
-    helpBullets: [
-      "Ask whoever manages this GitHub organisation (or the Fullsend admin app) to approve any pending app permissions, including organisation-level access if prompted.",
-      "Sign out of this app, complete the updated authorisation on GitHub, then sign in again.",
-    ],
-  };
+const ORG_OWNER_HELP = [
+  "If you are not an organisation owner, ask an owner to approve the Fullsend Admin application for this organisation and the access it needs. Organisations that use SAML may require an owner to authorize the app for your account afterward.",
+  "If you are an owner, use your organisation’s settings on GitHub to approve the app and the permissions it requests.",
+] as const;
+
+function userFacingPermissionForClassicScope(scope: string): string {
+  switch (scope.trim()) {
+    case "repo":
+      return "Repositories in this organisation (read and manage contents)";
+    case "workflow":
+      return "GitHub Actions on organisation repositories";
+    case "admin:org":
+      return "Organisation-level GitHub Actions settings and secrets";
+    default:
+      return `Access related to: ${scope}`;
+  }
 }
 
-function cannotDeployWhenOAuthPreflightSkippedReadOnlyOrg(): OrgListRowCluster {
+function cannotDeployClusterForMissingClassicScopes(
+  deployPreflight: PreflightResult,
+): OrgListRowCluster {
   return {
     kind: "cannot_deploy",
     reason:
-      "With your current access we cannot confirm that you can add or update the Fullsend configuration in this organisation.",
-    helpBullets: [
-      "If you should be able to install here, ask an organisation owner to confirm you can create repositories in this organisation or to grant you write access to an organisation repository.",
-      "Try Refresh, or sign out and sign in again after your administrator updates access for this app.",
-    ],
-  };
-}
-
-function cannotDeployOrgMembershipCannotCreateRepo(): OrgListRowCluster {
-  return {
-    kind: "cannot_deploy",
-    reason:
-      "Your role in this organisation does not include creating new repositories, which Fullsend needs to add its configuration repository.",
-    helpBullets: [
-      "Ask an organisation owner to change who may create repositories, or to run the install using an account that is allowed to create repositories here.",
-    ],
+      "Your GitHub account does not have everything it needs to deploy Fullsend in this organisation yet.",
+    missingInstallRequirements: deployPreflight.missing.map(userFacingPermissionForClassicScope),
+    helpBullets: [...ORG_OWNER_HELP],
   };
 }
 
 /**
  * Maps layer analysis to the org list trailing cluster.
- * - **403 / rate limits / network** from `analyzeOrgForOrgList` (any layer) → `cannot_deploy` or `error` before this mapper inspects reports.
- * - **Deploy vs Configure** (when analysis succeeds): uses **config-repo**, `deployPreflight`, and {@link OrgListDeployRowContext.membershipCanCreateRepository} from `GET /user/memberships/orgs` (`permissions.can_create_repository`). When that flag is `false`, Deploy is never offered. When it is `null` (outside collaborator / unknown), OAuth-skipped sessions still require {@link OrgListDeployRowContext.hasWritePathInOrg}.
- * Other layer reports remain on `result` for future UI (e.g. row hints) without changing the primary actions yet.
+ * - **403 / rate limits / network** from `analyzeOrgForOrgList` → `cannot_deploy` or `error`.
+ * - **Deploy vs Configure** (when analysis succeeds): **config-repo** status plus install
+ *   readiness — classic `X-OAuth-Scopes` when present, else {@link GitHubAppInstallReadiness}
+ *   from read-only API probes (`installReadinessProbes.ts` async wrapper supplies this).
  */
 export function orgListRowFromAnalysis(
   result: OrgListAnalysisOk | OrgListAnalysisErr,
   deployPreflight: PreflightResult,
-  rowContext: OrgListDeployRowContext,
+  githubAppReadiness?: GitHubAppInstallReadiness | null,
 ): OrgListRowCluster {
   if (result.kind === "error") {
     if (result.forbidden) {
       return {
         kind: "cannot_deploy",
-        reason: result.message,
-        ...(result.missingPermissionLines?.length
-          ? { missingPermissionLines: result.missingPermissionLines }
-          : {}),
-        ...(result.githubApiMessage
-          ? { githubApiMessage: result.githubApiMessage }
-          : {}),
+        reason:
+          "Your account cannot reach everything in this organisation that Fullsend needs to deploy or manage here.",
+        helpBullets: [...ORG_OWNER_HELP],
       };
     }
     return { kind: "error", message: result.message };
@@ -216,19 +206,27 @@ export function orgListRowFromAnalysis(
   }
 
   if (configReport.status === "not_installed") {
-    if (rowContext.membershipCanCreateRepository === false) {
-      return cannotDeployOrgMembershipCannotCreateRepo();
-    }
-    if (!preflightOk(deployPreflight) && !deployPreflight.skipped) {
-      return cannotDeployClusterForMissingOAuthScopes();
-    }
-    if (deployPreflight.skipped) {
-      const canTry =
-        rowContext.membershipCanCreateRepository === true ||
-        (rowContext.membershipCanCreateRepository === null && rowContext.hasWritePathInOrg);
-      if (!canTry) {
-        return cannotDeployWhenOAuthPreflightSkippedReadOnlyOrg();
+    if (!deployPreflight.skipped) {
+      if (deployPreflight.missing.length > 0) {
+        return cannotDeployClusterForMissingClassicScopes(deployPreflight);
       }
+      return { kind: "deploy" };
+    }
+    if (githubAppReadiness == null) {
+      return {
+        kind: "error",
+        message:
+          "Install readiness was not evaluated. Try Refresh, or report this if it persists.",
+      };
+    }
+    if (!githubAppReadiness.ok) {
+      return {
+        kind: "cannot_deploy",
+        reason:
+          "Your GitHub account does not have everything it needs to deploy Fullsend in this organisation yet.",
+        missingInstallRequirements: [...githubAppReadiness.missing],
+        helpBullets: [...ORG_OWNER_HELP],
+      };
     }
     return { kind: "deploy" };
   }
