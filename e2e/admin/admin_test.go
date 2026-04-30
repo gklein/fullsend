@@ -215,14 +215,14 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 		t.Logf("Setting up app for role: %s", role)
 
 		var appCreds *appsetup.AppCredentials
-		// Retry the manifest flow once per role to handle transient callback
-		// timeouts (see #287). On failure, delete any partially-created app
-		// before retrying so the second attempt starts clean.
-		const maxAttempts = 2
+		// Retry the manifest flow to handle transient callback timeouts
+		// (see #287). On failure, delete any partially-created app and
+		// wait before retrying so the next attempt starts clean.
+		const maxAttempts = 3
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
 			// Use a per-role timeout so a failed manifest flow doesn't hang
 			// until the Go test timeout (which produces an unhelpful panic).
-			roleCtx, roleCancel := context.WithTimeout(ctx, 2*time.Minute)
+			roleCtx, roleCancel := context.WithTimeout(ctx, 3*time.Minute)
 			var runErr error
 			appCreds, runErr = setup.Run(roleCtx, testOrg, role)
 			roleCancel()
@@ -233,12 +233,13 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 
 			t.Logf("Attempt %d/%d for role %s failed: %v", attempt, maxAttempts, role, runErr)
 			if attempt < maxAttempts {
-				// Clean up any partially-created app before retrying.
 				slug := appsetup.ExpectedAppSlug(testOrg, role)
 				t.Logf("Cleaning up potentially stale app %s before retry", slug)
 				if delErr := deleteAppViaPlaywright(env.page, slug, t.Logf, env.screenshotDir); delErr != nil {
 					t.Logf("Warning: cleanup of %s failed (may not exist): %v", slug, delErr)
 				}
+				t.Logf("Waiting 10s before retry to let GitHub settle...")
+				time.Sleep(10 * time.Second)
 				continue
 			}
 			require.NoError(t, runErr, "setting up app for role %s", role)

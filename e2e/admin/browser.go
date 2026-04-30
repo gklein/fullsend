@@ -170,20 +170,22 @@ func (b *PlaywrightBrowserOpener) handleCreateAppPage() error {
 		saveDebugScreenshot(b.page, b.screenshotDir, "browser-create-btn-failed", b.logf)
 		return fmt.Errorf("waiting for 'Create GitHub App' button: %w", err)
 	}
-	if err := btn.First().Click(playwright.LocatorClickOptions{
-		Timeout: playwright.Float(5000),
-	}); err != nil {
-		saveDebugScreenshot(b.page, b.screenshotDir, "browser-create-btn-failed", b.logf)
-		return fmt.Errorf("clicking 'Create GitHub App': %w", err)
-	}
 
-	// Wait for redirect back to our callback URL.
+	// Use ExpectNavigation to start listening BEFORE clicking, preventing
+	// the race where the redirect completes before WaitForURL is called.
 	// GitHub's manifest flow can be slow (app creation, key generation),
-	// so use a generous timeout.
-	if err := b.page.WaitForURL("**/callback**", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(30000),
-	}); err != nil {
+	// so use a 90-second timeout (increased from 30s per #287).
+	_, err := b.page.ExpectNavigation(func() error {
+		return btn.First().Click(playwright.LocatorClickOptions{
+			Timeout: playwright.Float(5000),
+		})
+	}, playwright.PageExpectNavigationOptions{
+		URL:     "**/callback**",
+		Timeout: playwright.Float(90000),
+	})
+	if err != nil {
 		pageURL := b.page.URL()
+		b.logf("[browser] Post-click URL: %s", pageURL)
 		if strings.Contains(pageURL, "/callback") || strings.Contains(pageURL, "127.0.0.1") {
 			return nil
 		}
