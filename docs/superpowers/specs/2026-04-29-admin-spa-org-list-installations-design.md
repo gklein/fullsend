@@ -11,7 +11,7 @@ Delivery branch: `feat/admin-spa-org-list` (may ship in the same PR as replaceme
 
 ## Problem
 
-The admin organisation picker today **infers organisations** from **`GET /user/repos`** (`web/admin/src/lib/orgs/fetchOrgs.ts`): unique **organisation owners** among repos the token can see. That list can be **misleading** relative to what the admin SPA can actually do next: **org setup, deploy, and install-state checks** assume the **Fullsend GitHub App is installed** on the organisation. Users see orgs they cannot act on, or empty lists that do not clearly point to **installing the app**.
+The admin organisation picker is driven by **`GET /user/installations`** (see `web/admin/src/lib/orgs/fetchOrgs.ts`): organisations appear only when the **Fullsend Admin GitHub App** is installed for the signed-in user. **Earlier designs** inferred orgs from **`GET /user/repos`**, which could be **misleading** relative to **org setup, deploy, and install-state checks** that assume the app is installed. Installations-backed listing avoids showing orgs the user cannot act on and pairs empty states with **install** guidance.
 
 ## Goals
 
@@ -20,7 +20,7 @@ The admin organisation picker today **infers organisations** from **`GET /user/r
 3. **No fallback** to the repo-scan org list when the installations API fails: show **accurate** errors and guidance (**Refresh** for transient failures; stable **403/permission** text for deployers vs **install app on orgs** for admins).
 4. **Install guidance:** always-on copy + link to GitHub’s **install the app** flow; when the list is empty, **additional** explanation in the **list region**, **above** that block (see [UI](#ui)).
 5. **App slug for install URL:** **prefer** a slug (or equivalent) from the **installations API response** when present; **otherwise** pass slug in **OAuth `state`** alongside the Turnstile site key (same Worker authorize path as today — not `VITE_*` / not a separate “install redirect” Worker route).
-6. **After install:** users **stay on GitHub** until they navigate back to the admin SPA; they use **Refresh** on the organisation list to reload installations. **No** session flag, automatic redirect, or forced refresh on return.
+6. **After install:** users **stay on GitHub** until they navigate back to the admin SPA; they use **Refresh** on the organisation list to reload installations. **No** session flag, automatic redirect, or forced full-page refresh on return. **Optional UX:** if the user remains on the org list with a **success-empty** result (zero org rows), the SPA may run a **small number of delayed background re-fetches** to absorb GitHub propagation delay; this supplements **Refresh** and does not replace it after returning from GitHub.
 
 ## Non-goals
 
@@ -40,7 +40,7 @@ The admin organisation picker today **infers organisations** from **`GET /user/r
 
 - **Preferred:** derive **`https://github.com/apps/<slug>/installations/new`** from fields on the installation or nested **app** object returned by **`GET /user/installations`**, when GitHub includes **`app.slug`** (or equivalent) the SPA is allowed to read.
 - **Fallback:** extend the Worker-built OAuth **`state`** payload (same mechanism as **`TURNSTILE_SITE_KEY`**) with an optional **`GITHUB_APP_SLUG`** (or keyed field) so the SPA can persist slug after sign-in when the installations response does not carry it.
-- **Validation:** reject malformed slug strings in the SPA parser (same discipline as other untrusted `state` fields).
+- **Validation:** in the SPA parser, **`g` must be a string** when present; wrong JSON types **fail the whole `state` parse** (same discipline as other required `state` fields). A **string** `g` that **fails slug format** is **omitted** so a misconfigured Worker cannot block sign-in; install links then fall back to slug from the installations API or remain unavailable until fixed.
 
 ## Errors and empty states
 
@@ -69,7 +69,7 @@ When the implementation stops after a **maximum number** of `GET /user/installat
 
 ## Testing
 
-- **Unit tests:** pagination helper, row mapping from fixture installation JSON, slug resolution order (API wins over stale stored slug), `state` parser with optional slug, error classification helpers.
+- **Unit tests:** pagination helper, row mapping from fixture installation JSON, slug resolution order (API wins over stale stored slug), `state` parser with optional slug (including **omit invalid string `g`**, **fail parse on wrong `g` type**), error classification helpers.
 - **Integration / manual:** token with zero installs, token with multiple org installs, 403 with missing GitHub App permission (staging app).
 
 ## Open items (for implementation plan)

@@ -162,12 +162,12 @@ Pick an organisation to **deploy** Fullsend into, **configure** an existing depl
 
 - **Title:** `Select an organisation to deploy or configure Fullsend`
 - **Search** field: **search-as-you-type**; placeholder **`Type to filter`** when empty.
-- **Refresh** control: triggers a **manual** re-fetch / re-evaluation of visible rows (respecting session caching policy from the companion spec).
+- **Refresh** control: triggers a **manual** re-fetch / re-evaluation of visible rows (respecting session caching policy from the companion spec). When the list is **success-empty**, the implementation may also run **a few delayed background re-fetches** without an extra click (see [`2026-04-29-admin-spa-org-list-installations-design.md`](2026-04-29-admin-spa-org-list-installations-design.md)); **Refresh** remains the primary action after returning from GitHub.
 
 ### Organisation selection — list
 
 - Up to **15** rows after filtering (see **Global UX patterns**).
-- While the organisation set is still being discovered (for example paginated **`GET /user/repos`**), **paint organisations as soon as they are known**, subject to the **progressive display rule** below.
+- While the organisation set is still being discovered (paginated **`GET /user/installations`**, per [`2026-04-29-admin-spa-org-list-installations-design.md`](2026-04-29-admin-spa-org-list-installations-design.md)), **paint organisations as soon as they are known**, subject to the **progressive display rule** below.
 - **Progressive display:** once **10** rows are on screen, **hold** further row updates until either discovery **finishes** or **at least five** additional filtered rows are available to show, then continue updating — always capped at **15** visible rows. (This reduces layout churn when many organisations appear quickly.)
 - **In-list loading:** when discovery may still be in flight and at least one row is already visible, show an **indeterminate spinner** in the blank area **below** the list; reserve vertical space similar to **five** row heights so users see that loading continues.
 - Each row, **left:** organisation **logo/avatar** + **organisation name**.
@@ -183,7 +183,7 @@ Pick an organisation to **deploy** Fullsend into, **configure** an existing depl
 
 ### Organisation selection — empty states
 
-- Loaded successfully, user has **zero** organisations: neutral empty state copy (implementation wording): e.g. **No organisations found for this account.**
+- Loaded successfully, user has **zero** organisations in the **installations-backed** list: show the **primary installations empty hint** (no orgs with the admin app yet + pointer to install below), then the always-on install block. If no dedicated hint is available, fall back to neutral copy such as **No organisations found for this account.**
 - Search active, **zero** matches: **No matching organisations.**
 
 ---
