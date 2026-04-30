@@ -104,6 +104,21 @@ func TestBuildProviderArgs_EmptyCredential(t *testing.T) {
 	assert.Empty(t, secrets)
 }
 
+func TestCollectLogs_OpenshellNotInPath(t *testing.T) {
+	t.Setenv("PATH", "")
+
+	_, err := CollectLogs("nonexistent-sandbox", "sandbox")
+	assert.Error(t, err)
+}
+
+func TestCollectLogs_InvalidSource(t *testing.T) {
+	// When openshell is not in PATH, any source should fail.
+	t.Setenv("PATH", "")
+
+	_, err := CollectLogs("test-sandbox", "invalid-source")
+	assert.Error(t, err)
+}
+
 func TestPathTraversalContainment(t *testing.T) {
 	// Simulate the containment check used in ExtractOutputFiles.
 	localDir := "/tmp/output"

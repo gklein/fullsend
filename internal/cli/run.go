@@ -239,6 +239,9 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 		}()
 	}
 	defer func() {
+		// Collect OpenShell logs before sandbox deletion for post-mortem debugging.
+		collectOpenshellLogs(sandboxName, runDir, printer)
+
 		cleanupStart := time.Now()
 		printer.StepStart("Cleaning up sandbox")
 		if err := sandbox.Delete(sandboxName); err != nil {
@@ -899,6 +902,50 @@ func buildScanContextCommand(repoDir, traceID string) string {
 		"source %s && FULLSEND_TRACE_ID='%s' find '%s' -maxdepth %d -type f \\( %s \\) -exec fullsend scan context {} +",
 		envFile, traceID, escapedDir, maxContextScanDepth, inameExpr,
 	)
+}
+
+// collectOpenshellLogs extracts OpenShell logs (sandbox and gateway sources)
+// into <runDir>/logs/ before sandbox deletion. Failures are warned but never
+// block the run — log collection is best-effort.
+func collectOpenshellLogs(sandboxName, runDir string, printer *ui.Printer) {
+	if runDir == "" {
+		return
+	}
+
+	logsDir := filepath.Join(runDir, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		printer.StepWarn("Failed to create logs directory: " + err.Error())
+		return
+	}
+
+	printer.StepStart("Collecting OpenShell logs")
+	collected := 0
+
+	sources := []struct {
+		name string
+		file string
+	}{
+		{"sandbox", "openshell-sandbox.log"},
+		{"gateway", "openshell-gateway.log"},
+	}
+
+	for _, src := range sources {
+		output, err := sandbox.CollectLogs(sandboxName, src.name)
+		if err != nil {
+			printer.StepWarn(fmt.Sprintf("Could not collect %s logs: %s", src.name, err.Error()))
+			continue
+		}
+		logPath := filepath.Join(logsDir, src.file)
+		if err := os.WriteFile(logPath, []byte(output), 0o644); err != nil {
+			printer.StepWarn(fmt.Sprintf("Could not write %s: %s", src.file, err.Error()))
+			continue
+		}
+		collected++
+	}
+
+	if collected > 0 {
+		printer.StepDone(fmt.Sprintf("Collected %d OpenShell log source(s) to %s", collected, logsDir))
+	}
 }
 
 // relOrAbs returns path relative to base, falling back to the absolute path if Rel fails.

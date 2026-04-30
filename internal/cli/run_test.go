@@ -1,10 +1,15 @@
 package cli
 
 import (
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
 func TestRunCommand_RequiresAgentName(t *testing.T) {
@@ -79,6 +84,29 @@ func TestBuildScanContextCommand_SourcesEnv(t *testing.T) {
 	assert.Contains(t, cmd, "source /tmp/workspace/.env &&")
 	assert.Contains(t, cmd, "FULLSEND_TRACE_ID='"+traceID+"'")
 	assert.Contains(t, cmd, "-exec fullsend scan context")
+}
+
+func TestCollectOpenshellLogs_EmptyRunDir(t *testing.T) {
+	// Should be a no-op when runDir is empty — no panic, no error.
+	printer := ui.New(io.Discard)
+	collectOpenshellLogs("test-sandbox", "", printer)
+}
+
+func TestCollectOpenshellLogs_CreatesLogsDir(t *testing.T) {
+	// collectOpenshellLogs should create the logs/ directory and attempt
+	// log collection. openshell is not available in test, so we expect
+	// warnings but no panic.
+	tmpDir := t.TempDir()
+	runDir := filepath.Join(tmpDir, "run")
+	require.NoError(t, os.MkdirAll(runDir, 0o755))
+
+	printer := ui.New(io.Discard)
+	collectOpenshellLogs("nonexistent-sandbox", runDir, printer)
+
+	// The logs directory should be created even if collection fails.
+	logsDir := filepath.Join(runDir, "logs")
+	_, err := os.Stat(logsDir)
+	assert.NoError(t, err, "logs directory should exist")
 }
 
 func TestEnvToList_Sorted(t *testing.T) {
