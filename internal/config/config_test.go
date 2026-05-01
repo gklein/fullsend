@@ -10,12 +10,13 @@ import (
 
 func TestValidRoles(t *testing.T) {
 	roles := ValidRoles()
-	assert.Len(t, roles, 5)
+	assert.Len(t, roles, 6)
 	assert.Contains(t, roles, "fullsend")
 	assert.Contains(t, roles, "triage")
 	assert.Contains(t, roles, "coder")
 	assert.Contains(t, roles, "review")
 	assert.Contains(t, roles, "fix")
+	assert.Contains(t, roles, "prioritize")
 }
 
 func TestNewOrgConfig(t *testing.T) {

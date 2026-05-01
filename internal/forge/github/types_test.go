@@ -73,6 +73,19 @@ func TestAgentAppConfig_Review(t *testing.T) {
 	assert.Contains(t, cfg.Events, "pull_request")
 }
 
+func TestAgentAppConfig_Prioritize(t *testing.T) {
+	cfg := AgentAppConfig("myorg", "prioritize")
+
+	assert.Equal(t, "myorg-prioritize", cfg.Name)
+	assert.Equal(t, "write", cfg.Permissions.OrganizationProjects)
+	assert.Equal(t, "write", cfg.Permissions.Issues)
+	assert.Empty(t, cfg.Permissions.Contents)
+	assert.Empty(t, cfg.Permissions.PullRequests)
+
+	// Prioritize is cron-driven, no webhook events.
+	assert.Empty(t, cfg.Events)
+}
+
 func TestAgentAppConfig_UnknownRole(t *testing.T) {
 	cfg := AgentAppConfig("myorg", "custom-bot")
 

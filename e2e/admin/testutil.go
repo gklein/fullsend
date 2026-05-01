@@ -38,7 +38,7 @@ const (
 )
 
 // defaultRoles is the standard set of agent roles.
-var defaultRoles = []string{"fullsend", "triage", "coder", "review"}
+var defaultRoles = []string{"fullsend", "triage", "coder", "review", "prioritize"}
 
 // envConfig holds required environment configuration.
 type envConfig struct {

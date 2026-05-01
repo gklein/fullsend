@@ -26,9 +26,9 @@ var (
 // Use this for env files that contain variable references which must be resolved
 // on the host (because the sandbox does not have those variables set).
 type HostFile struct {
-	Src      string `yaml:"src"`              // host path (may use ${VAR} expansion)
-	Dest     string `yaml:"dest"`             // destination path inside the sandbox
-	Expand   bool   `yaml:"expand,omitempty"` // expand ${VAR} in file content before copying
+	Src      string `yaml:"src"`                // host path (may use ${VAR} expansion)
+	Dest     string `yaml:"dest"`               // destination path inside the sandbox
+	Expand   bool   `yaml:"expand,omitempty"`   // expand ${VAR} in file content before copying
 	Optional bool   `yaml:"optional,omitempty"` // skip if src path is missing or expands to empty
 }
 
@@ -80,12 +80,12 @@ func LoadProviderDefs(dir string) ([]ProviderDef, error) {
 // SecurityConfig configures security scanning for the agent run.
 // Secure by default: omitting this block enables all scanners with fail_mode: closed.
 type SecurityConfig struct {
-	Enabled      *bool            `yaml:"enabled,omitempty"`       // nil = true (secure by default)
-	FailMode     string           `yaml:"fail_mode,omitempty"`     // "closed" or "open". Default: "closed"
-	HostScanners *HostScanners    `yaml:"host_scanners,omitempty"`
-	SandboxHooks *SandboxHooks    `yaml:"sandbox_hooks,omitempty"`
+	Enabled      *bool             `yaml:"enabled,omitempty"`   // nil = true (secure by default)
+	FailMode     string            `yaml:"fail_mode,omitempty"` // "closed" or "open". Default: "closed"
+	HostScanners *HostScanners     `yaml:"host_scanners,omitempty"`
+	SandboxHooks *SandboxHooks     `yaml:"sandbox_hooks,omitempty"`
 	Escalation   *EscalationConfig `yaml:"escalation,omitempty"`
-	Trace        *TraceConfig     `yaml:"trace,omitempty"`
+	Trace        *TraceConfig      `yaml:"trace,omitempty"`
 }
 
 // HostScanners configures which scanners run on the host before sandbox creation
@@ -432,6 +432,11 @@ func (h *Harness) ValidateFilesExist() error {
 	for i, hf := range h.HostFiles {
 		// Skip ${VAR} paths — they are expanded at bootstrap time.
 		if strings.Contains(hf.Src, "${") {
+			continue
+		}
+		// Skip optional host files — they may not exist until runtime
+		// (e.g., files created by the pre-script).
+		if hf.Optional {
 			continue
 		}
 		if err := check(fmt.Sprintf("host_files[%d].src", i), hf.Src); err != nil {
