@@ -54,7 +54,26 @@ describe("orgListRowFromAnalysis", () => {
     expect(row.kind).toBe("cannot_deploy");
     if (row.kind === "cannot_deploy") {
       expect(row.reason).toContain("cannot reach everything");
+      expect(row.missingInstallRequirements?.length).toBeGreaterThanOrEqual(3);
       expect(row.helpBullets?.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("cannot_deploy on forbidden includes analysis lines and GitHub API message", () => {
+    const err: OrgListAnalysisErr = {
+      kind: "error",
+      message: "Insufficient permissions",
+      forbidden: true,
+      missingPermissionLines: [
+        "GitHub reports this API call would be allowed with these OAuth scopes: repo.",
+      ],
+      githubApiMessage: "Resource not accessible by integration",
+    };
+    const row = orgListRowFromAnalysis(err, preflightAllGranted());
+    expect(row.kind).toBe("cannot_deploy");
+    if (row.kind === "cannot_deploy") {
+      expect(row.missingInstallRequirements?.[0]).toContain("OAuth scopes");
+      expect(row.missingInstallRequirements).toContain("Resource not accessible by integration");
     }
   });
 
@@ -82,7 +101,7 @@ describe("orgListRowFromAnalysis", () => {
     const row = orgListRowFromAnalysis(notInstalledOk, pf);
     expect(row.kind).toBe("error");
     if (row.kind === "error") {
-      expect(row.message).toContain("not evaluated");
+      expect(row.message).toContain("Try Refresh");
     }
   });
 

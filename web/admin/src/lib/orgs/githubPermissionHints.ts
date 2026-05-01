@@ -1,5 +1,15 @@
 import { RequestError } from "@octokit/request-error";
 
+/**
+ * Browser calls to `api.github.com` only see response headers listed in GitHub’s
+ * `Access-Control-Expose-Headers` (CORS). That list includes rate-limit headers and
+ * `X-OAuth-Scopes` / `X-Accepted-OAuth-Scopes`, but **not** `X-Accepted-GitHub-Permissions`.
+ * So user-to-server GitHub App tokens never surface fine-grained App permission hints to
+ * this SPA via headers — only the JSON body and the exposed OAuth scope headers are reliable.
+ *
+ * @see https://docs.github.com/en/rest/using-the-rest-api/using-cors-and-jsonp-to-make-cross-origin-requests
+ */
+
 /** Lowercase header names as returned by Octokit. */
 function headerGet(
   headers: Record<string, string> | undefined,
@@ -103,96 +113,30 @@ export function userGitHubRestRateLimitShortMessage(error: RequestError): string
   return `GitHub’s hourly REST API quota for this account is exhausted.${limitPart} Wait up to an hour, then use Retry or Refresh.`;
 }
 
-const ACCESS_LABEL: Record<string, string> = {
-  read: "Read-only",
-  write: "Read and write",
-  admin: "Administration",
-};
-
-/** Slugs from `X-Accepted-GitHub-Permissions` → GitHub App settings labels (Repository / Organization). */
-const PERM_SLUG_LABELS: Record<string, { section: "Repository" | "Organization"; label: string }> = {
-  metadata: { section: "Repository", label: "Metadata" },
-  contents: { section: "Repository", label: "Contents" },
-  secrets: { section: "Repository", label: "Secrets (Actions)" },
-  variables: { section: "Repository", label: "Variables (Actions)" },
-  actions: { section: "Repository", label: "Actions" },
-  workflows: { section: "Repository", label: "Workflows" },
-  administration: { section: "Repository", label: "Administration" },
-  issues: { section: "Repository", label: "Issues" },
-  pull_requests: { section: "Repository", label: "Pull requests" },
-  members: { section: "Organization", label: "Members" },
-  administration_org: { section: "Organization", label: "Administration" },
-};
-
-function formatSlugLabel(slug: string): { section: "Repository" | "Organization"; label: string } {
-  const mapped = PERM_SLUG_LABELS[slug];
-  if (mapped) return mapped;
-  const words = slug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  return { section: "Repository", label: words };
-}
-
-function formatPair(slug: string, access: string): string {
-  const accessLabel = ACCESS_LABEL[access] ?? access;
-  const { section, label } = formatSlugLabel(slug);
-  return `${section} permissions → ${label}: ${accessLabel}`;
-}
-
-/**
- * Parses `X-Accepted-GitHub-Permissions` per GitHub docs: comma = AND within an option,
- * semicolon = OR between alternative permission sets.
- * @see https://docs.github.com/en/rest/overview/troubleshooting-the-rest-api#resource-not-accessible
- */
-export function humanLinesFromAcceptedGitHubPermissions(raw: string | undefined): string[] {
-  if (!raw?.trim()) return [];
-  const alternatives = raw
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return alternatives.map((alt, idx) => {
-    const pairs = alt
-      .split(",")
-      .map((p) => p.trim())
-      .filter(Boolean)
-      .map((pair) => {
-        const eq = pair.indexOf("=");
-        if (eq === -1) return pair;
-        const slug = pair.slice(0, eq).trim();
-        const access = pair.slice(eq + 1).trim();
-        if (!slug || !access) return pair;
-        return formatPair(slug, access);
-      });
-    const joined = pairs.join(" + ");
-    if (alternatives.length === 1) {
-      return `GitHub App needs: ${joined}`;
-    }
-    return `Alternative ${idx + 1} (all of): ${joined}`;
-  });
-}
-
-/** Classic OAuth / PAT: scopes GitHub says would have worked. */
+/** Classic OAuth / PAT: scopes GitHub says would have worked (readable in browser per GitHub CORS). */
 export function humanLineFromAcceptedOAuthScopes(raw: string | undefined): string | undefined {
   if (!raw?.trim()) return undefined;
-  return `OAuth scopes GitHub accepted for this endpoint: ${raw.trim()}`;
+  return `GitHub reports this API call would be allowed with these OAuth scopes: ${raw.trim()}. Your account or token may need them, or an organisation owner may need to adjust app access.`;
 }
 
 export type Forbidden403Hints = {
+  /** Lines derived only from browser-visible sources (exposed OAuth scope headers + caller fallbacks). */
   missingPermissionLines: string[];
   githubApiMessage?: string;
-  rawAcceptedGitHubPermissions?: string;
-  rawAcceptedOAuthScopes?: string;
 };
 
+/**
+ * Collects permission hints available to the **browser** Octokit client.
+ * Does not read `X-Accepted-GitHub-Permissions` — that header is not exposed to cross-origin JS.
+ */
 export function forbidden403HintsFromRequestError(error: RequestError): Forbidden403Hints {
   const headers = error.response?.headers as Record<string, string> | undefined;
-  const rawGh = headerGet(headers, "x-accepted-github-permissions");
   const rawOAuth = headerGet(headers, "x-accepted-oauth-scopes");
-  const lines = [...humanLinesFromAcceptedGitHubPermissions(rawGh)];
+  const lines: string[] = [];
   const oauthLine = humanLineFromAcceptedOAuthScopes(rawOAuth);
   if (oauthLine) lines.push(oauthLine);
   return {
     missingPermissionLines: lines,
     githubApiMessage: githubApiMessage(error.response?.data),
-    rawAcceptedGitHubPermissions: rawGh?.trim() || undefined,
-    rawAcceptedOAuthScopes: rawOAuth?.trim() || undefined,
   };
 }

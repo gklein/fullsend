@@ -2,40 +2,21 @@ import { describe, expect, it } from "vitest";
 import { RequestError } from "@octokit/request-error";
 import {
   forbidden403HintsFromRequestError,
-  humanLinesFromAcceptedGitHubPermissions,
+  humanLineFromAcceptedOAuthScopes,
   isLikelyGitHubRateLimit403,
   userGitHubRestRateLimitShortMessage,
 } from "./githubPermissionHints";
 
-describe("humanLinesFromAcceptedGitHubPermissions", () => {
-  it("formats a single permission", () => {
-    expect(humanLinesFromAcceptedGitHubPermissions("contents=read")).toEqual([
-      "GitHub App needs: Repository permissions → Contents: Read-only",
-    ]);
-  });
-
-  it("formats AND within one alternative", () => {
-    expect(
-      humanLinesFromAcceptedGitHubPermissions("pull_requests=write,contents=read"),
-    ).toEqual([
-      "GitHub App needs: Repository permissions → Pull requests: Read and write + Repository permissions → Contents: Read-only",
-    ]);
-  });
-
-  it("formats OR alternatives", () => {
-    expect(
-      humanLinesFromAcceptedGitHubPermissions(
-        "pull_requests=read,contents=read; issues=read,contents=read",
-      ),
-    ).toEqual([
-      "Alternative 1 (all of): Repository permissions → Pull requests: Read-only + Repository permissions → Contents: Read-only",
-      "Alternative 2 (all of): Repository permissions → Issues: Read-only + Repository permissions → Contents: Read-only",
-    ]);
+describe("humanLineFromAcceptedOAuthScopes", () => {
+  it("returns an actionable line when scopes are present", () => {
+    const line = humanLineFromAcceptedOAuthScopes("repo, workflow");
+    expect(line).toContain("repo, workflow");
+    expect(line).toContain("OAuth scopes");
   });
 });
 
 describe("forbidden403HintsFromRequestError", () => {
-  it("collects GitHub + OAuth hint headers and API message", () => {
+  it("uses only browser-exposed OAuth scope headers, not GitHub-Permissions (invisible under CORS)", () => {
     const err = new RequestError("Forbidden", 403, {
       request: { method: "GET", url: "https://api.github.com/test", headers: {} },
       response: {
@@ -50,12 +31,27 @@ describe("forbidden403HintsFromRequestError", () => {
     });
     expect(forbidden403HintsFromRequestError(err)).toEqual({
       missingPermissionLines: [
-        "GitHub App needs: Repository permissions → Secrets (Actions): Read-only",
-        "OAuth scopes GitHub accepted for this endpoint: repo",
+        "GitHub reports this API call would be allowed with these OAuth scopes: repo. Your account or token may need them, or an organisation owner may need to adjust app access.",
       ],
       githubApiMessage: "Resource not accessible by integration",
-      rawAcceptedGitHubPermissions: "secrets=read",
-      rawAcceptedOAuthScopes: "repo",
+    });
+  });
+
+  it("returns empty lines when only GitHub-Permissions header is set (SPA cannot read it in real browsers)", () => {
+    const err = new RequestError("Forbidden", 403, {
+      request: { method: "GET", url: "https://api.github.com/test", headers: {} },
+      response: {
+        status: 403,
+        url: "https://api.github.com/test",
+        headers: {
+          "x-accepted-github-permissions": "contents=read",
+        },
+        data: { message: "Not allowed" },
+      },
+    });
+    expect(forbidden403HintsFromRequestError(err)).toEqual({
+      missingPermissionLines: [],
+      githubApiMessage: "Not allowed",
     });
   });
 });

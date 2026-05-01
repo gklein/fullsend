@@ -38,7 +38,10 @@ export type OrgListAnalysisErr = {
   message: string;
   /** True when GitHub returned 403 (token cannot read this org’s installation state). */
   forbidden: boolean;
-  /** Human lines derived from `X-Accepted-GitHub-Permissions` / OAuth scope headers when present. */
+  /**
+   * Actionable bullets for org owners / the signed-in user (browser-visible OAuth scope hints,
+   * then defaults — never relies on `X-Accepted-GitHub-Permissions`, which CORS hides from JS).
+   */
   missingPermissionLines?: string[];
   /** GitHub JSON `message` on the failing response, when available. */
   githubApiMessage?: string;
@@ -47,7 +50,7 @@ export type OrgListAnalysisErr = {
 /**
  * Runs the same read-only layer stack as the org dashboard **analyze** path
  * (`analyzeOrgLayers`) so permission failures on workflows, Actions, enrollment, or
- * org secrets surface as errors with GitHub hint headers — not only the config repo.
+ * org secrets surface as actionable permission errors — not only the config repo.
  *
  * Deploy vs Configure uses **config-repo** plus install readiness: classic tokens compare
  * `X-OAuth-Scopes` to {@link deployRequiredOAuthScopes}; GitHub App user tokens use
@@ -112,10 +115,8 @@ export async function analyzeOrgForOrgList(
       const hints = forbidden403HintsFromRequestError(e);
       const lines =
         hints.missingPermissionLines.length > 0
-          ? hints.missingPermissionLines
-          : [
-              "GitHub did not include permission hints on this response. Org owners may still need to: approve updated GitHub App permissions, authorize SAML SSO for this app, allow third-party GitHub App access for the organisation, or grant the app access to the repositories Fullsend inspects (including the `.fullsend` config repo and any enrolled repos).",
-            ];
+          ? [...hints.missingPermissionLines]
+          : [...DEFAULT_FORBIDDEN_ACTION_LINES];
       return {
         kind: "error",
         message:
@@ -149,6 +150,13 @@ export type OrgListRowCluster =
 const ORG_OWNER_HELP = [
   "If you are not an organisation owner, ask an owner to approve the Fullsend Admin application for this organisation and the access it needs. Organisations that use SAML may require an owner to authorize the app for your account afterward.",
   "If you are an owner, use your organisation’s settings on GitHub to approve the app and the permissions it requests.",
+] as const;
+
+/** When GitHub returns 403 without browser-visible OAuth scope hints on the response. */
+const DEFAULT_FORBIDDEN_ACTION_LINES = [
+  "An organisation owner may need to approve or install the Fullsend Admin GitHub App and accept the permissions it requests.",
+  "If the organisation uses SAML single sign-on, an owner may need to authorize the app for your GitHub account after you sign in.",
+  "Organisation policies may need to allow this app access to the org and its repositories (including the `.fullsend` configuration repository).",
 ] as const;
 
 function userFacingPermissionForClassicScope(scope: string): string {
@@ -190,10 +198,19 @@ export function orgListRowFromAnalysis(
 ): OrgListRowCluster {
   if (result.kind === "error") {
     if (result.forbidden) {
+      let req: string[] = [...(result.missingPermissionLines ?? [])];
+      const api = result.githubApiMessage?.trim();
+      if (api && !req.some((line) => line.includes(api))) {
+        req.push(api);
+      }
+      if (req.length === 0) {
+        req = [...DEFAULT_FORBIDDEN_ACTION_LINES];
+      }
       return {
         kind: "cannot_deploy",
         reason:
           "Your account cannot reach everything in this organisation that Fullsend needs to deploy or manage here.",
+        missingInstallRequirements: req,
         helpBullets: [...ORG_OWNER_HELP],
       };
     }
@@ -202,7 +219,11 @@ export function orgListRowFromAnalysis(
 
   const configReport = result.reports.find((r: LayerReport) => r.name === "config-repo");
   if (!configReport) {
-    return { kind: "error", message: "Missing config-repo layer report." };
+    return {
+      kind: "error",
+      message:
+        "Could not determine configuration status for this organisation. Try Refresh, or ask an organisation owner to check app access.",
+    };
   }
 
   if (configReport.status === "not_installed") {
@@ -215,8 +236,7 @@ export function orgListRowFromAnalysis(
     if (githubAppReadiness == null) {
       return {
         kind: "error",
-        message:
-          "Install readiness was not evaluated. Try Refresh, or report this if it persists.",
+        message: "Could not confirm deploy access for this organisation yet. Try Refresh.",
       };
     }
     if (!githubAppReadiness.ok) {
