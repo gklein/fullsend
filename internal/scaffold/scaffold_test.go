@@ -21,6 +21,8 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		".github/workflows/fix.yml",
 		".github/workflows/repo-maintenance.yml",
 		".github/actions/fullsend/action.yml",
+		".github/actions/setup-gcp/action.yml",
+		".github/actions/validate-enrollment/action.yml",
 		".github/scripts/setup-agent-env.sh",
 		"agents/triage.md",
 		"agents/code.md",
@@ -40,6 +42,7 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		"scripts/post-code.sh",
 		"scripts/reconcile-repos.sh",
 		"scripts/validate-output-schema.sh",
+		"scripts/validate-source-repo.sh",
 		"skills/code-implementation/SKILL.md",
 		"templates/shim-workflow.yaml",
 	}
