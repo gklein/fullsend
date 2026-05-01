@@ -33,7 +33,6 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Validate enrollment and extract repo metadata
-        id: repo-parts
         uses: ./.github/actions/validate-enrollment
         with:
           source_repo: ${{ inputs.source_repo }}

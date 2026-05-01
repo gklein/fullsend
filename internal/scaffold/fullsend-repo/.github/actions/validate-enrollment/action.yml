@@ -7,10 +7,10 @@ inputs:
     required: true
 
 outputs:
-  repo_name:
+  name:
     description: 'Repository name (without owner)'
     value: ${{ steps.extract.outputs.name }}
-  repo_owner:
+  owner:
     description: 'Repository owner'
     value: ${{ steps.extract.outputs.owner }}
 
