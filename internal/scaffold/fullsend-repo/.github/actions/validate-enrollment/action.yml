@@ -1,0 +1,34 @@
+name: Validate Enrollment
+description: Validate that source repository is enrolled and extract repository metadata
+
+inputs:
+  source_repo:
+    description: 'Source repository in owner/repo format'
+    required: true
+
+outputs:
+  repo_name:
+    description: 'Repository name (without owner)'
+    value: ${{ steps.extract.outputs.name }}
+  repo_owner:
+    description: 'Repository owner'
+    value: ${{ steps.extract.outputs.owner }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate source repo is enrolled
+      shell: bash
+      env:
+        SOURCE_REPO: ${{ inputs.source_repo }}
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+      run: bash scripts/validate-source-repo.sh
+
+    - name: Extract repo parts
+      id: extract
+      shell: bash
+      env:
+        SOURCE_REPO: ${{ inputs.source_repo }}
+      run: |
+        echo "name=${SOURCE_REPO##*/}" >> "${GITHUB_OUTPUT}"
+        echo "owner=${SOURCE_REPO%%/*}" >> "${GITHUB_OUTPUT}"

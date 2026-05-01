@@ -201,7 +201,8 @@ func TestFixWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "FULLSEND_CODER_CLIENT_ID")
 	assert.Contains(t, s, "sandbox-token")
 	assert.Contains(t, s, "push-token")
-	assert.Contains(t, s, "RUNNER_TEMP/empty-oidc-token")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-fix-")
