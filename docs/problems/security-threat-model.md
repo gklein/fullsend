@@ -73,6 +73,17 @@ This matters for fullsend because review agents and code agents process forge co
 - **Output scanning** — the existing `SecretRedactor` pipeline should apply to all agent output, not just to content the agent explicitly identifies as sensitive. This is already the design intent (see [ADR 0022](../ADRs/0022-harness-level-output-schema-enforcement.md)), but the indirect disclosure pattern underscores why output-side scanning is not optional.
 - **Content-aware redaction** — agents processing forge content should redact PII patterns (SSNs, bank accounts, addresses) from their output regardless of whether the input was explicitly marked as sensitive.
 
+### Disproportionate response via social pressure
+
+A variant that exploits alignment training rather than injecting instructions. Shapira et al. (2026) document agents that, under expressions of urgency or distress from non-owners, escalated corrective actions far beyond what was proportionate — disabling an entire email system to protect one secret, or agreeing to stop serving all users because one person expressed disappointment. The mechanism is not adversarial text but emotional framing that triggers the model's helpfulness and compliance training.
+
+In fullsend, agents cannot take forge actions directly — credentialed operations (push, label, comment) are applied by deterministic post-scripts outside the sandbox ([ADR 0017](../ADRs/0017-credential-isolation-for-sandboxed-agents.md)). This limits the blast radius: a manipulated agent cannot delete branches or force-push. However, the agent controls the *content* of its output (the diff it produces, the triage decision it makes), and the post-script applies validated output faithfully. [ADR 0022](../ADRs/0022-harness-level-output-schema-enforcement.md) validates output structure but not semantic proportionality — it cannot distinguish a proportionate one-file fix from an unnecessary forty-file rewrite triggered by an emotionally charged comment.
+
+**Defense considerations:**
+
+- **Output magnitude heuristics** — the post-script or validation loop could flag outputs whose scope (files changed, labels modified, issues created) is disproportionate to the triggering event's scope, escalating to a human rather than applying automatically.
+- **Alignment-aware adversarial testing** — red-teaming should include social pressure vectors (guilt, urgency, appeals to helpfulness), not just instruction injection.
+
 ### Persistent injection via externally editable resources
 
 Another injection variant documented in Shapira et al. (2026) bypasses the immutability principle by storing malicious instructions in an external resource (e.g., a GitHub Gist) that the agent references from its persistent state. The attacker convinces the agent to link to a shared document, then modifies the document after the fact to inject instructions the agent follows in subsequent sessions.
