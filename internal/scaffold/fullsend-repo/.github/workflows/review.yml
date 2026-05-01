@@ -92,6 +92,9 @@ jobs:
           path: target-repo
           fetch-depth: 1
 
+      - name: Pre-mask GCP credential file path
+        run: echo "::add-mask::${GITHUB_WORKSPACE}/gha-creds-"
+
       - name: Authenticate to Google Cloud (WIF)
         if: vars.FULLSEND_GCP_AUTH_MODE == 'wif'
         uses: google-github-actions/auth@v3

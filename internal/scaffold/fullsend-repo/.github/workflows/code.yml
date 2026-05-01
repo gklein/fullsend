@@ -101,6 +101,9 @@ jobs:
           GITHUB_ISSUE_URL: ${{ fromJSON(inputs.event_payload).issue.html_url }}
         run: bash scripts/pre-code.sh
 
+      - name: Pre-mask GCP credential file path
+        run: echo "::add-mask::${GITHUB_WORKSPACE}/gha-creds-"
+
       - name: Authenticate to Google Cloud (WIF)
         if: vars.FULLSEND_GCP_AUTH_MODE == 'wif'
         uses: google-github-actions/auth@v3
