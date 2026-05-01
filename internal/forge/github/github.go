@@ -236,6 +236,12 @@ func decodeJSON(resp *http.Response, v any) error {
 }
 
 // ListOrgRepos returns all non-archived, non-fork repositories for an org.
+//
+// Forks are excluded because fullsend's trust model assumes org-owned repos
+// where CODEOWNERS governance and org-level permissions control agent
+// autonomy. Fork repos may have different ownership and CODEOWNERS configs,
+// which could bypass human-approval gates. Archived repos are excluded
+// because they represent inactive targets where agent work would be wasted.
 func (c *LiveClient) ListOrgRepos(ctx context.Context, org string) ([]forge.Repository, error) {
 	var result []forge.Repository
 
@@ -467,7 +473,8 @@ func (c *LiveClient) CreateOrUpdateFileOnBranch(ctx context.Context, owner, repo
 }
 
 // putFileWithRetry wraps a single PUT to the Contents API with retry on
-// transient errors (404 from async repo init, 409 from branch ref races).
+// transient errors (404 from async repo init, 409 from branch ref races,
+// 502/503/504 from server-side infrastructure issues).
 func (c *LiveClient) putFileWithRetry(ctx context.Context, apiPath string, payload map[string]any, path string) error {
 	return c.retryOnTransient(ctx, path, func() error {
 		resp, err := c.put(ctx, apiPath, payload)
@@ -479,9 +486,11 @@ func (c *LiveClient) putFileWithRetry(ctx context.Context, apiPath string, paylo
 	})
 }
 
-// retryOnTransient retries an operation that may fail with 404 or 409 due to
-// GitHub's async repo initialization or branch ref update races. It uses
-// linear backoff (2s between attempts) and up to 5 attempts (~10s total).
+// retryOnTransient retries an operation that may fail with transient HTTP
+// errors. It handles 404 (async repo initialization), 409 (branch ref update
+// races), and server-side 5xx errors (502, 503, 504) that indicate transient
+// GitHub infrastructure issues. It uses linear backoff (2s between attempts)
+// and up to 5 attempts (~10s total).
 func (c *LiveClient) retryOnTransient(ctx context.Context, label string, fn func() error) error {
 	const attempts = 5
 	const delay = 2 * time.Second
@@ -493,9 +502,12 @@ func (c *LiveClient) retryOnTransient(ctx context.Context, label string, fn func
 			return nil
 		}
 
-		// Only retry on 404 (repo not ready) or 409 (branch ref conflict).
+		// Retry on transient errors:
+		// - 404: repo not ready (async init)
+		// - 409: branch ref conflict
+		// - 502/503/504: transient server-side errors
 		var apiErr *APIError
-		if !errors.As(lastErr, &apiErr) || (apiErr.StatusCode != 404 && apiErr.StatusCode != 409) {
+		if !errors.As(lastErr, &apiErr) || !isTransientStatus(apiErr.StatusCode) {
 			return lastErr
 		}
 
@@ -508,6 +520,22 @@ func (c *LiveClient) retryOnTransient(ctx context.Context, label string, fn func
 		}
 	}
 	return fmt.Errorf("%s: %w (after %d attempts)", label, lastErr, attempts)
+}
+
+// isTransientStatus returns true for HTTP status codes that indicate a
+// transient error worth retrying: 404 (async repo init), 409 (branch ref
+// conflict), and server-side 502, 503, 504 (GitHub infrastructure errors).
+func isTransientStatus(code int) bool {
+	switch code {
+	case http.StatusNotFound,
+		http.StatusConflict,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 // GetFileContent retrieves the content of a file from a repository.
@@ -966,10 +994,11 @@ func (c *LiveClient) ListIssueComments(ctx context.Context, owner, repo string, 
 			return nil, fmt.Errorf("list issue comments page %d: %w", page, err)
 		}
 		var raw []struct {
-			ID     int    `json:"id"`
-			NodeID string `json:"node_id"`
-			Body   string `json:"body"`
-			User   struct {
+			ID      int    `json:"id"`
+			NodeID  string `json:"node_id"`
+			HTMLURL string `json:"html_url"`
+			Body    string `json:"body"`
+			User    struct {
 				Login string `json:"login"`
 			} `json:"user"`
 			CreatedAt string `json:"created_at"`
@@ -982,6 +1011,7 @@ func (c *LiveClient) ListIssueComments(ctx context.Context, owner, repo string, 
 			result = append(result, forge.IssueComment{
 				ID:        r.ID,
 				NodeID:    r.NodeID,
+				HTMLURL:   r.HTMLURL,
 				Body:      r.Body,
 				Author:    r.User.Login,
 				CreatedAt: r.CreatedAt,
@@ -1003,10 +1033,11 @@ func (c *LiveClient) CreateIssueComment(ctx context.Context, owner, repo string,
 		return nil, fmt.Errorf("create issue comment on #%d: %w", number, err)
 	}
 	var result struct {
-		ID     int    `json:"id"`
-		NodeID string `json:"node_id"`
-		Body   string `json:"body"`
-		User   struct {
+		ID      int    `json:"id"`
+		NodeID  string `json:"node_id"`
+		HTMLURL string `json:"html_url"`
+		Body    string `json:"body"`
+		User    struct {
 			Login string `json:"login"`
 		} `json:"user"`
 		CreatedAt string `json:"created_at"`
@@ -1017,6 +1048,7 @@ func (c *LiveClient) CreateIssueComment(ctx context.Context, owner, repo string,
 	return &forge.IssueComment{
 		ID:        result.ID,
 		NodeID:    result.NodeID,
+		HTMLURL:   result.HTMLURL,
 		Body:      result.Body,
 		Author:    result.User.Login,
 		CreatedAt: result.CreatedAt,
