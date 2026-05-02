@@ -28,6 +28,9 @@ FROM ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:11c73b5a90297f5917
 # package installation and switch back at the end.
 USER root
 
+# BuildKit automatic platform ARG — set by --platform during multi-arch builds.
+ARG TARGETARCH
+
 # ---------------------------------------------------------------------------
 # Install rsync (for safe repo write-back).
 RUN apt-get update \
@@ -70,7 +73,6 @@ RUN mkdir -p "${PROTECTAI_MODEL_DIR}" \
 # Pinned version for supply chain safety.
 # To update: bump ORT_VERSION from:
 #   https://github.com/microsoft/onnxruntime/releases
-ARG TARGETARCH
 ARG ORT_VERSION=1.24.1
 ARG ORT_SHA256_AMD64=9142552248b735920f9390027e4512a2cacf8946a1ffcbe9071a5c210531026f
 ARG ORT_SHA256_ARM64=0f56edd68f7602df790b68b874a46b115add037e88385c6c842bb763b39b9f89
@@ -91,7 +93,6 @@ RUN ORT_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") \
 # Pinned version + SHA256 checksum for supply chain safety.
 # To update: bump version and checksum from:
 #   https://github.com/gitleaks/gitleaks/releases/download/v<VERSION>/gitleaks_<VERSION>_checksums.txt
-ARG TARGETARCH
 ARG GITLEAKS_VERSION=8.30.1
 ARG GITLEAKS_SHA256_AMD64=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 ARG GITLEAKS_SHA256_ARM64=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
@@ -126,7 +127,6 @@ RUN apt-get update \
 # Pinned version + sha256 checksum for supply chain safety.
 # To update: bump TIRITH_VERSION and TIRITH_SHA256 from the checksums.txt
 # in the GitHub release: https://github.com/sheeki03/tirith/releases
-ARG TARGETARCH
 ARG TIRITH_VERSION=0.2.12
 ARG TIRITH_SHA256_AMD64=0ecc5430d9d9a78f4df95e14c920897b7ceda1c7102ac132bf6063440e92ef96
 ARG TIRITH_SHA256_ARM64=88121146c91857b1bc74360fb2a320fc1f6feb848e1a3531ee84f5a16f83a9cc
