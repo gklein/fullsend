@@ -13,3 +13,6 @@ bin/
 .playwright/
 .claude/settings.local.json
 .vscode/
+*.env
+.env.*
+!.env.example

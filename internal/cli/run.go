@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/fullsend-ai/fullsend/internal/envfile"
 	"github.com/fullsend-ai/fullsend/internal/harness"
 	"github.com/fullsend-ai/fullsend/internal/sandbox"
 	"github.com/fullsend-ai/fullsend/internal/security"
@@ -23,6 +24,7 @@ func newRunCmd() *cobra.Command {
 	var outputBase string
 	var targetRepo string
 	var fullsendBinary string
+	var envFiles []string
 
 	cmd := &cobra.Command{
 		Use:   "run <agent-name>",
@@ -32,7 +34,7 @@ func newRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentName := args[0]
 			printer := ui.New(os.Stdout)
-			return runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary, printer)
+			return runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary, envFiles, printer)
 		},
 	}
 
@@ -40,17 +42,25 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&outputBase, "output-dir", "", "base directory for run output (default: /tmp/fullsend)")
 	cmd.Flags().StringVar(&targetRepo, "target-repo", "", "path to the target repository")
 	cmd.Flags().StringVar(&fullsendBinary, "fullsend-binary", "", "path to a Linux fullsend binary to copy into the sandbox (default: current executable)")
+	cmd.Flags().StringArrayVar(&envFiles, "env-file", nil, "load environment variables from a dotenv file (repeatable)")
 	_ = cmd.MarkFlagRequired("fullsend-dir")
 	_ = cmd.MarkFlagRequired("target-repo")
 
 	return cmd
 }
 
-func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary string, printer *ui.Printer) (runErr error) {
+func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary string, envFiles []string, printer *ui.Printer) (runErr error) {
 	printer.Banner()
 	printer.Blank()
 	printer.Header("Running agent: " + agentName)
 	printer.Blank()
+
+	// 0. Load env files before anything else so vars are available for harness expansion.
+	for _, ef := range envFiles {
+		if err := envfile.Load(ef); err != nil {
+			return fmt.Errorf("loading env file %s: %w", ef, err)
+		}
+	}
 
 	// 1. Resolve and load harness.
 	harnessPath := filepath.Join(fullsendDir, "harness", agentName+".yaml")
@@ -70,6 +80,11 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	if err := h.ResolveRelativeTo(absFullsendDir); err != nil {
 		printer.StepFail("Path validation failed")
 		return fmt.Errorf("resolving paths: %w", err)
+	}
+
+	if resolved, overridden := applySandboxImageOverride(h.Image); overridden {
+		printer.StepInfo(fmt.Sprintf("Image override via FULLSEND_SANDBOX_IMAGE: %s -> %s", h.Image, resolved))
+		h.Image = resolved
 	}
 
 	// Expand env vars in runner_env values. FULLSEND_DIR is injected so
@@ -1217,4 +1232,13 @@ func injectTraceID(sshConfigPath, sandboxName, traceID string) error {
 	cmd := fmt.Sprintf("echo 'export FULLSEND_TRACE_ID=%s' >> %s/.env", traceID, sandbox.SandboxWorkspace)
 	_, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, cmd, 10*time.Second)
 	return err
+}
+
+// applySandboxImageOverride replaces image with the FULLSEND_SANDBOX_IMAGE env
+// var value when set. Returns the resolved image and whether an override was applied.
+func applySandboxImageOverride(image string) (string, bool) {
+	if override := os.Getenv("FULLSEND_SANDBOX_IMAGE"); override != "" {
+		return override, true
+	}
+	return image, false
 }

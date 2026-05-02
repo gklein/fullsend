@@ -109,6 +109,37 @@ func TestCollectOpenshellLogs_CreatesLogsDir(t *testing.T) {
 	assert.NoError(t, err, "logs directory should exist")
 }
 
+func TestRunCommand_HasEnvFileFlag(t *testing.T) {
+	cmd := newRunCmd()
+	flag := cmd.Flags().Lookup("env-file")
+	require.NotNil(t, flag)
+	assert.Equal(t, "[]", flag.DefValue)
+
+	// Repeatable: set twice and verify both values are captured.
+	require.NoError(t, cmd.Flags().Set("env-file", "/tmp/a.env"))
+	require.NoError(t, cmd.Flags().Set("env-file", "/tmp/b.env"))
+
+	val, err := cmd.Flags().GetStringArray("env-file")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/tmp/a.env", "/tmp/b.env"}, val)
+}
+
+func TestApplySandboxImageOverride_Applied(t *testing.T) {
+	t.Setenv("FULLSEND_SANDBOX_IMAGE", "ghcr.io/fullsend-ai/fullsend-sandbox:dev")
+
+	resolved, overridden := applySandboxImageOverride("ghcr.io/fullsend-ai/fullsend-sandbox:latest")
+	assert.True(t, overridden)
+	assert.Equal(t, "ghcr.io/fullsend-ai/fullsend-sandbox:dev", resolved)
+}
+
+func TestApplySandboxImageOverride_NotSet(t *testing.T) {
+	t.Setenv("FULLSEND_SANDBOX_IMAGE", "")
+
+	resolved, overridden := applySandboxImageOverride("ghcr.io/fullsend-ai/fullsend-sandbox:latest")
+	assert.False(t, overridden)
+	assert.Equal(t, "ghcr.io/fullsend-ai/fullsend-sandbox:latest", resolved)
+}
+
 func TestEnvToList_Sorted(t *testing.T) {
 	env := map[string]string{
 		"Z_VAR": "z",
