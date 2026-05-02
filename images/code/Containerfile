@@ -2,7 +2,6 @@
 #
 # Extends the base fullsend sandbox image with tools needed by the code agent:
 #   - Go (compile + test target repos written in Go)
-#   - gitleaks (secret scanner, SHA256-verified)
 #   - pre-commit + gitlint (runs repo-defined hooks and validates commit messages)
 #
 # The base image already provides Claude Code, rsync, tirith, and LLM Guard.
@@ -71,26 +70,8 @@ ENV PATH="/usr/local/go/bin:${PATH}" \
     GOMODCACHE="/sandbox/go/pkg/mod"
 
 # ---------------------------------------------------------------------------
-# gitleaks — secret scanner used by scripts/scan-secrets.
-# When gitleaks is on PATH, the scan-secrets script uses it directly
-# with zero download latency. Without it, scan-secrets falls back to
-# downloading and verifying at runtime (slower, needs network).
-#
-# To update: bump GITLEAKS_VERSION and GITLEAKS_SHA256_{AMD64,ARM64} from:
-#   https://github.com/gitleaks/gitleaks/releases/download/v<VERSION>/gitleaks_<VERSION>_checksums.txt
-ARG GITLEAKS_VERSION=8.30.1
-ARG GITLEAKS_SHA256_AMD64=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-ARG GITLEAKS_SHA256_ARM64=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
-
-RUN GL_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "x64") \
-    && GL_SHA=$([ "$TARGETARCH" = "arm64" ] && echo "$GITLEAKS_SHA256_ARM64" || echo "$GITLEAKS_SHA256_AMD64") \
-    && curl -fsSL \
-      "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${GL_ARCH}.tar.gz" \
-      -o /tmp/gitleaks.tar.gz \
-    && echo "${GL_SHA}  /tmp/gitleaks.tar.gz" | sha256sum -c - \
-    && tar xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
-    && chmod +x /usr/local/bin/gitleaks \
-    && rm /tmp/gitleaks.tar.gz
+# gitleaks is already installed in the base sandbox image.
+# See images/sandbox/Containerfile for the pinned version and checksums.
 
 # ---------------------------------------------------------------------------
 # pre-commit + gitlint — pre-commit runs repo-defined hooks (formatting,

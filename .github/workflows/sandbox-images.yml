@@ -71,10 +71,15 @@ jobs:
           cache-to: type=gha,mode=max,scope=sandbox
 
       # Compute a single image reference for the build-code job.
-      # On push: use the immutable digest from the pushed image.
+      # On push: use the immutable digest from the pushed manifest list.
       # On PR: use the latest published image (the PR build validates
       # the Containerfile compiles but doesn't push, so build-code
       # needs an already-published base to FROM).
+      #
+      # NOTE: Until the first multi-arch push lands on main, :latest is
+      # amd64-only. PR builds of build-code will fail the arm64 leg
+      # against this single-arch base. This is transient — once main
+      # publishes a multi-arch :latest, PR builds work for both platforms.
       - name: Compute base image ref
         id: ref
         env:

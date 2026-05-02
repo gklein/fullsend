@@ -71,7 +71,7 @@ RUN mkdir -p "${PROTECTAI_MODEL_DIR}" \
 # ---------------------------------------------------------------------------
 # ONNX Runtime shared library — loaded by hugot at runtime.
 # Pinned version for supply chain safety.
-# To update: bump ORT_VERSION from:
+# To update: bump ORT_VERSION and ORT_SHA256_{AMD64,ARM64} from:
 #   https://github.com/microsoft/onnxruntime/releases
 ARG ORT_VERSION=1.24.1
 ARG ORT_SHA256_AMD64=9142552248b735920f9390027e4512a2cacf8946a1ffcbe9071a5c210531026f
@@ -91,7 +91,7 @@ RUN ORT_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") \
 # ---------------------------------------------------------------------------
 # gitleaks — secret scanner used by scan-secrets and post-scripts.
 # Pinned version + SHA256 checksum for supply chain safety.
-# To update: bump version and checksum from:
+# To update: bump GITLEAKS_VERSION and GITLEAKS_SHA256_{AMD64,ARM64} from:
 #   https://github.com/gitleaks/gitleaks/releases/download/v<VERSION>/gitleaks_<VERSION>_checksums.txt
 ARG GITLEAKS_VERSION=8.30.1
 ARG GITLEAKS_SHA256_AMD64=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
@@ -125,7 +125,7 @@ RUN apt-get update \
 # ---------------------------------------------------------------------------
 # tirith — terminal security scanner for PreToolUse hooks.
 # Pinned version + sha256 checksum for supply chain safety.
-# To update: bump TIRITH_VERSION and TIRITH_SHA256 from the checksums.txt
+# To update: bump TIRITH_VERSION and TIRITH_SHA256_{AMD64,ARM64} from the checksums.txt
 # in the GitHub release: https://github.com/sheeki03/tirith/releases
 ARG TIRITH_VERSION=0.2.12
 ARG TIRITH_SHA256_AMD64=0ecc5430d9d9a78f4df95e14c920897b7ceda1c7102ac132bf6063440e92ef96
