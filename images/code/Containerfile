@@ -80,7 +80,7 @@ ENV PATH="/usr/local/go/bin:${PATH}" \
 
 # ---------------------------------------------------------------------------
 # pre-commit + gitlint are already installed in the base sandbox image
-# (system-level pip install places binaries at /usr/local/bin).
+# (pip install into /sandbox/.venv; the venv bin dir is on PATH).
 # See images/sandbox/Containerfile for the pinned versions.
 
 # ---------------------------------------------------------------------------
