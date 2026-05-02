@@ -22,7 +22,7 @@
 #   FROM <registry>/fullsend-sandbox:v1
 #   RUN apt-get install -y golang
 
-FROM ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:f0d1ec92bf219759c1e863c0fa6b1f432ec827331e79ab9e31dab91a3b86b413
+FROM ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:11c73b5a90297f59172abc1b0cd36dc87a2be3a942c4ed604a4da653a4c67c68
 
 # The base image runs as the sandbox user (998). Switch to root for
 # package installation and switch back at the end.
@@ -70,29 +70,37 @@ RUN mkdir -p "${PROTECTAI_MODEL_DIR}" \
 # Pinned version for supply chain safety.
 # To update: bump ORT_VERSION from:
 #   https://github.com/microsoft/onnxruntime/releases
+ARG TARGETARCH
 ARG ORT_VERSION=1.24.1
-ARG ORT_SHA256=9142552248b735920f9390027e4512a2cacf8946a1ffcbe9071a5c210531026f
-RUN curl -fsSL \
-      "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
+ARG ORT_SHA256_AMD64=9142552248b735920f9390027e4512a2cacf8946a1ffcbe9071a5c210531026f
+ARG ORT_SHA256_ARM64=0f56edd68f7602df790b68b874a46b115add037e88385c6c842bb763b39b9f89
+RUN ORT_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") \
+    && ORT_SHA=$([ "$TARGETARCH" = "arm64" ] && echo "$ORT_SHA256_ARM64" || echo "$ORT_SHA256_AMD64") \
+    && curl -fsSL \
+      "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ORT_ARCH}-${ORT_VERSION}.tgz" \
       -o /tmp/ort.tgz \
-    && echo "${ORT_SHA256}  /tmp/ort.tgz" | sha256sum -c - \
+    && echo "${ORT_SHA}  /tmp/ort.tgz" | sha256sum -c - \
     && tar xzf /tmp/ort.tgz -C /tmp/ \
-    && cp "/tmp/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION}" /usr/lib/ \
+    && cp "/tmp/onnxruntime-linux-${ORT_ARCH}-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION}" /usr/lib/ \
     && ln -sf "/usr/lib/libonnxruntime.so.${ORT_VERSION}" /usr/lib/libonnxruntime.so \
     && /sbin/ldconfig \
-    && rm -rf /tmp/ort.tgz "/tmp/onnxruntime-linux-x64-${ORT_VERSION}"
+    && rm -rf /tmp/ort.tgz "/tmp/onnxruntime-linux-${ORT_ARCH}-${ORT_VERSION}"
 
 # ---------------------------------------------------------------------------
 # gitleaks — secret scanner used by scan-secrets and post-scripts.
 # Pinned version + SHA256 checksum for supply chain safety.
 # To update: bump version and checksum from:
 #   https://github.com/gitleaks/gitleaks/releases/download/v<VERSION>/gitleaks_<VERSION>_checksums.txt
+ARG TARGETARCH
 ARG GITLEAKS_VERSION=8.30.1
-ARG GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-RUN curl -fsSL \
-      "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+ARG GITLEAKS_SHA256_AMD64=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+ARG GITLEAKS_SHA256_ARM64=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
+RUN GL_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "x64") \
+    && GL_SHA=$([ "$TARGETARCH" = "arm64" ] && echo "$GITLEAKS_SHA256_ARM64" || echo "$GITLEAKS_SHA256_AMD64") \
+    && curl -fsSL \
+      "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${GL_ARCH}.tar.gz" \
       -o /tmp/gitleaks.tar.gz \
-    && echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c - \
+    && echo "${GL_SHA}  /tmp/gitleaks.tar.gz" | sha256sum -c - \
     && tar xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
     && chmod +x /usr/local/bin/gitleaks \
     && rm /tmp/gitleaks.tar.gz
@@ -118,11 +126,15 @@ RUN apt-get update \
 # Pinned version + sha256 checksum for supply chain safety.
 # To update: bump TIRITH_VERSION and TIRITH_SHA256 from the checksums.txt
 # in the GitHub release: https://github.com/sheeki03/tirith/releases
+ARG TARGETARCH
 ARG TIRITH_VERSION=0.2.12
-ARG TIRITH_SHA256=0ecc5430d9d9a78f4df95e14c920897b7ceda1c7102ac132bf6063440e92ef96
-RUN curl -fsSL "https://github.com/sheeki03/tirith/releases/download/v${TIRITH_VERSION}/tirith-x86_64-unknown-linux-gnu.tar.gz" \
+ARG TIRITH_SHA256_AMD64=0ecc5430d9d9a78f4df95e14c920897b7ceda1c7102ac132bf6063440e92ef96
+ARG TIRITH_SHA256_ARM64=88121146c91857b1bc74360fb2a320fc1f6feb848e1a3531ee84f5a16f83a9cc
+RUN TI_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x86_64") \
+    && TI_SHA=$([ "$TARGETARCH" = "arm64" ] && echo "$TIRITH_SHA256_ARM64" || echo "$TIRITH_SHA256_AMD64") \
+    && curl -fsSL "https://github.com/sheeki03/tirith/releases/download/v${TIRITH_VERSION}/tirith-${TI_ARCH}-unknown-linux-gnu.tar.gz" \
       -o /tmp/tirith.tar.gz \
-    && echo "${TIRITH_SHA256}  /tmp/tirith.tar.gz" | sha256sum -c - \
+    && echo "${TI_SHA}  /tmp/tirith.tar.gz" | sha256sum -c - \
     && tar xzf /tmp/tirith.tar.gz -C /usr/local/bin tirith \
     && chmod +x /usr/local/bin/tirith \
     && rm /tmp/tirith.tar.gz
