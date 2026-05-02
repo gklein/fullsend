@@ -56,6 +56,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=dev,enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push
         id: push
@@ -71,11 +72,9 @@ jobs:
           cache-to: type=gha,mode=max,scope=sandbox
 
       # Compute a single image reference for the build-code job.
-      # On push: use the immutable digest from the pushed manifest list.
-      # On PR: use the latest published image (the PR build validates
-      # the Containerfile compiles but doesn't push, so build-code
-      # needs an already-published base to FROM).
-      #
+      # On push/dispatch: use the immutable digest from the pushed manifest list.
+      # On PR: use the :dev tag (multi-arch, published by workflow_dispatch)
+      # so that both platform legs can resolve a base image.
       - name: Compute base image ref
         id: ref
         env:
@@ -85,7 +84,7 @@ jobs:
           if [ -n "$DIGEST" ]; then
             echo "value=${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_OUTPUT"
           else
-            echo "value=${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
+            echo "value=${IMAGE_NAME}:dev" >> "$GITHUB_OUTPUT"
           fi
 
   build-code:
@@ -96,10 +95,6 @@ jobs:
       packages: write
     env:
       CODE_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/fullsend-code
-      # On PRs the base image is not pushed, so build-code falls back to
-      # :latest which may be amd64-only. Build amd64 only on PRs to avoid
-      # a platform mismatch error; push events get the full multi-arch build.
-      CODE_PLATFORMS: ${{ github.event_name != 'pull_request' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -126,13 +121,14 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=dev,enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
         with:
           context: images/code
           file: images/code/Containerfile
-          platforms: ${{ env.CODE_PLATFORMS }}
+          platforms: linux/amd64,linux/arm64
           build-args: |
             BASE_IMAGE=${{ needs.build-base.outputs.image-ref }}
           push: ${{ github.event_name != 'pull_request' }}
