@@ -76,10 +76,6 @@ jobs:
       # the Containerfile compiles but doesn't push, so build-code
       # needs an already-published base to FROM).
       #
-      # NOTE: Until the first multi-arch push lands on main, :latest is
-      # amd64-only. PR builds of build-code will fail the arm64 leg
-      # against this single-arch base. This is transient — once main
-      # publishes a multi-arch :latest, PR builds work for both platforms.
       - name: Compute base image ref
         id: ref
         env:
@@ -100,6 +96,10 @@ jobs:
       packages: write
     env:
       CODE_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/fullsend-code
+      # On PRs the base image is not pushed, so build-code falls back to
+      # :latest which may be amd64-only. Build amd64 only on PRs to avoid
+      # a platform mismatch error; push events get the full multi-arch build.
+      CODE_PLATFORMS: ${{ github.event_name != 'pull_request' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -132,7 +132,7 @@ jobs:
         with:
           context: images/code
           file: images/code/Containerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ env.CODE_PLATFORMS }}
           build-args: |
             BASE_IMAGE=${{ needs.build-base.outputs.image-ref }}
           push: ${{ github.event_name != 'pull_request' }}
