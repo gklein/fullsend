@@ -15,7 +15,7 @@ ghcr.io/nvidia/openshell-community/sandboxes/base  (upstream, multi-arch)
 | Image | Directory | Description |
 |-------|-----------|-------------|
 | `fullsend-sandbox` | [`images/sandbox/`](sandbox/) | Base sandbox with Claude Code, rsync, gitleaks, tirith, pre-commit, gitlint, and the ProtectAI DeBERTa-v3 ONNX model for prompt injection detection. |
-| `fullsend-code` | [`images/code/`](code/) | Extends `fullsend-sandbox` with Go toolchain, scan-secrets wrapper, and additional pre-commit/gitlint symlinks. Used by the code-implementation agent. |
+| `fullsend-code` | [`images/code/`](code/) | Extends `fullsend-sandbox` with Go toolchain and scan-secrets wrapper. Used by the code-implementation agent. |
 
 Both images are built for **linux/amd64** and **linux/arm64**.
 
@@ -37,11 +37,12 @@ the Containerfile without publishing unreleased images.
 
 ### Tag lifecycle
 
+`:latest` is added whenever the ref is the default branch (`main`),
+regardless of trigger event.
+
 ```
-  workflow_dispatch ──┐
-                      ├──► :dev  :sha
-  push to main ───────┤
-                      └──► :latest  :sha
+  workflow_dispatch ──────► :dev  :sha  (+:latest if ref=main)
+  push to main ───────────► :dev  :sha  :latest
   tag push (v*) ──────────► :dev  :sha  :X.Y.Z  :X.Y
   pull_request ───────────► (build only, no push)
 ```
@@ -105,7 +106,7 @@ Every binary downloaded during the build is **version-pinned** and
 | Tirith | `TIRITH_VERSION` + `TIRITH_SHA256_{AMD64,ARM64}` | `sha256sum -c` |
 | Go toolchain | `GO_VERSION` + `GO_SHA256_{AMD64,ARM64}` | `sha256sum -c` |
 | ProtectAI DeBERTa model | `PROTECTAI_MODEL_REV` + per-file SHA256 | `sha256sum -c` |
-| Claude Code | Official installer script | HTTPS |
+| Claude Code | Official installer script | HTTPS only (no checksum, version floats) |
 | pre-commit, gitlint | pip version pins | pip integrity check |
 
 GitHub Actions are pinned to full commit SHAs (not floating tags).

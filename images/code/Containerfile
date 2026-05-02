@@ -2,9 +2,10 @@
 #
 # Extends the base fullsend sandbox image with tools needed by the code agent:
 #   - Go (compile + test target repos written in Go)
-#   - pre-commit + gitlint (runs repo-defined hooks and validates commit messages)
+#   - scan-secrets (gitleaks wrapper for code-implementation skill)
 #
-# The base image already provides Claude Code, rsync, tirith, and LLM Guard.
+# The base image already provides Claude Code, rsync, gitleaks, tirith,
+# pre-commit, gitlint, and the ProtectAI DeBERTa-v3 ONNX model.
 # See images/sandbox/Containerfile in fullsend-ai/fullsend for the base definition.
 #
 # This image is built AUTOMATICALLY by .github/workflows/sandbox-image.yml
@@ -58,7 +59,10 @@ ARG GO_VERSION=1.24.13
 ARG GO_SHA256_AMD64=1fc94b57134d51669c72173ad5d49fd62afb0f1db9bf3f798fd98ee423f8d730
 ARG GO_SHA256_ARM64=74d97be1cc3a474129590c67ebf748a96e72d9f3a2b6fef3ed3275de591d49b3
 
-RUN GO_SHA=$([ "$TARGETARCH" = "arm64" ] && echo "$GO_SHA256_ARM64" || echo "$GO_SHA256_AMD64") \
+RUN case "$TARGETARCH" in \
+      amd64|arm64) GO_SHA=$([ "$TARGETARCH" = "arm64" ] && echo "$GO_SHA256_ARM64" || echo "$GO_SHA256_AMD64") ;; \
+      *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac \
     && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
       -o /tmp/go.tar.gz \
     && echo "${GO_SHA}  /tmp/go.tar.gz" | sha256sum -c - \
@@ -74,14 +78,9 @@ ENV PATH="/usr/local/go/bin:${PATH}" \
 # See images/sandbox/Containerfile for the pinned version and checksums.
 
 # ---------------------------------------------------------------------------
-# pre-commit + gitlint — pre-commit runs repo-defined hooks (formatting,
-# linting, etc.) on changed files before committing. gitlint validates
-# commit message format. Baking them into the image avoids pip installs
-# on every run and ensures they're available even if pip is restricted.
-ARG PRECOMMIT_VERSION=4.5.1
-ARG GITLINT_VERSION=0.19.1
-RUN pip install "pre-commit==${PRECOMMIT_VERSION}" "gitlint-core==${GITLINT_VERSION}" 2>/dev/null \
-    || pip3 install "pre-commit==${PRECOMMIT_VERSION}" "gitlint-core==${GITLINT_VERSION}"
+# pre-commit + gitlint are already installed in the base sandbox image.
+# See images/sandbox/Containerfile for the pinned versions.
+#
 # The venv's bin dir (/sandbox/.venv/bin) is not on PATH inside the
 # sandbox Bash shell. Symlink the binaries into /usr/local/bin so the
 # agent can find them without PATH manipulation.
