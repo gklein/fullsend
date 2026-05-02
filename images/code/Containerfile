@@ -79,17 +79,9 @@ ENV PATH="/usr/local/go/bin:${PATH}" \
 # See images/sandbox/Containerfile for the pinned version and checksums.
 
 # ---------------------------------------------------------------------------
-# pre-commit + gitlint are already installed in the base sandbox image.
+# pre-commit + gitlint are already installed in the base sandbox image
+# (system-level pip install places binaries at /usr/local/bin).
 # See images/sandbox/Containerfile for the pinned versions.
-#
-# The venv's bin dir (/sandbox/.venv/bin) is not on PATH inside the
-# sandbox Bash shell. Symlink the binaries into /usr/local/bin so the
-# agent can find them without PATH manipulation.
-RUN for bin in pre-commit gitlint; do \
-      if [ -x "/sandbox/.venv/bin/$bin" ]; then \
-        ln -sf "/sandbox/.venv/bin/$bin" "/usr/local/bin/$bin"; \
-      fi; \
-    done
 
 # ---------------------------------------------------------------------------
 # scan-secrets — gitleaks wrapper used by the code-implementation skill.
