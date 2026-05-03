@@ -1,3 +1,8 @@
+.env.local
+node_modules/
+web/admin/dist
+.dev.vars
+.wrangler
 .worktrees/
 __pycache__/
 *.pyc
@@ -7,3 +12,4 @@ _site/
 bin/
 .playwright/
 .claude/settings.local.json
+.vscode/
