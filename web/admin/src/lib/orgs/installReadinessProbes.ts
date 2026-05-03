@@ -16,8 +16,8 @@ export function clearInstallReadinessProbeCache(): void {
   probeCache.clear();
 }
 
-function cacheKey(accessToken: string, org: string): string {
-  return `${accessToken}\0${org.trim().toLowerCase()}`;
+function cacheKey(githubLogin: string, org: string): string {
+  return `${githubLogin.trim().toLowerCase()}\0${org.trim().toLowerCase()}`;
 }
 
 function isForbidden(err: unknown): boolean {
@@ -95,11 +95,11 @@ export async function probeGitHubAppInstallReadiness(
 
 export async function probeGitHubAppInstallReadinessCached(
   octokit: Octokit,
-  accessToken: string,
+  githubLogin: string,
   org: string,
   options?: { signal?: AbortSignal },
 ): Promise<GitHubAppInstallReadiness> {
-  const key = cacheKey(accessToken, org);
+  const key = cacheKey(githubLogin, org);
   const hit = probeCache.get(key);
   if (hit) {
     return hit;
@@ -117,7 +117,7 @@ export async function resolveOrgListDeployRowCluster(
   result: OrgListAnalysisOk | OrgListAnalysisErr,
   deployPreflight: PreflightResult,
   octokit: Octokit,
-  accessToken: string,
+  githubUserLogin: string,
   orgLogin: string,
   options?: { signal?: AbortSignal },
 ): Promise<OrgListRowCluster> {
@@ -127,7 +127,7 @@ export async function resolveOrgListDeployRowCluster(
     if (configReport?.status === "not_installed") {
       githubAppReadiness = await probeGitHubAppInstallReadinessCached(
         octokit,
-        accessToken,
+        githubUserLogin,
         orgLogin,
         options,
       );

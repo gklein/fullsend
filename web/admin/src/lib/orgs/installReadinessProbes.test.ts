@@ -105,7 +105,7 @@ describe("resolveOrgListDeployRowCluster", () => {
       notInstalledOk,
       granted,
       octokit,
-      "token-a",
+      "alice",
       "acme",
     );
     expect(row).toEqual({ kind: "deploy" });

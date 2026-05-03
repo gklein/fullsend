@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
   import { githubUser } from "../lib/auth/session";
   import { loadGithubAppSlug, loadToken } from "../lib/auth/tokenStore";
   import { createUserOctokit } from "../lib/github/client";
@@ -150,7 +151,7 @@
           res,
           deployPreflight,
           octokit,
-          token,
+          get(githubUser)?.login ?? "",
           login,
         ),
       };
@@ -227,7 +228,7 @@
                 cached,
                 deployPreflight,
                 octokit,
-                token,
+                get(githubUser)?.login ?? "",
                 login,
               );
             } catch (e) {
@@ -269,7 +270,7 @@
                   res,
                   deployPreflight,
                   octokit,
-                  token,
+                  get(githubUser)?.login ?? "",
                   login,
                 ),
               };
