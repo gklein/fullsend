@@ -296,7 +296,7 @@ git commit -m "feat(admin): fetch org list from user app installations"
 
 - [ ] **Step 2: Worker test** — GET `/api/oauth/authorize` with valid params; decode `Location` query `state` from base64url JSON; when `GITHUB_APP_SLUG=my-app`, expect `g === "my-app"`.
 
-- [ ] **Step 3: SPA `tryParseWorkerExpandedOauthState`** — allow optional `g` with same regex as `installationOrgRows`; reject malformed `g` (fail full parse).
+- [ ] **Step 3: SPA `tryParseWorkerExpandedOauthState`** — allow optional `g` with the same regex as `installationOrgRows`. If `g` is present but **not a string**, **fail the full parse**. If `g` is a string that **fails slug validation**, **omit** `g` and continue (sign-in must not be blocked by a bad Worker slug; install link falls back to API slug).
 
 - [ ] **Step 4: `persistGithubAppSlugFromOAuth` / `loadGithubAppSlug` / `clearSession`** in `tokenStore.ts` (localStorage key e.g. `fullsend_admin_github_app_slug`).
 

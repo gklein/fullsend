@@ -77,6 +77,7 @@
     }
   }
 
+  /** Batched updates while the installation list fetch is still running (unfiltered growth from `onProgress`). */
   function commitDisplayedRowsFromScan(capped: OrgRow[], done: boolean): void {
     if (done) {
       scanComplete = true;
