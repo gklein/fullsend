@@ -13,6 +13,8 @@ import {
   MAX_INSTALLATION_LIST_PAGES,
 } from "./fetchOrgs";
 
+const testLogin = "octouser";
+
 function mockOctokit(iterator: () => AsyncIterableIterator<unknown>) {
   vi.mocked(createUserOctokit).mockReturnValue({
     paginate: {
@@ -48,7 +50,10 @@ describe("fetchOrgs (installations)", () => {
       })(),
     );
 
-    const r = await fetchOrgs("token", { force: true });
+    const r = await fetchOrgs("token", {
+      githubLogin: testLogin,
+      force: true,
+    });
     expect(r.orgs.map((o) => o.login)).toEqual(["array-org"]);
     expect(r.appSlugFromApi).toBe("fullsend-admin");
     expect(r.installationListTruncated).toBe(false);
@@ -77,7 +82,10 @@ describe("fetchOrgs (installations)", () => {
       })(),
     );
 
-    const r = await fetchOrgs("token", { force: true });
+    const r = await fetchOrgs("token", {
+      githubLogin: testLogin,
+      force: true,
+    });
     expect(r.orgs.map((o) => o.login)).toEqual(["alpha", "zebra"]);
     expect(r.emptyHint).toBeNull();
     expect(r.appSlugFromApi).toBe("fullsend-app");
@@ -98,7 +106,10 @@ describe("fetchOrgs (installations)", () => {
       })(),
     );
 
-    const r = await fetchOrgs("token", { force: true });
+    const r = await fetchOrgs("token", {
+      githubLogin: testLogin,
+      force: true,
+    });
     expect(r.orgs).toEqual([]);
     expect(r.emptyHint).toBeTruthy();
     expect(r.appSlugFromApi).toBeNull();
@@ -128,7 +139,10 @@ describe("fetchOrgs (installations)", () => {
       })(),
     );
 
-    const r = await fetchOrgs("token", { force: true });
+    const r = await fetchOrgs("token", {
+      githubLogin: testLogin,
+      force: true,
+    });
     expect(r.installationListTruncated).toBe(true);
     expect(r.orgs.map((o) => o.login)).not.toContain("org-page-20");
   });
@@ -140,7 +154,9 @@ describe("fetchOrgs (installations)", () => {
       })(),
     );
 
-    await expect(fetchOrgs("token", { force: true })).rejects.toSatisfy(
+    await expect(
+      fetchOrgs("token", { githubLogin: testLogin, force: true }),
+    ).rejects.toSatisfy(
       (e: unknown) =>
         e instanceof FetchOrgsError &&
         e.status === 401 &&
@@ -155,7 +171,9 @@ describe("fetchOrgs (installations)", () => {
       })(),
     );
 
-    await expect(fetchOrgs("token", { force: true })).rejects.toSatisfy(
+    await expect(
+      fetchOrgs("token", { githubLogin: testLogin, force: true }),
+    ).rejects.toSatisfy(
       (e: unknown) =>
         e instanceof FetchOrgsError &&
         e.status === 403 &&
@@ -174,7 +192,11 @@ describe("fetchOrgs (installations)", () => {
     );
 
     await expect(
-      fetchOrgs("token", { force: true, signal: ac.signal }),
+      fetchOrgs("token", {
+        githubLogin: testLogin,
+        force: true,
+        signal: ac.signal,
+      }),
     ).rejects.toMatchObject({ name: "AbortError" });
   });
 
@@ -202,6 +224,7 @@ describe("fetchOrgs (installations)", () => {
 
     const metas: { done: boolean; installationPagesFetched: number }[] = [];
     await fetchOrgsWithProgress("token", {
+      githubLogin: testLogin,
       force: true,
       onProgress: (_orgs, meta) => {
         metas.push({ ...meta });
@@ -211,5 +234,50 @@ describe("fetchOrgs (installations)", () => {
     expect(metas.length).toBeGreaterThanOrEqual(2);
     expect(metas.at(-1)?.done).toBe(true);
     expect(metas.at(-1)?.installationPagesFetched).toBe(2);
+  });
+
+  it("reuses in-memory org list keyed by GitHub login (different token, no second paginator)", async () => {
+    mockOctokit(() =>
+      (async function* () {
+        yield {
+          status: 200,
+          data: {
+            installations: [
+              {
+                id: 1,
+                app_slug: "fullsend-app",
+                account: { login: "acme", type: "Organization" },
+              },
+            ],
+          },
+        };
+      })(),
+    );
+
+    const login = "CasePreserved_Login";
+    const onProgress = vi.fn();
+    await fetchOrgsWithProgress("first-token", {
+      githubLogin: login,
+      force: true,
+      onProgress,
+    });
+    expect(createUserOctokit).toHaveBeenCalledTimes(1);
+    expect(onProgress).toHaveBeenCalled();
+
+    onProgress.mockClear();
+    const r2 = await fetchOrgsWithProgress("second-token", {
+      githubLogin: login,
+      force: false,
+      onProgress,
+    });
+    expect(createUserOctokit).toHaveBeenCalledTimes(1);
+    expect(r2.orgs.map((o) => o.login)).toEqual(["acme"]);
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    const last = onProgress.mock.calls.at(-1)![1] as {
+      done: boolean;
+      installationPagesFetched: number;
+    };
+    expect(last.done).toBe(true);
+    expect(last.installationPagesFetched).toBe(0);
   });
 });

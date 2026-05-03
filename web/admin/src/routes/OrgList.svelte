@@ -361,6 +361,7 @@
       }, ORG_LIST_FETCH_TIMEOUT_MS);
 
       const r = await fetchOrgsWithProgress(token, {
+        githubLogin: get(githubUser)?.login,
         force,
         signal,
         onProgress: (orgs, meta) => {

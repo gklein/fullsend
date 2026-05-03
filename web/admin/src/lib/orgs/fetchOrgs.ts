@@ -34,12 +34,20 @@ export type FetchOrgsProgressMeta = {
 };
 
 let memoryCache: {
-  token: string;
+  /** Normalized GitHub login (`trim` + lowercase), same pattern as install-readiness probe cache. */
+  githubLogin: string;
   orgs: OrgRow[];
   emptyHint: string | null;
   appSlugFromApi: string | null;
   installationListTruncated: boolean;
 } | null = null;
+
+function orgListMemoryCacheKey(
+  githubLogin: string | null | undefined,
+): string | null {
+  const s = typeof githubLogin === "string" ? githubLogin.trim().toLowerCase() : "";
+  return s.length > 0 ? s : null;
+}
 
 /** Clears the in-memory org list cache (call on sign-out or when switching accounts). */
 export function clearOrgListMemoryCache(): void {
@@ -102,12 +110,22 @@ function installationsFromPageData(data: unknown): MinimalInstallation[] {
 export async function fetchOrgsWithProgress(
   accessToken: string,
   options: {
+    /**
+     * GitHub login for the authenticated user. When set (non-blank after trim),
+     * in-memory results are keyed by normalized login instead of the access token.
+     */
+    githubLogin?: string | null;
     force?: boolean;
     signal?: AbortSignal;
     onProgress: (orgs: OrgRow[], meta: FetchOrgsProgressMeta) => void;
   },
 ): Promise<FetchOrgsResult> {
-  if (!options.force && memoryCache?.token === accessToken) {
+  const cacheKey = orgListMemoryCacheKey(options.githubLogin);
+  if (
+    !options.force &&
+    cacheKey &&
+    memoryCache?.githubLogin === cacheKey
+  ) {
     if (options.signal?.aborted) {
       throw new DOMException("Aborted", "AbortError");
     }
@@ -157,13 +175,15 @@ export async function fetchOrgsWithProgress(
     const emptyHint = orgs.length === 0 ? buildEmptyInstallationsHint() : null;
     const installationListTruncated = pages > MAX_INSTALLATION_LIST_PAGES;
 
-    memoryCache = {
-      token: accessToken,
-      orgs,
-      emptyHint,
-      appSlugFromApi: appSlug,
-      installationListTruncated,
-    };
+    if (cacheKey) {
+      memoryCache = {
+        githubLogin: cacheKey,
+        orgs,
+        emptyHint,
+        appSlugFromApi: appSlug,
+        installationListTruncated,
+      };
+    }
     options.onProgress(orgs, { done: true, installationPagesFetched: pages });
     return {
       orgs,
@@ -184,9 +204,14 @@ export async function fetchOrgsWithProgress(
 
 export async function fetchOrgs(
   accessToken: string,
-  options?: { force?: boolean; signal?: AbortSignal },
+  options?: {
+    githubLogin?: string | null;
+    force?: boolean;
+    signal?: AbortSignal;
+  },
 ): Promise<FetchOrgsResult> {
   return fetchOrgsWithProgress(accessToken, {
+    githubLogin: options?.githubLogin,
     force: options?.force,
     signal: options?.signal,
     onProgress: () => {},
