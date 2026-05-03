@@ -205,6 +205,22 @@ jobs:
           echo "Fix iteration: ${ITERATION} (${FIX_COMMITS} previous fix commits)" >&2
           echo "iteration=${ITERATION}" >> "${GITHUB_OUTPUT}"
 
+      - name: Check fullsend-no-fix label
+        env:
+          GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
+          TRIGGER_SOURCE: ${{ inputs.trigger_source }}
+          PR_NUM: ${{ steps.context.outputs.pr_number }}
+          SOURCE_REPO: ${{ inputs.source_repo }}
+        run: |
+          if [[ "${TRIGGER_SOURCE}" =~ \[bot\]$ ]]; then
+            HAS_NO_FIX=$(gh pr view "${PR_NUM}" --repo "${SOURCE_REPO}" \
+              --json labels --jq '[.labels[].name] | any(. == "fullsend-no-fix")' 2>/dev/null || echo "false")
+            if [[ "${HAS_NO_FIX}" == "true" ]]; then
+              echo "::warning::PR #${PR_NUM} has 'fullsend-no-fix' label — skipping bot-triggered fix"
+              exit 1
+            fi
+          fi
+
       - name: Generate push token (write)
         id: push-token
         uses: actions/create-github-app-token@v3
