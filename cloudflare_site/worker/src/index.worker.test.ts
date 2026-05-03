@@ -92,6 +92,33 @@ describe("site worker admin API", () => {
     expect(body.error).toBe("forbidden_origin");
   });
 
+  it("returns 413 payload_too_large when OAuth token JSON body exceeds 4 KiB", async () => {
+    const site = "https://worker.test";
+    const redirect = "http://localhost:5173/admin/";
+    const url = new URL(`${site}/api/oauth/token`);
+    const big = "x".repeat(5000);
+    const req = new IncomingRequest(url, {
+      method: "POST",
+      headers: {
+        Origin: new URL(redirect).origin,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        code: "a",
+        redirect_uri: redirect,
+        code_verifier: "verifierverifierverifierverifier01",
+        turnstile_token: "dummy",
+        pad: big,
+      }),
+    });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(req, env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toBe("payload_too_large");
+  });
+
   it("returns 503 missing_turnstile_keys when Turnstile vars are empty", async () => {
     const site = "https://worker.test";
     const url = new URL(`${site}/api/oauth/token`);

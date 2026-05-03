@@ -46,6 +46,8 @@ const MAX_CLIENT_OAUTH_STATE_LEN = 128;
 const MAX_PKCE_CHALLENGE_LEN = 256;
 /** Max `state` sent to GitHub (expanded JSON + base64url including Turnstile site key). */
 const MAX_GITHUB_STATE_LEN = 4096;
+/** Reject oversized `POST /api/oauth/token` bodies before JSON parse (defense in depth). */
+const MAX_OAUTH_TOKEN_EXCHANGE_JSON_BYTES = 4096;
 
 /** Same rule as SPA `installationOrgRows.normalizeSlug` — invalid values must not be put in `state`. */
 const GITHUB_APP_SLUG_IN_STATE_RE = /^[a-zA-Z0-9-]{1,99}$/;
@@ -269,7 +271,15 @@ async function handleOAuthToken(
 
   let body: ExchangeBody;
   try {
-    body = (await request.json()) as ExchangeBody;
+    const raw = await request.arrayBuffer();
+    if (raw.byteLength > MAX_OAUTH_TOKEN_EXCHANGE_JSON_BYTES) {
+      return new Response(JSON.stringify({ error: "payload_too_large" }), {
+        status: 413,
+        headers: { "content-type": "application/json", ...cors },
+      });
+    }
+    const text = new TextDecoder().decode(raw);
+    body = JSON.parse(text) as ExchangeBody;
   } catch {
     return new Response(JSON.stringify({ error: "invalid_json" }), {
       status: 400,

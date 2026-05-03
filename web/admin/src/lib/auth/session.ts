@@ -44,6 +44,8 @@ export async function refreshSession(): Promise<void> {
 }
 
 export function signOut(options?: SignOutOptions): void {
+  // `clearSession()` drops persisted token, slug, OAuth scope header cache, and
+  // install-readiness probe cache so a different account cannot inherit stale UI state.
   clearSession();
   clearOrgListMemoryCache();
   githubUser.set(null);

@@ -78,6 +78,25 @@ describe("fetchGitHubUser", () => {
     expect((err as GitHubUserRequestError).message).toMatch(/403/);
   });
 
+  it("drops avatar_url when it is not an https URL", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          login: "u",
+          name: null,
+          avatar_url: "javascript:alert(1)",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(fetchGitHubUser("t")).resolves.toEqual({
+      login: "u",
+      name: null,
+      avatarUrl: null,
+    });
+  });
+
   it("throws when login is missing", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response(JSON.stringify({ id: 1 }), {

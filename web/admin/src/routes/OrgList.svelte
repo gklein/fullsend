@@ -372,8 +372,6 @@
       });
       if (gen !== loadGeneration) return;
 
-      if (gen !== loadGeneration) return;
-
       serverOrgs = r.orgs;
       emptyHint = r.emptyHint;
       installationListTruncated = r.installationListTruncated;

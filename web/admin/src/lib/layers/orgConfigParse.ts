@@ -69,7 +69,7 @@ export function parseOrgConfigYaml(data: string): OrgConfigYaml {
 
   let doc: unknown;
   try {
-    doc = parse(data) as unknown;
+    doc = parse(data, { schema: "core", version: "1.2" }) as unknown;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`parsing org config YAML: ${msg}`);
@@ -86,7 +86,70 @@ export function parseOrgConfigYaml(data: string): OrgConfigYaml {
     );
   }
 
+  assertOrgConfigShape(doc as Record<string, unknown>);
   return doc as OrgConfigYaml;
+}
+
+/** Runtime shape checks so callers do not hit confusing errors from bad YAML types. */
+function assertOrgConfigShape(doc: Record<string, unknown>): void {
+  if ("dispatch" in doc && doc.dispatch !== undefined) {
+    if (
+      doc.dispatch === null ||
+      typeof doc.dispatch !== "object" ||
+      Array.isArray(doc.dispatch)
+    ) {
+      throw new Error("parsing org config: dispatch must be a mapping");
+    }
+  }
+  if ("defaults" in doc && doc.defaults !== undefined) {
+    if (
+      doc.defaults === null ||
+      typeof doc.defaults !== "object" ||
+      Array.isArray(doc.defaults)
+    ) {
+      throw new Error("parsing org config: defaults must be a mapping");
+    }
+  }
+  if ("agents" in doc && doc.agents !== undefined) {
+    if (!Array.isArray(doc.agents)) {
+      throw new Error("parsing org config: agents must be a list");
+    }
+    for (let i = 0; i < doc.agents.length; i++) {
+      const el = doc.agents[i];
+      if (el === null || typeof el !== "object" || Array.isArray(el)) {
+        throw new Error(
+          `parsing org config: agents[${i}] must be a mapping with a string role`,
+        );
+      }
+      const role = (el as Record<string, unknown>).role;
+      if (typeof role !== "string") {
+        throw new Error(
+          `parsing org config: agents[${i}].role must be a string`,
+        );
+      }
+    }
+  }
+  if ("repos" in doc && doc.repos !== undefined) {
+    if (
+      doc.repos === null ||
+      typeof doc.repos !== "object" ||
+      Array.isArray(doc.repos)
+    ) {
+      throw new Error("parsing org config: repos must be a mapping");
+    }
+    for (const [name, v] of Object.entries(
+      doc.repos as Record<string, unknown>,
+    )) {
+      if (
+        v !== null &&
+        (typeof v !== "object" || Array.isArray(v))
+      ) {
+        throw new Error(
+          `parsing org config: repos.${JSON.stringify(name)} must be a mapping`,
+        );
+      }
+    }
+  }
 }
 
 /** @returns null if valid, otherwise a human-readable error string (matches Go Validate errors). */
@@ -98,12 +161,24 @@ export function validateOrgConfig(cfg: OrgConfigYaml): string | null {
     return `unsupported platform ${JSON.stringify(cfg.dispatch?.platform)}: must be "github-actions"`;
   }
   const retries = cfg.defaults?.max_implementation_retries;
-  if (typeof retries === "number" && retries < 0) {
-    return `max_implementation_retries must be >= 0, got ${retries}`;
+  if (retries !== undefined && retries !== null) {
+    if (
+      typeof retries !== "number" ||
+      !Number.isFinite(retries) ||
+      !Number.isInteger(retries) ||
+      retries < 0
+    ) {
+      return `max_implementation_retries must be a non-negative integer, got ${JSON.stringify(retries)}`;
+    }
   }
   for (const role of cfg.defaults?.roles ?? []) {
     if (!VALID_ROLES.has(role)) {
       return `invalid role ${JSON.stringify(role)}: must be one of fullsend, triage, coder, review`;
+    }
+  }
+  for (const agent of cfg.agents ?? []) {
+    if (!VALID_ROLES.has(agent.role)) {
+      return `invalid agent role ${JSON.stringify(agent.role)}: must be one of fullsend, triage, coder, review`;
     }
   }
   return null;

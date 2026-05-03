@@ -4,6 +4,12 @@ const REPO = ".fullsend";
 /** Keep each GraphQL document small to avoid complexity limits. */
 const CHUNK = 10;
 
+/**
+ * Escapes `"` and `\` for use inside GraphQL double-quoted strings.
+ * Safe only with inputs already constrained (e.g. org logins validated with
+ * `/^[a-zA-Z0-9-]+$/` before interpolation); not a general-purpose GraphQL
+ * literal encoder (control characters are not escaped).
+ */
 function escapeGraphqlString(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }

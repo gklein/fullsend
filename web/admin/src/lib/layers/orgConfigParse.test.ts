@@ -33,6 +33,51 @@ dispatch:
     ).toContain("unsupported version");
   });
 
+  it("rejects agents as a string", () => {
+    expect(() =>
+      parseOrgConfigYaml(`version: "1"
+dispatch:
+  platform: github-actions
+agents: not-a-list
+`),
+    ).toThrow(/agents must be a list/);
+  });
+
+  it("rejects repos as a list", () => {
+    expect(() =>
+      parseOrgConfigYaml(`version: "1"
+dispatch:
+  platform: github-actions
+repos: []
+`),
+    ).toThrow(/repos must be a mapping/);
+  });
+
+  it("rejects non-integer max_implementation_retries", () => {
+    const cfg = parseOrgConfigYaml(`version: "1"
+dispatch:
+  platform: github-actions
+defaults:
+  roles: [fullsend]
+  max_implementation_retries: 2.5
+repos: {}
+`);
+    expect(validateOrgConfig(cfg)).toMatch(/non-negative integer/);
+  });
+
+  it("rejects invalid agent role", () => {
+    const cfg = parseOrgConfigYaml(`version: "1"
+dispatch:
+  platform: github-actions
+defaults:
+  roles: [fullsend]
+agents:
+  - role: not-a-valid-role
+repos: {}
+`);
+    expect(validateOrgConfig(cfg)).toMatch(/invalid agent role/);
+  });
+
   it("lists agents and enabled repos from config", () => {
     const cfg = parseOrgConfigYaml(`version: "1"
 dispatch:
