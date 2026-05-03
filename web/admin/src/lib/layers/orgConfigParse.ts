@@ -15,11 +15,77 @@ export type OrgConfigYaml = {
 
 const VALID_ROLES = new Set(["fullsend", "triage", "coder", "review"]);
 
+/** 512 KiB — more than sufficient for any realistic org `config.yaml`. */
+export const MAX_ORG_CONFIG_YAML_UTF8_BYTES = 512 * 1024;
+
+/**
+ * Maximum nesting depth of mappings and sequences after parse (mitigates YAML bombs).
+ * Real configs are shallow; this is intentionally generous.
+ */
+export const MAX_ORG_CONFIG_YAML_DEPTH = 64;
+
+/** Thrown when `config.yaml` exceeds size or structural depth limits (see parse helpers). */
+export class OrgConfigYamlLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OrgConfigYamlLimitError";
+  }
+}
+
+function utf8ByteLength(s: string): number {
+  return new TextEncoder().encode(s).length;
+}
+
+/** Deepest path from `value` through nested objects/arrays (scalar leaves report their `depth`). */
+function measureYamlTreeDepth(value: unknown, depth: number): number {
+  if (value === null || typeof value !== "object") return depth;
+  if (Array.isArray(value)) {
+    let m = depth;
+    for (const el of value) {
+      m = Math.max(m, measureYamlTreeDepth(el, depth + 1));
+    }
+    return m;
+  }
+  let m = depth;
+  for (const k of Object.keys(value as object)) {
+    m = Math.max(
+      m,
+      measureYamlTreeDepth(
+        (value as Record<string, unknown>)[k],
+        depth + 1,
+      ),
+    );
+  }
+  return m;
+}
+
 export function parseOrgConfigYaml(data: string): OrgConfigYaml {
-  const doc = parse(data) as unknown;
+  const bytes = utf8ByteLength(data);
+  if (bytes > MAX_ORG_CONFIG_YAML_UTF8_BYTES) {
+    throw new OrgConfigYamlLimitError(
+      `Organisation config YAML exceeds the maximum file size (limit ${MAX_ORG_CONFIG_YAML_UTF8_BYTES} bytes, 512 KiB). This file is ${bytes} bytes. Reduce the file size to continue.`,
+    );
+  }
+
+  let doc: unknown;
+  try {
+    doc = parse(data) as unknown;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`parsing org config YAML: ${msg}`);
+  }
+
   if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
     throw new Error("parsing org config: root must be a mapping");
   }
+
+  const deepest = measureYamlTreeDepth(doc, 0);
+  if (deepest > MAX_ORG_CONFIG_YAML_DEPTH) {
+    throw new OrgConfigYamlLimitError(
+      `Organisation config YAML is nested too deeply (depth ${deepest}, maximum ${MAX_ORG_CONFIG_YAML_DEPTH}). Simplify mapping and list nesting so the document stays within the limit.`,
+    );
+  }
+
   return doc as OrgConfigYaml;
 }
 

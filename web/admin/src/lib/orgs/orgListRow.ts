@@ -11,6 +11,7 @@ import { createLayerGithub } from "../layers/githubClient";
 import {
   agentsFromConfig,
   enabledReposFromConfig,
+  OrgConfigYamlLimitError,
   parseOrgConfigYaml,
   validateOrgConfig,
 } from "../layers/orgConfigParse";
@@ -91,7 +92,14 @@ export async function analyzeOrgForOrgList(
             agents = agentsFromConfig(cfg);
             enabledRepos = enabledReposFromConfig(cfg);
           }
-        } catch {
+        } catch (e) {
+          if (e instanceof OrgConfigYamlLimitError) {
+            return {
+              kind: "error",
+              message: e.message,
+              forbidden: false,
+            };
+          }
           /* invalid YAML — still analyze other layers with empty agents/repos */
         }
       }

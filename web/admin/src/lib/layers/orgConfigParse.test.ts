@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   agentsFromConfig,
   enabledReposFromConfig,
+  MAX_ORG_CONFIG_YAML_DEPTH,
+  MAX_ORG_CONFIG_YAML_UTF8_BYTES,
+  OrgConfigYamlLimitError,
   parseOrgConfigYaml,
   validateOrgConfig,
 } from "./orgConfigParse";
@@ -50,5 +53,36 @@ repos:
     expect(validateOrgConfig(cfg)).toBeNull();
     expect(agentsFromConfig(cfg)).toEqual([{ role: "triage" }]);
     expect(enabledReposFromConfig(cfg)).toEqual(["alpha", "beta"]);
+  });
+
+  it("rejects YAML larger than the UTF-8 byte limit with a clear message", () => {
+    const oversize = " ".repeat(MAX_ORG_CONFIG_YAML_UTF8_BYTES + 1);
+    expect(() => parseOrgConfigYaml(oversize)).toThrow(OrgConfigYamlLimitError);
+    try {
+      parseOrgConfigYaml(oversize);
+    } catch (e) {
+      expect(e).toBeInstanceOf(OrgConfigYamlLimitError);
+      expect((e as Error).message).toContain("maximum file size");
+      expect((e as Error).message).toMatch(/\d+ bytes/);
+    }
+  });
+
+  it("rejects YAML nested deeper than the depth limit with a clear message", () => {
+    const lines: string[] = ["version: \"1\"", "dispatch:", "  platform: github-actions"];
+    let indent = "  ";
+    for (let i = 0; i < MAX_ORG_CONFIG_YAML_DEPTH + 2; i++) {
+      lines.push(`${indent}L${i}:`);
+      indent += "  ";
+    }
+    lines.push(`${indent}x: 1`);
+    const deep = lines.join("\n");
+    expect(() => parseOrgConfigYaml(deep)).toThrow(OrgConfigYamlLimitError);
+    try {
+      parseOrgConfigYaml(deep);
+    } catch (e) {
+      expect(e).toBeInstanceOf(OrgConfigYamlLimitError);
+      expect((e as Error).message).toContain("nested too deeply");
+      expect((e as Error).message).toContain(String(MAX_ORG_CONFIG_YAML_DEPTH));
+    }
   });
 });
