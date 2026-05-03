@@ -108,14 +108,31 @@ export function clearIntendedHashStash(): void {
   sessionStorage.removeItem(INTENDED_HASH_KEY);
 }
 
+/** Max length for a post-OAuth hash fragment (including `#`). */
+const MAX_INTENDED_HASH_LEN = 256;
+
 /**
- * Returns the stashed hash (with `#`) and removes it. Returns `null` if none.
+ * True when `hash` is a safe, simple in-app route fragment: `#` plus path segments
+ * using only `/`, letters, digits, `_`, `.`, and `-` (no schemes, queries, or `//`).
+ */
+export function isSafeSimpleHashRoute(hash: string): boolean {
+  if (hash.length === 0 || hash.length > MAX_INTENDED_HASH_LEN) return false;
+  if (!hash.startsWith("#")) return false;
+  if (hash.includes("//") || hash.includes("..")) return false;
+  /* # alone, #/, #/orgs, #/foo-bar — no :, ?, &, %, @, \, spaces, etc. */
+  return /^#(?:\/[\w.-]+)*\/?$/.test(hash);
+}
+
+/**
+ * Returns the stashed hash (with `#`) and removes it. Returns `null` if none or if the
+ * value is not a {@link isSafeSimpleHashRoute} (tampered sessionStorage or legacy junk).
  */
 export function consumeIntendedHashAfterGithubOAuth(): string | null {
   const raw = sessionStorage.getItem(INTENDED_HASH_KEY);
   sessionStorage.removeItem(INTENDED_HASH_KEY);
   if (raw == null || raw === "") return null;
-  return raw.startsWith("#") ? raw : `#/${raw}`;
+  const normalized = raw.startsWith("#") ? raw : `#/${raw}`;
+  return isSafeSimpleHashRoute(normalized) ? normalized : null;
 }
 
 /**

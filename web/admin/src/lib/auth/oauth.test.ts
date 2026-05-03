@@ -13,8 +13,10 @@ import { refreshSession } from "./session";
 import { challengeS256 } from "./pkce";
 import {
   completeGithubOAuthFromHandoff,
+  consumeIntendedHashAfterGithubOAuth,
   consumeOAuthParamsFromDocumentUrl,
   getOAuthRedirectUri,
+  isSafeSimpleHashRoute,
   SIGNING_IN_CANCELLED_MESSAGE,
   startGithubSignIn,
   tryParseWorkerExpandedOauthState,
@@ -415,5 +417,40 @@ describe("completeGithubOAuthFromHandoff", () => {
     });
     expect(loadToken()).toBeNull();
     expect(sessionStorage.getItem(OAUTH_STATE_KEY)).toBeNull();
+  });
+});
+
+describe("isSafeSimpleHashRoute", () => {
+  it("accepts #/, #/orgs, and multi-segment paths", () => {
+    expect(isSafeSimpleHashRoute("#/")).toBe(true);
+    expect(isSafeSimpleHashRoute("#/orgs")).toBe(true);
+    expect(isSafeSimpleHashRoute("#/foo/bar_baz.qux-1")).toBe(true);
+  });
+
+  it("rejects schemes, queries, slashes, and long fragments", () => {
+    expect(isSafeSimpleHashRoute("#javascript:evil")).toBe(false);
+    expect(isSafeSimpleHashRoute("#/orgs?x=1")).toBe(false);
+    expect(isSafeSimpleHashRoute("#//evil")).toBe(false);
+    expect(isSafeSimpleHashRoute("#/orgs/../x")).toBe(false);
+    expect(isSafeSimpleHashRoute("#" + "/a".repeat(200))).toBe(false);
+  });
+});
+
+describe("consumeIntendedHashAfterGithubOAuth", () => {
+  afterEach(() => {
+    sessionStorage.removeItem(INTENDED_HASH_KEY);
+  });
+
+  it("returns null when stash is missing or unsafe", () => {
+    expect(consumeIntendedHashAfterGithubOAuth()).toBeNull();
+    sessionStorage.setItem(INTENDED_HASH_KEY, "#/orgs?bad=1");
+    expect(consumeIntendedHashAfterGithubOAuth()).toBeNull();
+    expect(sessionStorage.getItem(INTENDED_HASH_KEY)).toBeNull();
+  });
+
+  it("returns normalized safe hash and clears stash", () => {
+    sessionStorage.setItem(INTENDED_HASH_KEY, "#/orgs");
+    expect(consumeIntendedHashAfterGithubOAuth()).toBe("#/orgs");
+    expect(sessionStorage.getItem(INTENDED_HASH_KEY)).toBeNull();
   });
 });
