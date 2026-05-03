@@ -1,4 +1,3 @@
-import { notifyGitHubUserUnauthorized } from "../auth/githubUnauthorized";
 import { createUserOctokit } from "../github/client";
 import { buildEmptyInstallationsHint } from "./emptyOrgListHint";
 import type { OrgRow } from "./filter";
@@ -177,9 +176,7 @@ export async function fetchOrgsWithProgress(
       throw e;
     }
     const status = octokitErrorStatus(e);
-    if (status === 401) {
-      notifyGitHubUserUnauthorized();
-    }
+    /* 401: createUserOctokit request hook already notifies + App signs out — avoid duplicate events. */
     const msg = e instanceof Error ? e.message : "GitHub installation listing failed.";
     throw new FetchOrgsError(status, friendlyInstallationsListHttpError(status, msg));
   }
