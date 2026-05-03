@@ -1,7 +1,7 @@
 # Design: Admin org list from GitHub App installations (browser-first)
 
-Date: 2026-04-29  
-Status: Accepted (brainstorm → spec)  
+Date: 2026-04-29
+Status: Accepted (brainstorm → spec)
 Delivery branch: `feat/admin-spa-org-list` (may ship in the same PR as replacement of current org-list implementation).
 
 ## Tracking

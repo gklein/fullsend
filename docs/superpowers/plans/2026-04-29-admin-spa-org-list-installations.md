@@ -84,7 +84,7 @@ describe("orgRowsAndSlugFromInstallations", () => {
 
 - [ ] **Step 2: Run test — expect FAIL**
 
-Run: `npm run test -- --run web/admin/src/lib/orgs/installationOrgRows.test.ts`  
+Run: `npm run test -- --run web/admin/src/lib/orgs/installationOrgRows.test.ts`
 Expected: FAIL (module or export missing).
 
 - [ ] **Step 3: Implement**
@@ -143,7 +143,7 @@ export function orgRowsAndSlugFromInstallations(
 
 - [ ] **Step 4: Run test — expect PASS**
 
-Run: `npm run test -- --run web/admin/src/lib/orgs/installationOrgRows.test.ts`  
+Run: `npm run test -- --run web/admin/src/lib/orgs/installationOrgRows.test.ts`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -304,8 +304,8 @@ git commit -m "feat(admin): fetch org list from user app installations"
 
 - [ ] **Step 6: Run tests**
 
-Run: `npm run test -- --run web/admin/src/lib/auth/oauth.test.ts web/admin/src/lib/auth/tokenStore.test.ts`  
-Run: `npm run test -- --run cloudflare_site/worker/src/index.worker.test.ts`  
+Run: `npm run test -- --run web/admin/src/lib/auth/oauth.test.ts web/admin/src/lib/auth/tokenStore.test.ts`
+Run: `npm run test -- --run cloudflare_site/worker/src/index.worker.test.ts`
 (Use repo’s actual worker test script if different.)
 
 - [ ] **Step 7: Commit**
