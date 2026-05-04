@@ -233,12 +233,23 @@ This PR was NOT reviewed. Do not count this as an approval.`, reason)
 // submits a new GitHub PR review. When commitSHA is non-empty, the
 // review is pinned to that commit via the commit_id field, closing
 // the TOCTOU gap between the stale-head check and review submission.
-// When commentURL is non-empty, it is included in the review body
-// so reviewers can navigate directly to the full review comment.
+//
+// The review body varies by event type to balance notification noise
+// against GitHub API requirements:
+//   - APPROVE: empty body (avoids duplicate notification)
+//   - REQUEST_CHANGES: includes a link to the sticky comment (API
+//     requires a non-empty body for this event)
+//   - COMMENT: skipped entirely (sticky comment already covers it,
+//     and the API requires a non-empty body)
 func submitFormalReview(ctx context.Context, client forge.Client, owner, repo string, pr int, action, commitSHA, commentURL string, dryRun bool, printer *ui.Printer) error {
 	event, ok := reviewActionToEvent(action)
 	if !ok {
 		printer.StepInfo(fmt.Sprintf("Unknown review action %q, skipping formal review", action))
+		return nil
+	}
+
+	if event == "COMMENT" {
+		printer.StepInfo("Skipping formal COMMENT review (sticky comment already updated)")
 		return nil
 	}
 
@@ -251,11 +262,15 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 		return err
 	}
 
-	printer.StepStart(fmt.Sprintf("Submitting %s review", event))
-	reviewBody := "See the review comment above for full details."
-	if commentURL != "" {
-		reviewBody = fmt.Sprintf("See the [review comment](%s) for full details.", commentURL)
+	var reviewBody string
+	if event == "REQUEST_CHANGES" {
+		reviewBody = "See the review comment above for full details."
+		if commentURL != "" {
+			reviewBody = fmt.Sprintf("See the [review comment](%s) for full details.", commentURL)
+		}
 	}
+
+	printer.StepStart(fmt.Sprintf("Submitting %s review", event))
 	if err := client.CreatePullRequestReview(ctx, owner, repo, pr, event, reviewBody, commitSHA); err != nil {
 		return fmt.Errorf("submitting review: %w", err)
 	}
