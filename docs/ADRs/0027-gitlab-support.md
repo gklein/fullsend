@@ -155,11 +155,16 @@ GitLab doesn't have an exact GitHub Apps equivalent, but Project Access Tokens (
 3. **Trigger pipeline on protected branch**: The webhook triggers a pipeline in `.fullsend` on the `main` branch (protected), not in the enrolled repo
 4. **No untrusted code execution**: MR code never executes in a pipeline context — webhook payload is parsed by GitLab's webhook system, then triggers `.fullsend`
 
-**Why webhooks for GitLab but not GitHub**: ADR-0009 (pull_request_target security model for GitHub) explicitly rejected webhook-based dispatch because it "requires a hosted webhook receiver, breaking compute-platform agnosticism." That rejection rationale does not apply to GitLab because:
-- GitLab's pipeline trigger API endpoint (`/api/v4/projects/:id/trigger/pipeline`) is a built-in webhook receiver running within GitLab's infrastructure
-- No external hosting is required — the webhook targets GitLab's own API, which triggers the `.fullsend` project's pipeline
-- This maintains compute-platform agnosticism (everything runs within GitLab CI/CD)
-- In contrast, GitHub has no equivalent built-in webhook-to-workflow trigger API, so webhook-based dispatch for GitHub would require hosting an external service to receive webhooks and call the `workflow_dispatch` API
+**Why webhooks for GitLab but not GitHub**: ADR-0009 (pull_request_target security model for GitHub) explicitly rejected webhook-based dispatch because it "requires a hosted webhook receiver, breaking compute-platform agnosticism." GitLab's situation is similar but with a critical difference:
+
+**Webhook-to-trigger API incompatibility**: GitLab webhooks send JSON event payloads (merge request objects, issue events), while the pipeline trigger API (`/api/v4/projects/:id/trigger/pipeline`) expects form-encoded parameters (`token`, `ref`, `variables[KEY]=value`). These are not wire-compatible — pointing a webhook URL directly at the trigger endpoint results in a malformed request. This means an intermediary is required to translate webhook payloads to trigger API calls.
+
+**Options for webhook translation**:
+1. **GitLab CI/CD webhook integration**: Use a lightweight `.gitlab-ci.yml` job in the enrolled repo that runs on webhook events (via GitLab's `CI_PIPELINE_SOURCE == "webhook"` trigger) and calls the `.fullsend` trigger API. This keeps everything within GitLab CI/CD but reintroduces the security concern (MR code could modify the webhook job).
+2. **GitLab serverless functions**: Use GitLab's serverless integration to deploy a function that receives webhooks and translates to trigger API calls. Maintains compute-platform agnosticism (runs within GitLab infrastructure) but requires GitLab Premium/Ultimate tier.
+3. **Minimal bridge service**: Deploy a lightweight translation service (e.g., Cloud Run, Lambda) that receives webhooks and POSTs to the trigger API. This reintroduces the "hosted webhook receiver" concern from ADR-0009 but may be acceptable given GitLab's lack of a direct webhook-to-pipeline primitive.
+
+**Recommendation**: For initial implementation, use option 1 (GitLab CI/CD webhook integration) with strict protected-branch-only execution enforced via `workflow:rules` and `CI_COMMIT_REF_PROTECTED == "true"`. Document the residual risk (MR authors can modify `.gitlab-ci.yml` if branch protection is misconfigured) and evaluate serverless/bridge options for production deployments. The key difference from GitHub is that GitLab has the primitives (webhook triggers, protected branch variables) even if they require careful configuration, whereas GitHub would need external hosting regardless of configuration.
 
 **Webhook payload validation** (in `.fullsend` dispatch pipeline):
 
@@ -186,12 +191,13 @@ dispatch:
       WEBHOOK_TOKEN="${WEBHOOK_TOKEN}"
 
       # Validate SOURCE_PROJECT format before using in variable lookup
-      # NOTE: This regex should be expanded during implementation to include
-      # dots (.) and nested groups, which are valid in GitLab project paths
-      # (e.g., my.org/my.project or group/subgroup/project). If dots are added,
-      # the yq query below must use bracket notation (e.g.,
-      # yq '.["repos"]["my.project"]["enabled"]') instead of dot notation to
-      # avoid treating dots as path separators.
+      # GitLab project paths support dots (.), nested groups (group/subgroup/project),
+      # and standard word characters. Expanded regex for production use:
+      # ^[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)+$
+      # This illustrative code uses simplified two-segment validation for clarity.
+      # Production implementations should use the expanded regex above and update
+      # the yq query to use bracket notation for project names containing dots
+      # (e.g., yq '.["repos"]["my.project"]["enabled"]').
       if [[ ! "$SOURCE_PROJECT" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
         echo "ERROR: Invalid source project format"
         exit 1
@@ -268,6 +274,8 @@ dispatch:
 - Created via GitLab API: `POST /projects/:id/triggers` for the `.fullsend` project
 - The token itself authorizes triggering pipelines only in the `.fullsend` project
 - Stored as group-level CI/CD variable `FULLSEND_DISPATCH_TOKEN` (group-level for visibility to all enrolled repos' shim workflows; the token's authorization scope is still limited to `.fullsend`)
+
+**Security consideration - dispatch token exposure**: The group-level `FULLSEND_DISPATCH_TOKEN` is visible to CI/CD jobs in all enrolled repos. A malicious MR could exfiltrate this token (e.g., `curl` it to an external endpoint) and use it to trigger arbitrary pipelines in `.fullsend` with crafted `STAGE` and `EVENT_PAYLOAD` variables. The `workflow:rules` guard (`CI_COMMIT_REF_PROTECTED == "true"`) in `dispatch.yml` prevents execution on unprotected branches, but this relies on correct configuration. This is similar to GitHub's exposure of `FULLSEND_DISPATCH_TOKEN` as an org-level Actions secret (ADR-0008), but GitLab's trigger API accepts arbitrary variables whereas GitHub's `workflow_dispatch` only uses workflows already committed to the target ref. **Mitigation**: Mark `FULLSEND_DISPATCH_TOKEN` as a protected variable (only exposed to pipelines running on protected branches) to prevent MR code from reading it. However, this breaks the webhook translation pattern (option 1 above) which needs the token in enrolled repo pipelines. Alternative: Use webhook secret tokens for authentication instead of the dispatch token (enrolled repos authenticate via webhook secret, `.fullsend` validates and then triggers child pipelines without exposing the dispatch token to enrolled repos).
 
 **Dispatch workflow** (`.gitlab/ci/dispatch.yml`):
 ```yaml
