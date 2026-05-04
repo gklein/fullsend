@@ -280,6 +280,10 @@ generate-config:
     - apk add --no-cache yq jq
     - |
       # Validate and extract inputs
+      # NOTE: The validation logic below (SOURCE_PROJECT format, enrollment
+      # check) is duplicated from Section 4's security-focused snippet. Both
+      # sections describe the same dispatch.yml pipeline. See Section 4 for the
+      # security rationale behind this validation.
       STAGE="${STAGE}"
       SOURCE_PROJECT="${SOURCE_PROJECT}"
 
@@ -325,7 +329,10 @@ generate-config:
         IS_CHILD_PIPELINE: "true"
       EOF
           # Replace $pipeline_file placeholder
-          sed -i "s|\$pipeline_file|$pipeline_file|g" .gitlab-ci-child.yml
+          # NOTE: Uses @ as sed delimiter since .gitlab/ci/*.yml paths won't
+          # contain @. If this pattern is extended to user-supplied paths,
+          # consider escaping or using a more robust substitution method.
+          sed -i "s@\$pipeline_file@$pipeline_file@g" .gitlab-ci-child.yml
           MATCHED=true
           break  # Exit after first match
         fi
