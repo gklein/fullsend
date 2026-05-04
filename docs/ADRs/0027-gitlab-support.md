@@ -162,6 +162,9 @@ GitLab doesn't have an exact GitHub Apps equivalent, but Project Access Tokens (
 - In contrast, GitHub has no equivalent built-in webhook-to-workflow trigger API, so webhook-based dispatch for GitHub would require hosting an external service to receive webhooks and call the `workflow_dispatch` API
 
 **Webhook payload validation** (in `.fullsend` dispatch pipeline):
+
+This snippet illustrates the security-critical validation logic. For the complete dispatch pipeline including stage fan-out, see Section 5 (Cross-Repo Dispatch Mechanism).
+
 ```yaml
 # fullsend-stage: dispatch
 # Triggered by webhooks from enrolled repos
@@ -173,8 +176,11 @@ dispatch:
     # Only run on protected branch (main)
     - if: $CI_COMMIT_REF_PROTECTED == "true"
   script:
-    - apk add --no-cache yq jq curl
-    - |
+    - apk add --no-cache yq jq curl bash
+    # NOTE: The script below uses bash for ${!VAR} indirect expansion. Alpine's
+    # default /bin/sh (ash) does not support this bashism. Use 'bash -c' or
+    # switch to 'eval' / 'printenv' for POSIX compatibility.
+    - bash <<'BASH'
       # Validate inputs and webhook token
       SOURCE_PROJECT="${SOURCE_PROJECT}"
       WEBHOOK_TOKEN="${WEBHOOK_TOKEN}"
@@ -224,6 +230,7 @@ dispatch:
 
       # Webhook payload will be base64-encoded before passing to child pipeline
       # to prevent YAML injection attacks via event content
+      BASH
 ```
 
 **Enrollment setup**:
@@ -250,9 +257,9 @@ dispatch:
 **GitLab**: Pipeline trigger API with pipeline variables + child pipelines
 
 **Trigger token creation**:
-- Created via GitLab API: `POST /projects/:id/triggers`
-- Stored as group-level variable `FULLSEND_DISPATCH_TOKEN`
-- Scoped to `.fullsend` project
+- Created via GitLab API: `POST /projects/:id/triggers` for the `.fullsend` project
+- The token itself authorizes triggering pipelines only in the `.fullsend` project
+- Stored as group-level CI/CD variable `FULLSEND_DISPATCH_TOKEN` (group-level for visibility to all enrolled repos' shim workflows; the token's authorization scope is still limited to `.fullsend`)
 
 **Dispatch workflow** (`.gitlab/ci/dispatch.yml`):
 ```yaml
@@ -306,6 +313,10 @@ generate-config:
           echo "Generating child pipeline config for: $pipeline_file"
           # Create child pipeline config without injecting EVENT_PAYLOAD
           # Event payload passed via trigger API variables, not embedded in YAML
+          # NOTE: include:local: resolves files relative to the same repository
+          # and ref as the parent pipeline. Since the dispatch pipeline runs on
+          # .fullsend's protected main branch, the child pipeline includes stage
+          # files (triage.yml, code.yml, etc.) from the same protected ref.
           cat > .gitlab-ci-child.yml <<'EOF'
       include:
         - local: '$pipeline_file'
