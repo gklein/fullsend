@@ -417,12 +417,13 @@ This keeps the dispatch scanning logic identical across GitHub and GitLab.
 - Create `templates/shim-pipeline.yml` template
 - Add scripts for GitLab-specific operations (parallel to `.github/scripts/`)
 
-**Phase 3: CLI updates**
-- Detect forge type (GitHub vs GitLab) from repo URL or config
-- Add `--forge` flag to `fullsend admin install`
-- Update `appsetup` package to create Project Access Tokens instead of GitHub Apps
-- Update `layers` package to deploy `.gitlab/` directory instead of `.github/`
-- Add GitLab-specific enrollment (include shim in `.gitlab-ci.yml`)
+**Phase 3: Forge-neutral interface evolution**
+- Add forge-neutral methods to `forge.Client` (`CreateRoleCredential`, `TriggerPipeline`, `CreateWebhook`)
+- Implement GitLab-specific versions of these methods in `internal/forge/gitlab/`
+- Update `appsetup` to use `CreateRoleCredential()` instead of GitHub App-specific code
+- Update `layers` to ask forge.Client for template paths and enrollment snippets (pushes forge-specific logic into Client implementations)
+- Move forge detection to `internal/forge/detect.go` per ADR-0005 boundary rule
+- Add `--forge` flag to `fullsend admin install` for manual override
 
 **Phase 4: Configuration**
 - Add `forge: github` or `forge: gitlab` to `config.yaml`
@@ -439,10 +440,10 @@ This keeps the dispatch scanning logic identical across GitHub and GitLab.
 ### Positive
 
 - **Multi-forge support**: Organizations on GitLab can adopt fullsend
-- **Forge abstraction validated**: Implementing GitLab proves the `forge.Client` abstraction works
+- **Forge abstraction strengthened**: Implementing GitLab reveals areas where the interface needs to evolve (credential management, pipeline triggering) and validates that forge-specific operations can be pushed into the Client implementation per ADR-0005
+- **ADR-0005 compliance**: Changes to layers/CLI/appsetup are minimized by adding forge-neutral interface methods (`CreateRoleCredential`, `TriggerPipeline`) rather than adding conditional logic
 - **Parallel architecture**: GitLab implementation closely mirrors GitHub, reducing cognitive load
 - **Same workflow**: Triage → Code → Review → Fix stages work identically from user perspective
-- **Minimal CLI changes**: Forge detection mostly automatic, users specify `--forge` only during install
 
 ### Negative
 
@@ -467,6 +468,57 @@ This keeps the dispatch scanning logic identical across GitHub and GitLab.
 - **Version detection**: CLI detects GitLab version, warns about unsupported versions
 
 ## Implementation Notes
+
+### Forge Interface Evolution
+
+**Challenge**: ADR-0005 promises "Adding a new forge requires implementing `forge.Client` — no changes to layers, CLI, or app setup code." However, the current `forge.Client` interface contains GitHub-specific methods (`ListOrgInstallations`, `GetAppClientID`) and operations (`DispatchWorkflow`) that don't map directly to GitLab.
+
+**Proposed forge-neutral interface additions**:
+
+```go
+// Credential management (replaces GitHub App-specific methods)
+// CreateRoleCredential creates a scoped credential for a specific role
+// (triage, code, review, fix). For GitHub, this would create/configure
+// a GitHub App. For GitLab, this would create a Project Access Token.
+CreateRoleCredential(ctx context.Context, role, owner, repo string, permissions []string) (credentialID string, err error)
+
+// RevokeRoleCredential removes a previously created role credential.
+RevokeRoleCredential(ctx context.Context, owner, repo, credentialID string) error
+
+// GetRoleCredentialValue retrieves the secret value for a role credential
+// (for storing in CI/CD secrets). For GitHub Apps, this generates an
+// installation token. For GitLab PATs, this returns the token value.
+GetRoleCredentialValue(ctx context.Context, owner, repo, credentialID string) (string, error)
+
+// Pipeline/workflow triggering (replaces DispatchWorkflow)
+// TriggerPipeline initiates a CI/CD pipeline for a specific stage.
+// For GitHub, this calls workflow_dispatch. For GitLab, this uses the
+// pipeline trigger API with variables.
+TriggerPipeline(ctx context.Context, owner, repo, stage string, variables map[string]string) error
+
+// Webhook management (GitLab-specific for security model)
+// CreateWebhook configures a webhook from source repo to .fullsend project.
+// For GitHub, this is a no-op (uses in-repo shim). For GitLab, this
+// creates a project webhook with a secret token.
+CreateWebhook(ctx context.Context, owner, repo, targetURL, secretToken string, events []string) error
+DeleteWebhook(ctx context.Context, owner, repo, webhookID string) error
+```
+
+**Existing GitHub-specific methods to be generalized or deprecated**:
+
+- `ListOrgInstallations(ctx, org) ([]Installation, error)` — GitHub App-specific. GitLab equivalent would list Project Access Tokens, but tokens are scoped per-project not org-wide. This method may need to become forge-specific or return an empty list for non-GitHub forges.
+- `GetAppClientID(ctx, slug) (string, error)` — GitHub App-specific. No GitLab equivalent. This should be deprecated or moved to a GitHub-specific extension interface.
+- `DispatchWorkflow(ctx, owner, repo, workflowFile, ref, inputs)` — GitHub Actions-specific (targets a specific workflow file). Replaced by forge-neutral `TriggerPipeline` above.
+
+**Minimizing layer/CLI/appsetup changes**:
+
+By adding the forge-neutral methods above, the implementation phases can be revised to keep layer/CLI changes minimal:
+
+- **appsetup**: Use `CreateRoleCredential` instead of directly creating GitHub Apps or Project Access Tokens. The forge implementation handles the forge-specific details.
+- **layers/workflows**: Use forge-agnostic template deployment (the forge.Client implementation knows whether to deploy `.github/` or `.gitlab/` based on forge type).
+- **CLI**: Forge detection (`detectForge`) moves to `internal/forge/detect.go` per ADR-0005's boundary rule. CLI calls `forge.DetectForge(repoURL)` instead of implementing detection itself.
+
+**Note on interface design scope**: This ADR proposes the architectural direction for forge-neutral interface evolution (add `CreateRoleCredential`, `TriggerPipeline`, etc.) to uphold ADR-0005's promise of minimal layer/CLI changes. The detailed API signatures, error handling, and return types for these methods require separate design work and should be documented in a follow-up design document or implementation PR. The exact method signatures shown above are illustrative, not normative.
 
 ### CLI Changes Required
 
@@ -514,12 +566,13 @@ gitlab_instance_url: https://gitlab.example.com  # optional, defaults to gitlab.
 - `internal/scaffold/fullsend-repo/.gitlab/` - GitLab CI/CD templates
 - `internal/scaffold/fullsend-repo/.gitlab/scripts/` - GitLab-specific scripts
 
-**Modified packages**:
-- `internal/cli/admin.go` - Forge detection, conditional logic
-- `internal/layers/workflows.go` - Deploy `.gitlab/` or `.github/` based on forge
-- `internal/layers/enrollment.go` - GitLab enrollment uses `.gitlab-ci.yml` include
-- `internal/appsetup/` - Create Project Access Tokens for GitLab
-- `internal/config/config.go` - Add forge type field
+**Modified packages** (minimized via forge.Client abstraction):
+- `internal/forge/forge.go` - Add forge-neutral methods (`CreateRoleCredential`, `TriggerPipeline`, `CreateWebhook`) and deprecate GitHub-specific methods
+- `internal/forge/detect.go` (new) - Forge detection logic (moved from CLI per ADR-0005 boundary rule)
+- `internal/config/config.go` - Add `forge` field to config schema (minimal change: one field addition)
+- `internal/appsetup/` - Use `forge.Client.CreateRoleCredential()` instead of GitHub App-specific code (forge-agnostic caller, forge-specific implementation)
+- `internal/layers/workflows.go` - Ask forge.Client for template directory path instead of conditionally choosing `.github/` or `.gitlab/` (pushes forge-specific logic into Client implementation)
+- `internal/layers/enrollment.go` - Ask forge.Client for enrollment snippet instead of hardcoding shim workflow syntax (pushes forge-specific logic into Client implementation)
 
 ### Security Considerations
 
