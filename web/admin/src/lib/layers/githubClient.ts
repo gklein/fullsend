@@ -25,7 +25,13 @@ function isNotFound(err: unknown): boolean {
 
 function decodeContentBase64(b64: string): string {
   const normalized = b64.replace(/\n/g, "");
-  const binary = atob(normalized);
+  let binary: string;
+  try {
+    binary = atob(normalized);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`GitHub file content is not valid base64: ${msg}`);
+  }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
