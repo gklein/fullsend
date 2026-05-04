@@ -111,9 +111,10 @@ function manifestMetaForFile(
 function generateLoadPageSource(sortedRouteKeys: string[]): string {
   const cases = sortedRouteKeys
     .map((k) => {
-      return `    case ${JSON.stringify(k)}:\n      return (await import("virtual:fullsend-docs/page/" + encodeURIComponent(${JSON.stringify(
-        k,
-      )}))).default;`;
+      // Each import() must use a string literal so Vite/Rollup can analyze it
+      // (see dynamic-import-vars limitations).
+      const specifier = PAGE_PREFIX + encodeURIComponent(k);
+      return `    case ${JSON.stringify(k)}:\n      return (await import(${JSON.stringify(specifier)})).default;`;
     })
     .join("\n");
 
