@@ -114,12 +114,11 @@ has moved, a stale-head failure is posted instead.`,
 				return postFailureNotice(cmd.Context(), client, owner, repoName, pr, parsed, cfg, printer)
 			}
 
-			commentURL, err := sticky.Post(cmd.Context(), client, owner, repoName, pr, parsed.Body, cfg, printer)
-			if err != nil {
+			if _, err := sticky.Post(cmd.Context(), client, owner, repoName, pr, parsed.Body, cfg, printer); err != nil {
 				return err
 			}
 
-			return submitFormalReview(cmd.Context(), client, owner, repoName, pr, parsed.Action, parsed.HeadSHA, commentURL, dryRun, printer)
+			return submitFormalReview(cmd.Context(), client, owner, repoName, pr, parsed.Action, parsed.HeadSHA, dryRun, printer)
 		},
 	}
 
@@ -233,9 +232,11 @@ This PR was NOT reviewed. Do not count this as an approval.`, reason)
 // submits a new GitHub PR review. When commitSHA is non-empty, the
 // review is pinned to that commit via the commit_id field, closing
 // the TOCTOU gap between the stale-head check and review submission.
-// When commentURL is non-empty, it is included in the review body
-// so reviewers can navigate directly to the full review comment.
-func submitFormalReview(ctx context.Context, client forge.Client, owner, repo string, pr int, action, commitSHA, commentURL string, dryRun bool, printer *ui.Printer) error {
+// The review body is left empty so that the formal review only
+// conveys the disposition (approve/request-changes) without generating
+// a duplicate notification — the detailed findings are already posted
+// as a sticky comment.
+func submitFormalReview(ctx context.Context, client forge.Client, owner, repo string, pr int, action, commitSHA string, dryRun bool, printer *ui.Printer) error {
 	event, ok := reviewActionToEvent(action)
 	if !ok {
 		printer.StepInfo(fmt.Sprintf("Unknown review action %q, skipping formal review", action))
@@ -252,11 +253,7 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 	}
 
 	printer.StepStart(fmt.Sprintf("Submitting %s review", event))
-	reviewBody := "See the review comment above for full details."
-	if commentURL != "" {
-		reviewBody = fmt.Sprintf("See the [review comment](%s) for full details.", commentURL)
-	}
-	if err := client.CreatePullRequestReview(ctx, owner, repo, pr, event, reviewBody, commitSHA); err != nil {
+	if err := client.CreatePullRequestReview(ctx, owner, repo, pr, event, "", commitSHA); err != nil {
 		return fmt.Errorf("submitting review: %w", err)
 	}
 	printer.StepDone("Review submitted")
