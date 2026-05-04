@@ -11,6 +11,12 @@ declare module "virtual:fullsend-docs" {
         title: string;
       };
 
+  export type DocPagePayload = {
+    title: string;
+    html: string;
+    frontmatter: Record<string, unknown>;
+  };
+
   export const manifest: ManifestNode[];
-  export const pages: Record<string, { title: string; html: string }>;
+  export function loadPage(routeKey: string): Promise<DocPagePayload>;
 }

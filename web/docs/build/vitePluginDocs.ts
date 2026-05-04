@@ -1,11 +1,22 @@
 import type { Plugin } from "vite";
 import fs from "node:fs";
 import path from "node:path";
-import { listDocMarkdownFiles, filePathToRouteKey, type DocsFilePath } from "./paths";
-import { markdownToHtml } from "./markdown";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkGfm from "remark-gfm";
+import matter from "gray-matter";
+import type { MdastRoot } from "mdast";
+import {
+  listDocMarkdownFiles,
+  filePathToRouteKey,
+  type DocsFilePath,
+} from "./paths";
+import { markdownToHtml, extractTitle } from "./markdown";
 
-const VIRTUAL_ID = "\0virtual:fullsend-docs";
-const RESOLVED_VIRTUAL = "virtual:fullsend-docs";
+const VIRTUAL_BOOTSTRAP = "\0virtual:fullsend-docs";
+const VIRTUAL_BOOTSTRAP_PUBLIC = "virtual:fullsend-docs";
+const PAGE_PREFIX = "virtual:fullsend-docs/page/";
+const PAGE_INTERNAL_PREFIX = "\0fullsend-docs-page:";
 
 export type ManifestNode =
   | { type: "dir"; name: string; children: ManifestNode[] }
@@ -79,16 +90,96 @@ function buildTree(
   return toManifest(root);
 }
 
+function manifestMetaForFile(
+  md: string,
+  f: DocsFilePath,
+): { routeKey: string; title: string; segments: string[] } {
+  const routeKey = filePathToRouteKey(f);
+  const { content } = matter(md);
+  const mdast = unified()
+    .use(remarkParse)
+    .use(remarkGfm)
+    .parse(content) as MdastRoot;
+  const title = extractTitle(mdast, routeKey);
+  return {
+    routeKey,
+    title,
+    segments: routeKey.split("/").filter(Boolean),
+  };
+}
+
+function generateLoadPageSource(sortedRouteKeys: string[]): string {
+  const cases = sortedRouteKeys
+    .map((k) => {
+      return `    case ${JSON.stringify(k)}:\n      return (await import("virtual:fullsend-docs/page/" + encodeURIComponent(${JSON.stringify(
+        k,
+      )}))).default;`;
+    })
+    .join("\n");
+
+  return `export async function loadPage(routeKey) {
+  switch (routeKey) {
+${cases}
+    default:
+      throw new Error("Unknown doc route: " + routeKey);
+  }
+}
+`;
+}
+
+async function loadBootstrapModule(repoRoot: string): Promise<string> {
+  const files = listDocMarkdownFiles(repoRoot);
+  const meta: { routeKey: string; title: string; segments: string[] }[] = [];
+
+  for (const f of files) {
+    const abs = path.join(repoRoot, f);
+    const md = fs.readFileSync(abs, "utf8");
+    meta.push(manifestMetaForFile(md, f));
+  }
+
+  meta.sort((a, b) => a.routeKey.localeCompare(b.routeKey));
+  const manifest = buildTree(meta);
+  const sortedKeys = meta.map((m) => m.routeKey);
+
+  return `export const manifest = ${JSON.stringify(manifest)};
+${generateLoadPageSource(sortedKeys)}
+`;
+}
+
 export function fullsendDocsPlugin(repoRoot: string): Plugin {
   return {
     name: "fullsend-docs",
     resolveId(id) {
-      if (id === RESOLVED_VIRTUAL) return VIRTUAL_ID;
+      if (id === VIRTUAL_BOOTSTRAP_PUBLIC) return VIRTUAL_BOOTSTRAP;
+      if (id.startsWith(PAGE_PREFIX)) {
+        const encoded = id.slice(PAGE_PREFIX.length);
+        let routeKey: string;
+        try {
+          routeKey = decodeURIComponent(encoded);
+        } catch {
+          return undefined;
+        }
+        return `${PAGE_INTERNAL_PREFIX}${routeKey}`;
+      }
       return undefined;
     },
-    load(id) {
-      if (id !== VIRTUAL_ID) return undefined;
-      return loadVirtualModule(repoRoot);
+    async load(id) {
+      if (id === VIRTUAL_BOOTSTRAP) {
+        return loadBootstrapModule(repoRoot);
+      }
+      if (id.startsWith(PAGE_INTERNAL_PREFIX)) {
+        const routeKey = id.slice(PAGE_INTERNAL_PREFIX.length);
+        const rel = `docs/${routeKey}.md` as DocsFilePath;
+        const abs = path.join(repoRoot, rel);
+        if (!fs.existsSync(abs)) {
+          return null;
+        }
+        const md = fs.readFileSync(abs, "utf8");
+        const { title, html, frontmatter } = await markdownToHtml(md, rel);
+        const payload = { title, html, frontmatter };
+        return `export default ${JSON.stringify(payload)};\n`;
+      }
+      return undefined;
     },
     configureServer(server) {
       const docsDir = path.join(repoRoot, "docs");
@@ -97,28 +188,4 @@ export function fullsendDocsPlugin(repoRoot: string): Plugin {
       }
     },
   };
-}
-
-async function loadVirtualModule(repoRoot: string): Promise<string> {
-  const files = listDocMarkdownFiles(repoRoot);
-  const pages: Record<string, { title: string; html: string }> = {};
-  const meta: { routeKey: string; title: string; segments: string[] }[] = [];
-
-  for (const f of files) {
-    const abs = path.join(repoRoot, f);
-    const md = fs.readFileSync(abs, "utf8");
-    const { title, html } = await markdownToHtml(md, f as DocsFilePath);
-    const routeKey = filePathToRouteKey(f as DocsFilePath);
-    pages[routeKey] = { title, html };
-    meta.push({
-      routeKey,
-      title,
-      segments: routeKey.split("/").filter(Boolean),
-    });
-  }
-
-  meta.sort((a, b) => a.routeKey.localeCompare(b.routeKey));
-  const manifest = buildTree(meta);
-
-  return `export const manifest = ${JSON.stringify(manifest)};\nexport const pages = ${JSON.stringify(pages)};\n`;
 }
