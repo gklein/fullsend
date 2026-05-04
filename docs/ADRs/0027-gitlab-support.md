@@ -199,10 +199,10 @@ dispatch:
 
       # Look up expected token from masked CI/CD variable
       # Variable name format: WEBHOOK_TOKEN_<sanitized_project_path>
-      # NOTE: This sanitization can cause collisions (foo-bar/baz and foo_bar/baz
-      # both map to WEBHOOK_TOKEN_foo_bar_baz). Implementation should use a
-      # collision-resistant encoding (e.g., double-underscore for /, or hashing).
-      SANITIZED_PROJECT=$(echo "${SOURCE_PROJECT}" | tr '/' '_' | tr '-' '_')
+      # Sanitization scheme: Replace / with __ (double underscore), preserve - and _
+      # This avoids collisions (foo-bar/baz → WEBHOOK_TOKEN_foo-bar__baz,
+      # foo_bar/baz → WEBHOOK_TOKEN_foo_bar__baz) while keeping names readable.
+      SANITIZED_PROJECT=$(echo "${SOURCE_PROJECT}" | sed 's/\//__/g')
       EXPECTED_TOKEN_VAR="WEBHOOK_TOKEN_${SANITIZED_PROJECT}"
       EXPECTED_TOKEN="${!EXPECTED_TOKEN_VAR}"
 
@@ -211,10 +211,12 @@ dispatch:
         exit 1
       fi
 
-      # NOTE: This string comparison is not timing-safe. Implementation should
-      # use HMAC-based verification or constant-time comparison (e.g., openssl
-      # dgst) to prevent timing side-channel attacks that could leak the token
-      # value byte-by-byte.
+      # SECURITY: Implementations MUST use constant-time comparison to prevent
+      # timing side-channel attacks that could leak the token byte-by-byte.
+      # Example: echo -n "$WEBHOOK_TOKEN" | openssl dgst -sha256 -hex vs
+      #          echo -n "$EXPECTED_TOKEN" | openssl dgst -sha256 -hex
+      # This illustrative code uses string equality for clarity; production
+      # code must replace this with constant-time comparison.
       if [ "$WEBHOOK_TOKEN" != "$EXPECTED_TOKEN" ]; then
         echo "ERROR: Invalid webhook token"
         exit 1
@@ -242,7 +244,8 @@ dispatch:
 **Security properties**:
 - Webhook payload constructed by GitLab, not by MR author code
 - Dispatch pipeline runs on `.fullsend` protected `main` branch
-- Token validation prevents unauthorized repos from triggering workflows
+- Token validation prevents unauthorized repos from triggering workflows (implementations MUST use constant-time comparison to prevent timing side-channel attacks)
+- Webhook token variable names use collision-resistant encoding (double-underscore for `/`)
 - MR source code never executes in a pipeline with access to fullsend secrets
 
 **Key difference from GitHub**: Webhooks replace the in-repo shim. This is architecturally cleaner for GitLab's security model but requires webhook management (creation, token rotation) in the admin install flow.
@@ -277,7 +280,7 @@ generate-config:
   stage: prepare
   image: alpine:latest
   script:
-    - apk add --no-cache yq jq
+    - apk add --no-cache yq jq gettext
     - |
       # Validate and extract inputs
       # NOTE: The validation logic below (SOURCE_PROJECT format, enrollment
@@ -321,6 +324,10 @@ generate-config:
           # and ref as the parent pipeline. Since the dispatch pipeline runs on
           # .fullsend's protected main branch, the child pipeline includes stage
           # files (triage.yml, code.yml, etc.) from the same protected ref.
+          # Use envsubst for robust variable substitution
+          # Stage files are constrained to .gitlab/ci/*.yml by the loop,
+          # so $pipeline_file is safe for substitution (no shell metacharacters).
+          export pipeline_file
           cat > .gitlab-ci-child.yml <<'EOF'
       include:
         - local: '$pipeline_file'
@@ -328,11 +335,9 @@ generate-config:
       variables:
         IS_CHILD_PIPELINE: "true"
       EOF
-          # Replace $pipeline_file placeholder
-          # NOTE: Uses @ as sed delimiter since .gitlab/ci/*.yml paths won't
-          # contain @. If this pattern is extended to user-supplied paths,
-          # consider escaping or using a more robust substitution method.
-          sed -i "s@\$pipeline_file@$pipeline_file@g" .gitlab-ci-child.yml
+          # envsubst replaces $pipeline_file with its value from environment
+          envsubst < .gitlab-ci-child.yml > .gitlab-ci-child.yml.tmp
+          mv .gitlab-ci-child.yml.tmp .gitlab-ci-child.yml
           MATCHED=true
           break  # Exit after first match
         fi
@@ -475,11 +480,15 @@ This keeps the dispatch scanning logic identical across GitHub and GitLab.
 
 **Proposed forge-neutral interface additions**:
 
+These methods follow ADR-0005's forge-neutral vocabulary convention (e.g., `ChangeProposal` instead of "pull request" or "merge request"). The term `RoleCredential` is the forge-neutral abstraction for GitHub Apps (GitHub) and Project Access Tokens (GitLab).
+
 ```go
 // Credential management (replaces GitHub App-specific methods)
 // CreateRoleCredential creates a scoped credential for a specific role
 // (triage, code, review, fix). For GitHub, this would create/configure
 // a GitHub App. For GitLab, this would create a Project Access Token.
+// The forge-neutral term "RoleCredential" abstracts over forge-specific
+// authentication mechanisms.
 CreateRoleCredential(ctx context.Context, role, owner, repo string, permissions []string) (credentialID string, err error)
 
 // RevokeRoleCredential removes a previously created role credential.
