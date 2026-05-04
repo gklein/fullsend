@@ -13,7 +13,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run --config vite.config.ts && vitest run --config cloudflare_site/worker/vitest.config.mts",
-    "check": "svelte-check --tsconfig web/admin/tsconfig.json"
+    "check": "svelte-check --tsconfig web/admin/tsconfig.json && svelte-check --tsconfig web/docs/tsconfig.json"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.14.7",

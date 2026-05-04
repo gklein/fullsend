@@ -1,1 +1,303 @@
-/* Docs app shell styles (Task 6) */
+:root {
+  color-scheme: light dark;
+  --docs-sidebar-width: 18rem;
+  --docs-sidebar-collapsed-width: 0;
+  --docs-topbar-height: 2.75rem;
+  --docs-prose-max: 52rem;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    Ubuntu,
+    Cantarell,
+    "Noto Sans",
+    sans-serif;
+  line-height: 1.5;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: Canvas;
+  color: CanvasText;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.docs-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.docs-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: var(--docs-topbar-height);
+  padding: 0 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+}
+
+.docs-brand {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.docs-mobile-nav-toggle {
+  display: none;
+  font: inherit;
+  padding: 0.35rem 0.65rem;
+  border-radius: 0.35rem;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  background: Field;
+  color: FieldText;
+  cursor: pointer;
+}
+
+.docs-layout {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.docs-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem 2rem;
+}
+
+.doc-body {
+  max-width: var(--docs-prose-max);
+}
+
+.doc-body--empty {
+  color: color-mix(in srgb, CanvasText 70%, transparent);
+}
+
+.doc-body :where(h1, h2, h3, h4) {
+  line-height: 1.25;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.doc-body h1 {
+  margin-top: 0;
+  font-size: 1.75rem;
+}
+
+.doc-body :where(p, ul, ol) {
+  margin: 0.65em 0;
+}
+
+.doc-body :where(ul, ol) {
+  padding-left: 1.35rem;
+}
+
+.doc-body :where(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+
+.doc-body :where(th, td) {
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  padding: 0.35rem 0.5rem;
+}
+
+.doc-body pre {
+  overflow-x: auto;
+  padding: 0.75rem 1rem;
+  border-radius: 0.4rem;
+  background: color-mix(in srgb, CanvasText 6%, Canvas);
+  border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  font-size: 0.85rem;
+}
+
+.doc-body :where(code):not(pre code) {
+  font-size: 0.9em;
+  padding: 0.12em 0.3em;
+  border-radius: 0.25rem;
+  background: color-mix(in srgb, CanvasText 8%, Canvas);
+}
+
+.doc-body a {
+  color: LinkText;
+}
+
+.docs-sidebar {
+  flex: 0 0 var(--docs-sidebar-width);
+  width: var(--docs-sidebar-width);
+  min-width: 0;
+  border-left: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: color-mix(in srgb, CanvasText 4%, Canvas);
+  transition:
+    flex-basis 0.2s ease,
+    width 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.docs-shell--nav-collapsed .docs-sidebar {
+  flex-basis: 0;
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
+  border-left-color: transparent;
+  padding: 0;
+}
+
+.docs-sidebar-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  font-size: 0.85rem;
+}
+
+.docs-sidebar-title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.docs-sidebar-collapse,
+.docs-sidebar-close {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.45rem;
+  border-radius: 0.3rem;
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  background: Field;
+  color: FieldText;
+  cursor: pointer;
+}
+
+.docs-sidebar-close--mobile {
+  display: none;
+}
+
+.docs-sidebar-collapse--desktop {
+  display: inline-flex;
+}
+
+.docs-tree-wrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.35rem 0.5rem 1rem;
+  font-size: 0.88rem;
+}
+
+.doc-tree-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.doc-tree-item {
+  margin: 0.15rem 0;
+}
+
+.doc-tree-list .doc-tree-list {
+  margin-left: 0.65rem;
+  padding-left: 0.35rem;
+  border-left: 1px solid color-mix(in srgb, CanvasText 10%, transparent);
+}
+
+.doc-tree-dir {
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: color-mix(in srgb, CanvasText 72%, transparent);
+  margin: 0.5rem 0 0.15rem;
+}
+
+.doc-tree-link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: inherit;
+  padding: 0.2rem 0.35rem;
+  border: none;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.doc-tree-link:hover {
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+}
+
+.doc-tree-link--active {
+  background: color-mix(in srgb, CanvasText 14%, transparent);
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .docs-mobile-nav-toggle {
+    display: inline-flex;
+  }
+
+  .docs-layout {
+    position: relative;
+  }
+
+  .docs-sidebar-collapse--desktop {
+    display: none;
+  }
+
+  .docs-sidebar-close--mobile {
+    display: inline-flex;
+  }
+
+  .docs-sidebar {
+    position: fixed;
+    top: var(--docs-topbar-height);
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    width: min(var(--docs-sidebar-width), 100vw);
+    flex: none;
+    max-width: 100%;
+    border-left: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+    box-shadow: -4px 0 20px color-mix(in srgb, CanvasText 20%, transparent);
+    transform: translateX(100%);
+    opacity: 1;
+    transition: transform 0.2s ease;
+  }
+
+  .docs-shell--mobile-nav-open .docs-sidebar {
+    transform: translateX(0);
+  }
+
+  .docs-shell--nav-collapsed .docs-sidebar {
+    transform: translateX(100%);
+    width: min(var(--docs-sidebar-width), 100vw);
+    opacity: 1;
+  }
+
+  .docs-shell--mobile-nav-open.docs-shell--nav-collapsed .docs-sidebar {
+    transform: translateX(0);
+  }
+}
