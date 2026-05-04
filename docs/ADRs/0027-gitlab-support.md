@@ -304,7 +304,7 @@ generate-config:
           break  # Exit after first match
         fi
       done
-      
+
       if [ "$MATCHED" != "true" ]; then
         echo "ERROR: No workflow found for stage: $STAGE"
         exit 1
