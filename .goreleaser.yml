@@ -57,7 +57,7 @@ release:
   github:
     owner: fullsend-ai
     name: fullsend
-  name_template: "{{ .Tag }}{{ if .TagSubject }}: {{ .TagSubject }}{{ end }}"
+  name_template: "{{ .Tag }}{{ if and .TagSubject (ne .TagSubject .Tag) }}: {{ .TagSubject }}{{ end }}"
   prerelease: auto
 
 announce:
