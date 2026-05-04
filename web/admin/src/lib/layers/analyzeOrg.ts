@@ -24,12 +24,12 @@ export async function analyzeOrgLayers(input: AnalyzeOrgLayersInput): Promise<{
   rollup: ReturnType<typeof rollupOrgLayerStatus>;
 }> {
   const { org, gh, agents, enabledRepos } = input;
-  const reports: LayerReport[] = [
-    await analyzeConfigRepoLayer(org, gh),
-    await analyzeWorkflowsLayer(org, gh),
-    await analyzeSecretsLayer(org, gh, agents),
-    await analyzeEnrollmentLayer(org, gh, enabledRepos),
-    await analyzeDispatchTokenLayer(org, gh),
-  ];
+  const reports: LayerReport[] = await Promise.all([
+    analyzeConfigRepoLayer(org, gh),
+    analyzeWorkflowsLayer(org, gh),
+    analyzeSecretsLayer(org, gh, agents),
+    analyzeEnrollmentLayer(org, gh, enabledRepos),
+    analyzeDispatchTokenLayer(org, gh),
+  ]);
   return { reports, rollup: rollupOrgLayerStatus(reports) };
 }
