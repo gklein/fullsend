@@ -1,6 +1,6 @@
 import { derived, writable } from "svelte/store";
-import { clearOrgListMemoryCache } from "../orgs/fetchOrgs";
-import { clearSession, loadToken } from "./tokenStore";
+import { clearAllAdminSessionCaches } from "./adminSessionCaches";
+import { loadToken } from "./tokenStore";
 import {
   fetchGitHubUser,
   GitHubUserRequestError,
@@ -44,10 +44,9 @@ export async function refreshSession(): Promise<void> {
 }
 
 export function signOut(options?: SignOutOptions): void {
-  // `clearSession()` drops persisted token, slug, OAuth scope header cache, and
-  // install-readiness probe cache so a different account cannot inherit stale UI state.
-  clearSession();
-  clearOrgListMemoryCache();
+  // Token, slug, OAuth scope + install-readiness caches, org list memory + analysis
+  // (see `adminSessionCaches.ts` — extend there when adding user-scoped admin caches).
+  clearAllAdminSessionCaches();
   githubUser.set(null);
   reauthenticateSuggested.set(Boolean(options?.suggestReauth));
 }
