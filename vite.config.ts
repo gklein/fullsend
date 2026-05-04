@@ -121,7 +121,11 @@ export default defineConfig(() => ({
   test: {
     environment: "jsdom",
     environmentMatchGlobs: [["docs/build/**/*.test.ts", "node"]],
-    include: ["admin/src/**/*.test.ts", "docs/build/**/*.test.ts"],
+    include: [
+      "admin/src/**/*.test.ts",
+      "docs/build/**/*.test.ts",
+      "docs/src/**/*.test.ts",
+    ],
     passWithNoTests: true,
   },
 }));
