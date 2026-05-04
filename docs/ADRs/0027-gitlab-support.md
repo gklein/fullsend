@@ -199,10 +199,15 @@ dispatch:
 
       # Look up expected token from masked CI/CD variable
       # Variable name format: WEBHOOK_TOKEN_<sanitized_project_path>
-      # Sanitization scheme: Replace / with __ (double underscore), preserve - and _
-      # This avoids collisions (foo-bar/baz → WEBHOOK_TOKEN_foo-bar__baz,
-      # foo_bar/baz → WEBHOOK_TOKEN_foo_bar__baz) while keeping names readable.
-      SANITIZED_PROJECT=$(echo "${SOURCE_PROJECT}" | sed 's/\//__/g')
+      # Sanitization scheme (GitLab var names must match [A-Za-z_][A-Za-z0-9_]*):
+      #   / → __ (double underscore)
+      #   - → _H_ (underscore-H-underscore)
+      # Examples: foo-bar/baz → WEBHOOK_TOKEN_foo_H_bar__baz,
+      #           foo_bar/baz → WEBHOOK_TOKEN_foo_bar__baz (distinct)
+      # Collision risk: Pathological project names like "foo_H_bar/baz" collide
+      # with "foo-bar/baz". Admins should avoid creating projects with _H_ or __
+      # sequences, or use SHA256(project_path) for collision-free guarantee.
+      SANITIZED_PROJECT=$(echo "${SOURCE_PROJECT}" | sed 's/-/_H_/g; s/\//__/g')
       EXPECTED_TOKEN_VAR="WEBHOOK_TOKEN_${SANITIZED_PROJECT}"
       EXPECTED_TOKEN="${!EXPECTED_TOKEN_VAR}"
 
@@ -239,13 +244,13 @@ dispatch:
 - `fullsend admin install` creates webhook in enrolled repo via GitLab API
 - Webhook URL: `https://gitlab.com/api/v4/projects/<fullsend-project-id>/trigger/pipeline`
 - Webhook triggers: Merge Request events, Issue events, Note events
-- Webhook secret token: stored as masked CI/CD variable in `.fullsend` project (e.g., `WEBHOOK_TOKEN_myorg_myrepo`), validated by dispatch pipeline
+- Webhook secret token: stored as masked CI/CD variable in `.fullsend` project (e.g., `WEBHOOK_TOKEN_myorg__myrepo` for project `myorg/myrepo`, or `WEBHOOK_TOKEN_my_H_org__my_H_repo` for `my-org/my-repo`), validated by dispatch pipeline
 
 **Security properties**:
 - Webhook payload constructed by GitLab, not by MR author code
 - Dispatch pipeline runs on `.fullsend` protected `main` branch
 - Token validation prevents unauthorized repos from triggering workflows (implementations MUST use constant-time comparison to prevent timing side-channel attacks)
-- Webhook token variable names use collision-resistant encoding (double-underscore for `/`)
+- Webhook token variable names use collision-resistant encoding (`/` → `__`, `-` → `_H_`) compatible with GitLab CI/CD variable naming constraints
 - MR source code never executes in a pipeline with access to fullsend secrets
 
 **Key difference from GitHub**: Webhooks replace the in-repo shim. This is architecturally cleaner for GitLab's security model but requires webhook management (creation, token rotation) in the admin install flow.
@@ -280,8 +285,10 @@ generate-config:
   stage: prepare
   image: alpine:latest
   script:
-    - apk add --no-cache yq jq gettext
-    - |
+    - apk add --no-cache yq jq gettext bash
+    # NOTE: The script below uses bash for [[ regex ]] syntax. Alpine's default
+    # /bin/sh (ash) does not support this bashism.
+    - bash <<'BASH'
       # Validate and extract inputs
       # NOTE: The validation logic below (SOURCE_PROJECT format, enrollment
       # check) is duplicated from Section 4's security-focused snippet. Both
@@ -336,7 +343,8 @@ generate-config:
         IS_CHILD_PIPELINE: "true"
       EOF
           # envsubst replaces $pipeline_file with its value from environment
-          envsubst < .gitlab-ci-child.yml > .gitlab-ci-child.yml.tmp
+          # Restrict substitution to $pipeline_file only (not all env vars)
+          envsubst '$pipeline_file' < .gitlab-ci-child.yml > .gitlab-ci-child.yml.tmp
           mv .gitlab-ci-child.yml.tmp .gitlab-ci-child.yml
           MATCHED=true
           break  # Exit after first match
@@ -347,6 +355,7 @@ generate-config:
         echo "ERROR: No workflow found for stage: $STAGE"
         exit 1
       fi
+      BASH
   artifacts:
     paths:
       - .gitlab-ci-child.yml
