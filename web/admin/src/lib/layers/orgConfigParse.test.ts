@@ -130,4 +130,17 @@ repos:
       expect((e as Error).message).toContain(String(MAX_ORG_CONFIG_YAML_DEPTH));
     }
   });
+
+  it("rejects flow-style sequence nesting deeper than the depth limit", () => {
+    let flow = "1";
+    for (let i = 0; i < MAX_ORG_CONFIG_YAML_DEPTH + 3; i++) {
+      flow = `[${flow}]`;
+    }
+    const doc = `version: "1"
+dispatch:
+  platform: github-actions
+k: ${flow}
+`;
+    expect(() => parseOrgConfigYaml(doc)).toThrow(OrgConfigYamlLimitError);
+  });
 });

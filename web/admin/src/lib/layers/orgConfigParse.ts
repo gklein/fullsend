@@ -36,13 +36,21 @@ function utf8ByteLength(s: string): number {
   return new TextEncoder().encode(s).length;
 }
 
-/** Deepest path from `value` through nested objects/arrays (scalar leaves report their `depth`). */
+/**
+ * Deepest path from `value` through nested objects/arrays (scalar leaves report their `depth`).
+ * Stops recursing once depth would exceed {@link MAX_ORG_CONFIG_YAML_DEPTH} so flow-style
+ * nesting cannot force a full deep walk before the limit check.
+ */
 function measureYamlTreeDepth(value: unknown, depth: number): number {
   if (value === null || typeof value !== "object") return depth;
+  if (depth >= MAX_ORG_CONFIG_YAML_DEPTH) {
+    return depth + 1;
+  }
   if (Array.isArray(value)) {
     let m = depth;
     for (const el of value) {
       m = Math.max(m, measureYamlTreeDepth(el, depth + 1));
+      if (m > MAX_ORG_CONFIG_YAML_DEPTH) return m;
     }
     return m;
   }
@@ -55,6 +63,7 @@ function measureYamlTreeDepth(value: unknown, depth: number): number {
         depth + 1,
       ),
     );
+    if (m > MAX_ORG_CONFIG_YAML_DEPTH) return m;
   }
   return m;
 }
