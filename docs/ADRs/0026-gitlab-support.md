@@ -2,10 +2,9 @@
 title: "26. GitLab Support Architecture"
 status: Proposed
 relates_to:
-  - 0005-forge-abstraction-layer
-  - 0007-per-role-github-apps
-  - 0008-workflow-dispatch-for-cross-repo-dispatch
-  - 0009-pull-request-target-in-shim-workflows
+  - agent-infrastructure
+  - agent-architecture
+  - security-threat-model
 topics:
   - gitlab
   - forge
@@ -122,65 +121,65 @@ GitLab doesn't have an exact GitHub Apps equivalent, but Project Access Tokens (
 
 **GitHub**: `pull_request_target` ensures the shim workflow runs the base branch version, preventing untrusted PR code from modifying the workflow to exfiltrate secrets.
 
-**GitLab**: No `pull_request_target` equivalent. Security achieved via:
+**GitLab**: No `pull_request_target` equivalent. The protected-branch pipeline approach (using `CI_COMMIT_REF_PROTECTED == "true"`) conflicts with MR-event triggering (which runs on unprotected MR source branches), so a different architecture is required.
 
-1. **Separate shim pipeline file**: `.gitlab/fullsend-shim.yml` included in main `.gitlab-ci.yml`
-2. **Protected branch enforcement**: Use `workflow:rules` to ensure shim only runs from protected branches:
-   ```yaml
-   workflow:
-     rules:
-       # Only run this pipeline from protected branches (main, etc.)
-       - if: $CI_COMMIT_REF_PROTECTED == "true"
-   ```
-3. **No source checkout**: Shim pipeline never checks out MR source, only reads MR metadata from CI variables
-4. **Trigger API call**: Shim makes HTTP request to `.fullsend` project's trigger endpoint
+**Webhook-based approach**: Instead of a shim pipeline in the enrolled repo, use GitLab webhooks to trigger `.fullsend` pipelines directly:
 
-**Shim template** (`.gitlab/fullsend-shim.yml`):
+1. **Webhook configuration**: Enrolled repos configure webhooks that POST to `.fullsend` project's pipeline trigger endpoint
+2. **Webhook authentication**: GitLab webhooks include a secret token, which `.fullsend` validates before processing
+3. **Trigger pipeline on protected branch**: The webhook triggers a pipeline in `.fullsend` on the `main` branch (protected), not in the enrolled repo
+4. **No untrusted code execution**: MR code never executes in a pipeline context — webhook payload is parsed by GitLab's webhook system, then triggers `.fullsend`
+
+**Webhook payload validation** (in `.fullsend` dispatch pipeline):
 ```yaml
-# fullsend shim pipeline
-# Routes events to agent pipelines in .fullsend via pipeline triggers.
-# Security: This file is included from main .gitlab-ci.yml and runs from 
-# the protected branch only. MR authors cannot modify it.
+# fullsend-stage: dispatch
+# Triggered by webhooks from enrolled repos
 
-workflow:
-  rules:
-    - if: $CI_COMMIT_REF_PROTECTED == "true"
-
-.dispatch-template:
+dispatch:
   stage: dispatch
   image: alpine:latest
-  script:
-    - apk add --no-cache curl jq
-    - |
-      # Build event payload
-      PAYLOAD=$(jq -cn \
-        --arg event_type "$EVENT_TYPE" \
-        --arg source_project "$CI_PROJECT_PATH" \
-        --arg event_json "$EVENT_JSON" \
-        '{event_type: $event_type, source_project: $source_project, event_payload: $event_json}')
-      
-      # Trigger dispatch pipeline in .fullsend
-      curl -X POST \
-        -F token="$FULLSEND_DISPATCH_TOKEN" \
-        -F ref=main \
-        -F "variables[STAGE]=$STAGE" \
-        -F "variables[EVENT_PAYLOAD]=$PAYLOAD" \
-        "https://gitlab.com/api/v4/projects/${FULLSEND_PROJECT_ID}/trigger/pipeline"
-
-dispatch-triage:
-  extends: .dispatch-template
-  variables:
-    STAGE: triage
-    EVENT_TYPE: merge_request
-    EVENT_JSON: '{"merge_request": {"iid": "$CI_MERGE_REQUEST_IID", "title": "$CI_MERGE_REQUEST_TITLE"}}'
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: on_success
-
-# Similar jobs for dispatch-code, dispatch-review, dispatch-fix
+    # Only run on protected branch (main)
+    - if: $CI_COMMIT_REF_PROTECTED == "true"
+  script:
+    - apk add --no-cache yq jq curl
+    - |
+      # Validate webhook token (passed as pipeline variable)
+      SOURCE_PROJECT="${SOURCE_PROJECT}"
+      WEBHOOK_TOKEN="${WEBHOOK_TOKEN}"
+      
+      # Look up expected token for this repo in config
+      EXPECTED_TOKEN=$(yq ".repos.\"${SOURCE_PROJECT}\".webhook_token" config.yaml)
+      if [ "$WEBHOOK_TOKEN" != "$EXPECTED_TOKEN" ]; then
+        echo "::error::Invalid webhook token"
+        exit 1
+      fi
+      
+      # Validate source project is enrolled
+      PROJECT_NAME="${SOURCE_PROJECT##*/}"
+      ENABLED=$(yq ".repos.\"$PROJECT_NAME\".enabled" config.yaml)
+      if [ "$ENABLED" != "true" ]; then
+        echo "Project not enrolled"
+        exit 1
+      fi
+      
+      # Parse event payload and trigger stage pipeline
+      # (same dispatch logic as GitHub workflow_dispatch)
 ```
 
-**Key difference from GitHub**: Must rely on protected branch + workflow rules instead of dedicated trigger type. Requires project settings to enforce protected branch for `main`.
+**Enrollment setup**:
+- `fullsend admin install` creates webhook in enrolled repo via GitLab API
+- Webhook URL: `https://gitlab.com/api/v4/projects/<fullsend-project-id>/trigger/pipeline`
+- Webhook triggers: Merge Request events, Issue events, Note events
+- Webhook secret token: stored in `.fullsend` config.yaml, validated by dispatch pipeline
+
+**Security properties**:
+- Webhook payload constructed by GitLab, not by MR author code
+- Dispatch pipeline runs on `.fullsend` protected `main` branch
+- Token validation prevents unauthorized repos from triggering workflows
+- MR source code never executes in a pipeline with access to fullsend secrets
+
+**Key difference from GitHub**: Webhooks replace the in-repo shim. This is architecturally cleaner for GitLab's security model but requires webhook management (creation, token rotation) in the admin install flow.
 
 ### 5. Cross-Repo Dispatch Mechanism
 
@@ -233,7 +232,7 @@ dispatch:
         fi
       done
   rules:
-    - if: $STAGE != null
+    - if: $STAGE
 ```
 
 **Alternative considered**: GitLab child pipelines via `trigger:` keyword. This requires pre-defining child pipeline files, whereas the dispatch pattern needs dynamic discovery. The trigger API approach matches GitHub's `workflow_dispatch` flexibility.
@@ -249,10 +248,10 @@ This keeps the dispatch scanning logic identical across GitHub and GitLab.
 
 | GitHub Event | GitLab Event | Trigger Mechanism |
 |-------------|--------------|-------------------|
-| issues.labeled | issue (labels changed) | Webhook → shim pipeline |
-| issue_comment.created | note (on issue) | Webhook → shim pipeline |
-| pull_request_target | merge_request_event | Pipeline on protected branch |
-| pull_request_review.submitted | Merge request approval | Webhook → shim pipeline |
+| issues.labeled | issue (labels changed) | Webhook → .fullsend dispatch pipeline |
+| issue_comment.created | note (on issue) | Webhook → .fullsend dispatch pipeline |
+| pull_request_target | merge_request_event | Webhook → .fullsend dispatch pipeline |
+| pull_request_review.submitted | Merge request approval | Webhook → .fullsend dispatch pipeline |
 
 **GitLab webhook limitations**: 
 - No direct equivalent to GitHub's granular event types
@@ -341,10 +340,16 @@ This keeps the dispatch scanning logic identical across GitHub and GitLab.
 ```go
 // internal/cli/admin.go
 func detectForge(repoURL string) (string, error) {
-    if strings.Contains(repoURL, "github.com") || strings.Contains(repoURL, "github.enterprise") {
+    u, err := url.Parse(repoURL)
+    if err != nil {
+        return "", fmt.Errorf("invalid repo URL: %w", err)
+    }
+    host := strings.ToLower(u.Hostname())
+    
+    if strings.Contains(host, "github.com") || strings.Contains(host, "github") {
         return "github", nil
     }
-    if strings.Contains(repoURL, "gitlab.com") || strings.Contains(repoURL, "gitlab") {
+    if strings.Contains(host, "gitlab.com") || strings.Contains(host, "gitlab") {
         return "gitlab", nil
     }
     return "", fmt.Errorf("unknown forge: %s", repoURL)
@@ -390,13 +395,15 @@ gitlab_instance_url: https://gitlab.example.com  # optional, defaults to gitlab.
 
 **Webhook authenticity**:
 - GitLab webhooks include secret token for verification
-- Shim pipeline should validate webhook token before triggering (implementation detail)
+- Dispatch pipeline validates webhook token against config.yaml before processing
+- Invalid tokens result in immediate pipeline failure
 
 **MR source checkout prevention**:
-- Shim pipeline must never run `git clone` or `git fetch` of MR source
-- Only read CI variables like `$CI_MERGE_REQUEST_IID`, `$CI_MERGE_REQUEST_TITLE`
+- Webhook-based architecture eliminates MR code execution risk
+- Dispatch pipeline runs on `.fullsend` protected branch, not enrolled repo
+- MR metadata passed via webhook payload, constructed by GitLab (not MR author)
 
-## Alternatives Considered
+## Options
 
 ### Alternative 1: GitLab CI/CD Templates at Root
 
