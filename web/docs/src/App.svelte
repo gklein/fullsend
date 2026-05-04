@@ -22,6 +22,19 @@
   let loading = $state(false);
   let navCollapsed = $state(false);
   let mobileNavOpen = $state(false);
+  let narrowViewport = $state(false);
+
+  let outlineExpanded = $derived(
+    narrowViewport ? mobileNavOpen : !navCollapsed,
+  );
+
+  let hamburgerLabel = $derived(
+    !narrowViewport && !navCollapsed
+      ? "Outline open"
+      : narrowViewport && mobileNavOpen
+        ? "Close documentation outline"
+        : "Open documentation outline",
+  );
 
   function syncRouteFromLocation(): void {
     const legacy = legacyPathnameDocRest();
@@ -79,12 +92,20 @@
   onMount(() => {
     navCollapsed = localStorage.getItem(NAV_COLLAPSED_KEY) === "1";
 
+    const mq = window.matchMedia("(max-width: 768px)");
+    const syncNarrow = () => {
+      narrowViewport = mq.matches;
+    };
+    syncNarrow();
+    mq.addEventListener("change", syncNarrow);
+
     syncRouteFromLocation();
 
     const onHashOrPop = () => syncRouteFromLocation();
     window.addEventListener("hashchange", onHashOrPop);
     window.addEventListener("popstate", onHashOrPop);
     return () => {
+      mq.removeEventListener("change", syncNarrow);
       window.removeEventListener("hashchange", onHashOrPop);
       window.removeEventListener("popstate", onHashOrPop);
     };
@@ -141,13 +162,30 @@
     });
   });
 
-  function toggleNavCollapsed(): void {
-    navCollapsed = !navCollapsed;
-    localStorage.setItem(NAV_COLLAPSED_KEY, navCollapsed ? "1" : "0");
+  function persistNavCollapsed(collapsed: boolean): void {
+    navCollapsed = collapsed;
+    localStorage.setItem(NAV_COLLAPSED_KEY, collapsed ? "1" : "0");
   }
 
-  function toggleMobileNav(): void {
-    mobileNavOpen = !mobileNavOpen;
+  function onHamburgerClick(): void {
+    if (narrowViewport) {
+      mobileNavOpen = !mobileNavOpen;
+      if (mobileNavOpen) {
+        persistNavCollapsed(false);
+      }
+      return;
+    }
+    if (navCollapsed) {
+      persistNavCollapsed(false);
+    }
+  }
+
+  function closeOutlineDesktop(): void {
+    persistNavCollapsed(true);
+  }
+
+  function closeOutlineMobile(): void {
+    mobileNavOpen = false;
   }
 </script>
 
@@ -159,17 +197,59 @@
   <header class="docs-topbar">
     <button
       type="button"
-      class="docs-mobile-nav-toggle"
+      class="docs-icon-btn docs-hamburger"
       aria-controls="docs-sidebar"
-      aria-expanded={mobileNavOpen}
-      onclick={toggleMobileNav}
+      aria-expanded={outlineExpanded}
+      aria-label={hamburgerLabel}
+      disabled={!narrowViewport && !navCollapsed}
+      onclick={onHamburgerClick}
     >
-      {mobileNavOpen ? "Close" : "Browse"}
+      <svg width="20" height="20" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z"
+        />
+      </svg>
     </button>
     <span class="docs-brand">Fullsend docs</span>
   </header>
 
   <div class="docs-layout">
+    <aside class="docs-sidebar" id="docs-sidebar" aria-label="Documentation outline">
+      <div class="docs-sidebar-header">
+        <span class="docs-sidebar-title">Outline</span>
+        <button
+          type="button"
+          class="docs-icon-btn docs-sidebar-close docs-sidebar-close--desktop"
+          aria-label="Close outline"
+          onclick={closeOutlineDesktop}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M18.3 5.71 12 12l6.3 6.29-1.42 1.42L10.59 13.4 4.29 19.7 2.86 18.3 9.17 12 2.86 5.71 4.29 4.3l6.3 6.29 6.29-6.3z"
+            />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="docs-icon-btn docs-sidebar-close docs-sidebar-close--mobile"
+          aria-label="Close outline"
+          onclick={closeOutlineMobile}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M18.3 5.71 12 12l6.3 6.29-1.42 1.42L10.59 13.4 4.29 19.7 2.86 18.3 9.17 12 2.86 5.71 4.29 4.3l6.3 6.29 6.29-6.3z"
+            />
+          </svg>
+        </button>
+      </div>
+      <nav class="docs-tree-wrap">
+        <DocTreeNav nodes={manifest} activeRouteKey={routeKey} />
+      </nav>
+    </aside>
+
     <main class="docs-main">
       {#if routeKey && page}
         <article
@@ -188,31 +268,5 @@
         </article>
       {/if}
     </main>
-
-    <aside class="docs-sidebar" id="docs-sidebar" aria-label="Documentation outline">
-      <div class="docs-sidebar-header">
-        <span class="docs-sidebar-title">Outline</span>
-        <button
-          type="button"
-          class="docs-sidebar-collapse docs-sidebar-collapse--desktop"
-          aria-expanded={!navCollapsed}
-          onclick={toggleNavCollapsed}
-        >
-          {navCollapsed ? "Show" : "Hide"}
-        </button>
-        <button
-          type="button"
-          class="docs-sidebar-close docs-sidebar-close--mobile"
-          onclick={() => {
-            mobileNavOpen = false;
-          }}
-        >
-          Close
-        </button>
-      </div>
-      <nav class="docs-tree-wrap">
-        <DocTreeNav nodes={manifest} activeRouteKey={routeKey} />
-      </nav>
-    </aside>
   </div>
 </div>
