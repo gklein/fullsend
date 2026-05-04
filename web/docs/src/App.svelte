@@ -1,63 +1,144 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import mermaid from "mermaid";
-  import { manifest, pages } from "virtual:fullsend-docs";
-  import { routeKeyToUrl } from "./lib/docUrls";
+  import type { DocPagePayload } from "virtual:fullsend-docs";
+  import { manifest, loadPage } from "virtual:fullsend-docs";
+  import { collectRouteKeys } from "./lib/manifestRouteKeys";
   import {
-    defaultRouteKey,
-    getRouteKeyFromLocation,
+    defaultRouteKeyFromKeys,
+    getDocRouteFromWindow,
+    legacyPathnameDocRest,
+    navigateToRouteKey,
   } from "./lib/routing";
+  import { formatDocHash } from "./lib/hashRoute";
   import { DocTreeNav } from "./lib/tree";
 
   const NAV_COLLAPSED_KEY = "fullsend-docs-nav-collapsed";
 
-  function normalizeRouteKey(): string {
-    let k = getRouteKeyFromLocation();
-    if (!k || !pages[k]) {
-      const d = defaultRouteKey(pages);
-      if (!d) return "";
-      const url = routeKeyToUrl(d);
-      if (typeof window !== "undefined" && window.location.pathname !== url) {
-        history.replaceState(null, "", url);
-      }
-      return d;
-    }
-    return k;
-  }
+  const routeKeys = new Set(collectRouteKeys(manifest));
 
-  let routeKey = $state(normalizeRouteKey());
-  let mermaidInit = $state(false);
+  let routeKey = $state("");
+  let slug = $state<string | undefined>(undefined);
+  let page = $state<DocPagePayload | null>(null);
+  let loading = $state(false);
   let navCollapsed = $state(false);
   let mobileNavOpen = $state(false);
+
+  function syncRouteFromLocation(): void {
+    const legacy = legacyPathnameDocRest();
+    if (legacy !== null) {
+      const u = new URL(window.location.href);
+      u.pathname = "/docs/";
+      u.hash = formatDocHash(legacy);
+      location.replace(u.toString());
+      return;
+    }
+
+    const parsed = getDocRouteFromWindow();
+    const defaultKey = defaultRouteKeyFromKeys([...routeKeys]);
+
+    if (routeKeys.size === 0) {
+      routeKey = "";
+      slug = undefined;
+      return;
+    }
+
+    if (parsed === null) {
+      if (defaultKey !== null) {
+        navigateToRouteKey(defaultKey, { replace: true });
+        routeKey = defaultKey;
+        slug = undefined;
+      }
+      return;
+    }
+
+    if (!routeKeys.has(parsed.routeKey)) {
+      if (defaultKey !== null) {
+        navigateToRouteKey(defaultKey, { replace: true });
+        routeKey = defaultKey;
+        slug = undefined;
+      }
+      return;
+    }
+
+    routeKey = parsed.routeKey;
+    slug = parsed.slug;
+  }
 
   async function runMermaid(): Promise<void> {
     await tick();
     try {
       if (!document.querySelector(".doc-body pre.mermaid-doc")) return;
-      await mermaid.run({ querySelector: ".doc-body pre.mermaid-doc" });
+      const m = await import("mermaid");
+      m.default.initialize({ startOnLoad: false, securityLevel: "strict" });
+      await m.default.run({ querySelector: ".doc-body pre.mermaid-doc" });
     } catch {
       /* empty graph or mermaid internal error — ignore */
     }
   }
 
   onMount(() => {
-    mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
-    mermaidInit = true;
     navCollapsed = localStorage.getItem(NAV_COLLAPSED_KEY) === "1";
 
-    routeKey = normalizeRouteKey();
+    syncRouteFromLocation();
 
-    const onPop = () => {
-      routeKey = normalizeRouteKey();
+    const onHashOrPop = () => syncRouteFromLocation();
+    window.addEventListener("hashchange", onHashOrPop);
+    window.addEventListener("popstate", onHashOrPop);
+    return () => {
+      window.removeEventListener("hashchange", onHashOrPop);
+      window.removeEventListener("popstate", onHashOrPop);
     };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
   });
 
   $effect(() => {
-    if (!mermaidInit) return;
-    const _ = routeKey;
+    const key = routeKey;
+    if (!key || !routeKeys.has(key)) {
+      page = null;
+      loading = false;
+      return;
+    }
+
+    loading = true;
+
+    void loadPage(key)
+      .then((p) => {
+        if (routeKey === key) {
+          page = p;
+        }
+      })
+      .catch(() => {
+        if (routeKey === key) {
+          page = null;
+          const dk = defaultRouteKeyFromKeys([...routeKeys]);
+          if (dk !== null) {
+            navigateToRouteKey(dk, { replace: true });
+          }
+        }
+      })
+      .finally(() => {
+        if (routeKey === key) {
+          loading = false;
+        }
+      });
+  });
+
+  $effect(() => {
+    if (!page?.html) return;
     void runMermaid();
+  });
+
+  $effect(() => {
+    const s = slug;
+    const html = page?.html;
+    if (!s || !html) return;
+    void tick().then(() => {
+      const body = document.querySelector(".doc-body");
+      if (!body) return;
+      const el = document.getElementById(s);
+      if (el && body.contains(el)) {
+        el.scrollIntoView();
+      }
+    });
   });
 
   function toggleNavCollapsed(): void {
@@ -68,8 +149,6 @@
   function toggleMobileNav(): void {
     mobileNavOpen = !mobileNavOpen;
   }
-
-  const pageHtml = $derived(pages[routeKey]?.html ?? "");
 </script>
 
 <div
@@ -92,9 +171,16 @@
 
   <div class="docs-layout">
     <main class="docs-main">
-      {#if routeKey && pages[routeKey]}
-        <article class="doc-body">
-          {@html pageHtml}
+      {#if routeKey && page}
+        <article
+          class="doc-body"
+          data-frontmatter={JSON.stringify(page.frontmatter)}
+        >
+          {@html page.html}
+        </article>
+      {:else if routeKey && loading}
+        <article class="doc-body doc-body--empty">
+          <p>Loading…</p>
         </article>
       {:else}
         <article class="doc-body doc-body--empty">
