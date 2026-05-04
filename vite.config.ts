@@ -82,7 +82,8 @@ export default defineConfig(() => {
     },
     test: {
       environment: "jsdom",
-      include: ["src/**/*.test.ts"],
+      environmentMatchGlobs: [["../docs/build/**/*.test.ts", "node"]],
+      include: ["src/**/*.test.ts", "../docs/build/**/*.test.ts"],
       passWithNoTests: true,
     },
   };
