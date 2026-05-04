@@ -155,6 +155,12 @@ GitLab doesn't have an exact GitHub Apps equivalent, but Project Access Tokens (
 3. **Trigger pipeline on protected branch**: The webhook triggers a pipeline in `.fullsend` on the `main` branch (protected), not in the enrolled repo
 4. **No untrusted code execution**: MR code never executes in a pipeline context — webhook payload is parsed by GitLab's webhook system, then triggers `.fullsend`
 
+**Why webhooks for GitLab but not GitHub**: ADR-0009 (pull_request_target security model for GitHub) explicitly rejected webhook-based dispatch because it "requires a hosted webhook receiver, breaking compute-platform agnosticism." That rejection rationale does not apply to GitLab because:
+- GitLab's pipeline trigger API endpoint (`/api/v4/projects/:id/trigger/pipeline`) is a built-in webhook receiver running within GitLab's infrastructure
+- No external hosting is required — the webhook targets GitLab's own API, which triggers the `.fullsend` project's pipeline
+- This maintains compute-platform agnosticism (everything runs within GitLab CI/CD)
+- In contrast, GitHub has no equivalent built-in webhook-to-workflow trigger API, so webhook-based dispatch for GitHub would require hosting an external service to receive webhooks and call the `workflow_dispatch` API
+
 **Webhook payload validation** (in `.fullsend` dispatch pipeline):
 ```yaml
 # fullsend-stage: dispatch
@@ -176,7 +182,10 @@ dispatch:
       # Validate SOURCE_PROJECT format before using in variable lookup
       # NOTE: This regex should be expanded during implementation to include
       # dots (.) and nested groups, which are valid in GitLab project paths
-      # (e.g., my.org/my.project or group/subgroup/project)
+      # (e.g., my.org/my.project or group/subgroup/project). If dots are added,
+      # the yq query below must use bracket notation (e.g.,
+      # yq '.["repos"]["my.project"]["enabled"]') instead of dot notation to
+      # avoid treating dots as path separators.
       if [[ ! "$SOURCE_PROJECT" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
         echo "ERROR: Invalid source project format"
         exit 1
@@ -196,6 +205,10 @@ dispatch:
         exit 1
       fi
 
+      # NOTE: This string comparison is not timing-safe. Implementation should
+      # use HMAC-based verification or constant-time comparison (e.g., openssl
+      # dgst) to prevent timing side-channel attacks that could leak the token
+      # value byte-by-byte.
       if [ "$WEBHOOK_TOKEN" != "$EXPECTED_TOKEN" ]; then
         echo "ERROR: Invalid webhook token"
         exit 1
@@ -230,6 +243,8 @@ dispatch:
 ### 5. Cross-Repo Dispatch Mechanism
 
 **End-to-end flow**: Enrolled repos send webhooks to `.fullsend` project's pipeline trigger endpoint → webhook triggers the dispatch pipeline on `.fullsend` protected `main` branch → dispatch pipeline validates the webhook token and source project → dispatch pipeline scans for stage workflows matching the requested stage → dispatch pipeline generates a child pipeline config and triggers it → child pipeline runs the stage workflow (triage, code, review, or fix) with the event payload and source project context.
+
+**Relationship to Section 4**: Section 4 (Shim Pipeline Security) presents the webhook validation portion of the dispatch pipeline, focusing on the security properties (protected branch execution, token validation). This section presents the complete dispatch pipeline architecture, including the stage fan-out logic. Both sections describe the same `dispatch.yml` pipeline — Section 4 shows the validation front-end, this section shows the full implementation including child pipeline generation.
 
 **GitHub**: `workflow_dispatch` API call with input parameters
 **GitLab**: Pipeline trigger API with pipeline variables + child pipelines
@@ -439,7 +454,10 @@ This keeps the dispatch scanning logic identical across GitHub and GitLab.
 
 **Forge detection**:
 ```go
-// internal/cli/admin.go
+// NOTE: Per ADR-0005's boundary rule ("No code outside internal/forge/ imports
+// forge-specific packages directly"), this function should be implemented in
+// internal/forge/detect.go rather than internal/cli/admin.go, and called by the
+// CLI. The location shown here (internal/cli/admin.go) is for illustration only.
 func detectForge(repoURL string) (string, error) {
     u, err := url.Parse(repoURL)
     if err != nil {
