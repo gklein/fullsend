@@ -37,6 +37,32 @@ Organizations using GitLab (self-hosted or GitLab.com) cannot adopt fullsend. Ad
 
 The `forge.Client` abstraction (ADR-0005) was designed for this: all forge-specific operations are isolated, making GitLab support an implementation of the interface rather than a rewrite of core logic.
 
+## Options
+
+### Alternative 1: GitLab CI/CD Templates at Root
+
+Instead of `.gitlab/ci/*.yml`, use single `.gitlab-ci.yml` with includes.
+
+**Rejected**: Less organized than GitHub's `.github/workflows/` pattern, harder to scan for stage markers.
+
+### Alternative 2: Group Access Tokens Instead of Project Access Tokens
+
+Use group-level tokens for all roles instead of project-level.
+
+**Rejected**: Less secure (group-wide permissions), harder to scope per-repo. Project Access Tokens better match GitHub Apps model.
+
+### Alternative 3: Service Accounts with Personal Access Tokens
+
+Create GitLab user accounts for each role (fullsend-triage, fullsend-code, etc.) and use their PATs.
+
+**Rejected**: Requires managing user accounts, consumes user licenses, PATs are user-scoped not project-scoped. Project Access Tokens are purpose-built for automation.
+
+### Alternative 4: Unified `.fullsend-ci.yml` Format
+
+Define a forge-neutral CI/CD format that compiles to GitHub Actions or GitLab CI.
+
+**Rejected**: Adds complexity, requires custom compiler, loses ability to use forge-native features. Better to maintain parallel templates that map proven GitHub patterns to GitLab.
+
 ## Decision
 
 ### High-Level Architecture
@@ -148,6 +174,9 @@ dispatch:
       WEBHOOK_TOKEN="${WEBHOOK_TOKEN}"
 
       # Validate SOURCE_PROJECT format before using in variable lookup
+      # NOTE: This regex should be expanded during implementation to include
+      # dots (.) and nested groups, which are valid in GitLab project paths
+      # (e.g., my.org/my.project or group/subgroup/project)
       if [[ ! "$SOURCE_PROJECT" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
         echo "ERROR: Invalid source project format"
         exit 1
@@ -155,6 +184,9 @@ dispatch:
 
       # Look up expected token from masked CI/CD variable
       # Variable name format: WEBHOOK_TOKEN_<sanitized_project_path>
+      # NOTE: This sanitization can cause collisions (foo-bar/baz and foo_bar/baz
+      # both map to WEBHOOK_TOKEN_foo_bar_baz). Implementation should use a
+      # collision-resistant encoding (e.g., double-underscore for /, or hashing).
       SANITIZED_PROJECT=$(echo "${SOURCE_PROJECT}" | tr '/' '_' | tr '-' '_')
       EXPECTED_TOKEN_VAR="WEBHOOK_TOKEN_${SANITIZED_PROJECT}"
       EXPECTED_TOKEN="${!EXPECTED_TOKEN_VAR}"
@@ -230,6 +262,9 @@ generate-config:
       SOURCE_PROJECT="${SOURCE_PROJECT}"
 
       # Validate SOURCE_PROJECT format before using in variable lookup
+      # NOTE: This regex should be expanded during implementation to include
+      # dots (.) and nested groups, which are valid in GitLab project paths
+      # (e.g., my.org/my.project or group/subgroup/project)
       if [[ ! "$SOURCE_PROJECT" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
         echo "ERROR: Invalid source project format"
         exit 1
@@ -244,6 +279,11 @@ generate-config:
       fi
 
       # Scan for workflows with matching stage marker
+      # NOTE: This assumes one file per stage (e.g., only one file has
+      # "# fullsend-stage: triage"). If multiple files match, only the first
+      # match is used. The architecture expects each stage workflow to be in
+      # a separate file (triage.yml, code.yml, review.yml, fix.yml).
+      MATCHED=false
       for pipeline_file in .gitlab/ci/*.yml; do
         STAGE_MARKER=$(grep -E '^# fullsend-stage:' "$pipeline_file" | head -1 | sed 's/^# fullsend-stage: *//')
 
@@ -260,8 +300,15 @@ generate-config:
       EOF
           # Replace $pipeline_file placeholder
           sed -i "s|\$pipeline_file|$pipeline_file|g" .gitlab-ci-child.yml
+          MATCHED=true
+          break  # Exit after first match
         fi
       done
+      
+      if [ "$MATCHED" != "true" ]; then
+        echo "ERROR: No workflow found for stage: $STAGE"
+        exit 1
+      fi
   artifacts:
     paths:
       - .gitlab-ci-child.yml
@@ -459,32 +506,6 @@ gitlab_instance_url: https://gitlab.example.com  # optional, defaults to gitlab.
 - Webhook-based architecture eliminates MR code execution risk
 - Dispatch pipeline runs on `.fullsend` protected branch, not enrolled repo
 - MR metadata passed via webhook payload, constructed by GitLab (not MR author)
-
-## Options
-
-### Alternative 1: GitLab CI/CD Templates at Root
-
-Instead of `.gitlab/ci/*.yml`, use single `.gitlab-ci.yml` with includes.
-
-**Rejected**: Less organized than GitHub's `.github/workflows/` pattern, harder to scan for stage markers.
-
-### Alternative 2: Group Access Tokens Instead of Project Access Tokens
-
-Use group-level tokens for all roles instead of project-level.
-
-**Rejected**: Less secure (group-wide permissions), harder to scope per-repo. Project Access Tokens better match GitHub Apps model.
-
-### Alternative 3: Service Accounts with Personal Access Tokens
-
-Create GitLab user accounts for each role (fullsend-triage, fullsend-code, etc.) and use their PATs.
-
-**Rejected**: Requires managing user accounts, consumes user licenses, PATs are user-scoped not project-scoped. Project Access Tokens are purpose-built for automation.
-
-### Alternative 4: Unified `.fullsend-ci.yml` Format
-
-Define a forge-neutral CI/CD format that compiles to GitHub Actions or GitLab CI.
-
-**Rejected**: Adds complexity, requires custom compiler, loses ability to use forge-native features. Better to maintain parallel templates that map proven GitHub patterns to GitLab.
 
 ## References
 
