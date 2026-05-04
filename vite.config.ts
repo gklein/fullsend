@@ -89,7 +89,12 @@ export default defineConfig(() => ({
   plugins: [
     svelte({
       configFile: path.join(webRoot, "admin/svelte.config.js"),
-      include: normalizePath(path.join(webRoot, "admin/**/*.svelte")),
+      include: [
+        normalizePath(path.join(webRoot, "admin/**/*.svelte")),
+        normalizePath(
+          path.join(repoRoot, "node_modules/svelte-spa-router/**/*.svelte"),
+        ),
+      ],
     }),
     svelte({
       configFile: path.join(webRoot, "docs/svelte.config.js"),
