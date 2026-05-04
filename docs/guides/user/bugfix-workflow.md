@@ -13,24 +13,27 @@ When someone files a bug, fullsend's agent pipeline processes it through three s
 Each stage is triggered by labels and can be restarted with slash commands. The pipeline uses GitHub's native primitives (issues, PRs, labels, branch protection) as its coordination layer — there is no central orchestrator. See [ADR 0002](../../ADRs/0002-initial-fullsend-design.md) for the full design.
 
 ```
-Issue filed → Triage → ready-to-code → Code Agent → ready-for-review → Review → ready-for-merge → Merge
-                │                          ↑                              │
-                │                          └──────── changes requested ───┘
+Issue filed → Triage → ready-to-code → Code Agent → PR opened → Review → ready-for-merge → Merge
+                │                          ↑                                │
+                │                          └── changes requested (planned) ─┘
                 ├── blocked → waiting for dependency
                 ├── duplicate → closed
                 ├── not-ready → waiting for info
                 └── not-reproducible → human intervention
 ```
 
+> **Note:** The automated rework loop (Review → Code Agent on "changes requested") is not yet implemented. Today, a "changes requested" outcome requires human intervention. The planned [fix agent (#197)](https://github.com/fullsend-ai/fullsend/issues/197) will automate this loop.
+
 ## What you need to know as a developer
 
 ### Writing good bug reports
 
-The triage agent reads **only** the issue title, body, and GitHub-native attachments. It does not read comments. This means:
+The triage agent reads the issue title, body, comments, and GitHub-native attachments. This means:
 
-- Put all relevant information in the issue body — expected behavior, actual behavior, steps to reproduce, version/environment.
+- Put key information in the issue body — expected behavior, actual behavior, steps to reproduce, version/environment.
 - Use GitHub's native file attachments for logs, screenshots, or reproduction scripts.
-- If you need to update the report, **edit the issue body**, don't add a comment. Edits to the title or body trigger triage automatically.
+- You can add details via comments — the triage agent reads those too. Other users can also comment with additional context (e.g., confirming the bug on a different platform).
+- Editing the issue title or body triggers triage automatically. You can also use `/triage` to force a fresh run.
 
 ### Labels are the state machine
 
@@ -40,10 +43,10 @@ These labels track where an issue is in the pipeline:
 |-------|---------|-------------------|
 | `blocked` | Progress depends on another issue or PR | Triage comment links to the blocker; re-triage on edit checks if blocker is resolved |
 | `duplicate` | Same issue already tracked elsewhere | Issue closed, link to canonical issue |
-| `not-ready` | Missing information | Triage comment explains what's needed; edit the issue body to fix |
+| `not-ready` | Missing information | Triage comment explains what's needed; add a comment or edit the issue body to fix |
 | `not-reproducible` | Bug couldn't be reproduced in the sandbox | Human intervention required; triage comment documents what was tried |
 | `ready-to-code` | Triage passed | Code agent picks it up |
-| `ready-for-review` | PR with passing CI ready for review | Review agents evaluate the PR |
+| `ready-for-review` | PR ready for review (manual trigger) | Review agents evaluate the PR |
 | `ready-for-merge` | All reviewers unanimously approved | PR can be merged per governance policy |
 | `requires-manual-review` | Reviewers disagreed or flagged security concerns | Human must decide |
 
@@ -56,7 +59,7 @@ You can control the pipeline from issue or PR comments:
 | Command | Where | Effect |
 |---------|-------|--------|
 | `/triage` | Issue comment | Re-runs triage from scratch (clears all labels, reopens if closed) |
-| `/implement` | Issue comment | Hands off to the code agent (expects `ready-to-code` or forces with human ack) |
+| `/code` | Issue comment | Hands off to the code agent (expects `ready-to-code` or forces with human ack) |
 | `/review` | PR comment | Enqueues a new review round for the current PR head |
 
 ### What to expect from agent PRs
@@ -67,7 +70,7 @@ When the code agent opens a PR:
 - The PR description summarizes what was changed and why.
 - The code agent has already run the test suite in its sandbox and iterated until tests pass.
 - After pushing, GitHub's required checks run. If checks fail, the code agent fetches logs, fixes the issue, and pushes again (up to a configurable retry cap).
-- Once checks are green, the PR is labeled `ready-for-review` and the review agents take over.
+- Once checks are green, the review agents take over automatically (triggered by the PR creation or push event).
 
 ### Reviewing agent output
 
@@ -82,7 +85,7 @@ Agent PRs go through the same review process as human PRs:
 The review stage runs N independent review agents in parallel. One is randomly selected as coordinator. The coordinator collects verdicts and applies one of three outcomes:
 
 - **Unanimous approve:** All reviewers agree the PR is good. Label `ready-for-merge` is applied. The PR can be merged per your org's governance policy.
-- **Unanimous rework:** All reviewers agree changes are needed. Label `ready-to-code` is re-applied and the code agent resumes work.
+- **Unanimous rework:** All reviewers agree changes are needed. Label `ready-to-code` is re-applied. Today, a human must address the review feedback manually. When the [fix agent (#197)](https://github.com/fullsend-ai/fullsend/issues/197) is implemented, this rework loop will be automated.
 - **Split or conflicting:** Reviewers disagree, or there are conflicting security assessments. Label `requires-manual-review` is applied. A human must decide.
 
 Every push to a PR in the review stage triggers a new review round. This means `ready-for-merge` is never stale — it always reflects the current PR head.
@@ -104,11 +107,11 @@ The triage agent:
 5. **Produces a test artifact.** When possible, writes a failing test case aligned with the repo's test framework.
 6. **Hands off.** Labels `ready-to-code` with a summary comment.
 
-**If triage gets it wrong:** Edit the issue body with better information and triage re-runs automatically. Or use `/triage` to force a fresh run — this clears all previous labels and starts from scratch.
+**If triage gets it wrong:** Add a comment with the missing information, or edit the issue body. Edits to the title or body trigger triage automatically. You can also use `/triage` to force a fresh run — this clears all previous labels and starts from scratch.
 
 ### Stage 2: Code
 
-**Triggered by:** `ready-to-code` label or `/implement` command.
+**Triggered by:** `ready-to-code` label or `/code` command.
 
 The code agent:
 
@@ -117,11 +120,11 @@ The code agent:
 3. **Tests iteratively.** Runs the test suite, incorporates triage-provided tests if present, writes new tests if needed. Iterates until tests pass.
 4. **Opens a PR.** Links the issue, describes the changes.
 5. **Handles CI failures.** Fetches failing check logs, fixes issues, pushes again. Repeats until all required checks pass (up to a configurable cap, default defined in `config.yaml` as `defaults.max_implementation_retries`).
-6. **Hands off to review.** Labels `ready-for-review`.
+6. **Hands off to review.** The PR creation or push triggers review dispatch automatically via `pull_request_target`.
 
 ### Stage 3: Review
 
-**Triggered by:** `ready-for-review` label, `/review` command, or push to the PR branch.
+**Triggered by:** `pull_request_target` events (PR opened, push to PR branch, or marked ready for review), `/review` command, or `ready-for-review` label.
 
 The review swarm:
 
@@ -141,13 +144,13 @@ Once the PR is merged (by human, merge queue, or automation per org governance),
 
 ### Stopping automation
 
-- Remove the triggering label. Without `ready-to-code` or `ready-for-review`, the next stage won't fire.
+- Remove the triggering label (`ready-to-code`) to prevent the next stage from starting. Note: review is triggered automatically by PR events (`pull_request_target`), so closing the PR is the way to stop review dispatch.
 - Close the issue. Agents don't act on closed issues (except `/triage` which explicitly reopens).
 
 ### Restarting a stage
 
 - `/triage` — wipes all labels, reopens the issue, runs triage fresh.
-- `/implement` — restarts the code agent from the current issue state.
+- `/code` — restarts the code agent from the current issue state.
 - `/review` — enqueues a new review round.
 
 ### Taking over manually

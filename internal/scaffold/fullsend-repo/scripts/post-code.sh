@@ -6,11 +6,14 @@
 # security-sensitive component in the pipeline.
 #
 # Security layers (defense-in-depth):
-#   1. Protected-path check — reject if agent touched forbidden paths
-#   2. Authoritative secret scan — final gate before any push
-#   3. Authoritative pre-commit — run repo hooks on changed files
-#   4. Branch validation — refuse to push main/master
-#   5. Token isolation — PUSH_TOKEN never enters the sandbox
+#   1. Authoritative secret scan — final gate before any push
+#   2. Authoritative pre-commit — run repo hooks on changed files
+#   3. Branch validation — refuse to push main/master
+#   4. Token isolation — PUSH_TOKEN never enters the sandbox
+#
+# Protected-path enforcement lives in post-review.sh: the review agent
+# cannot approve PRs that touch sensitive paths (e.g. .github/, CODEOWNERS,
+# agents/). The code agent is free to propose changes to any path.
 #
 # Required environment variables:
 #   PUSH_TOKEN        — token with contents:write + pull-requests:write on target repo
@@ -30,19 +33,6 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-PROTECTED_PATHS=(
-  ".github/"
-  ".claude/"
-  "agents/"
-  "harness/"
-  "policies/"
-  "scripts/"
-  "api-servers/"
-  "CODEOWNERS"
-  ".pre-commit-config.yaml"
-  ".gitattributes"
-)
-
 GITLEAKS_VERSION="8.30.1"
 GITLEAKS_SHA256="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
 
@@ -80,7 +70,7 @@ echo "Branch: ${BRANCH}"
 echo "Token source: ${PUSH_TOKEN_SOURCE:-unknown}"
 
 # ---------------------------------------------------------------------------
-# 2. Protected-path check
+# 2. Compute changed files
 # ---------------------------------------------------------------------------
 MERGE_BASE="$(git merge-base "origin/${TARGET_BRANCH}" HEAD 2>/dev/null)" || MERGE_BASE=""
 if [ -n "${MERGE_BASE}" ]; then
@@ -98,17 +88,6 @@ fi
 
 echo "Changed files:"
 echo "${CHANGED_FILES}" | sed 's/^/  /'
-
-for pattern in "${PROTECTED_PATHS[@]}"; do
-  MATCHES="$(echo "${CHANGED_FILES}" | grep "^${pattern}" || true)"
-  if [ -n "${MATCHES}" ]; then
-    echo "::error::BLOCKED — agent modified protected path: ${pattern}"
-    echo "${MATCHES}" | sed 's/^/  ::error::  /'
-    exit 1
-  fi
-done
-
-echo "Protected-path check passed"
 
 # ---------------------------------------------------------------------------
 # 3. Authoritative secret scan
@@ -182,19 +161,12 @@ git push --force-with-lease -u origin -- "${BRANCH}" 2>&1
 # ---------------------------------------------------------------------------
 export GH_TOKEN="${PUSH_TOKEN}"
 
-PR_LABEL="ready-for-review"
-gh label create "${PR_LABEL}" --repo "${REPO_FULL_NAME}" \
-  --description "Agent PR ready for human review" --color "0E8A16" \
-  --force 2>/dev/null || true
-
 EXISTING_PR_NUM="$(gh pr list --repo "${REPO_FULL_NAME}" --head "${BRANCH}" \
   --json number --jq '.[0].number' 2>/dev/null || true)"
 
 if [ -n "${EXISTING_PR_NUM}" ]; then
   EXISTING_PR_URL="$(gh pr list --repo "${REPO_FULL_NAME}" --head "${BRANCH}" \
     --json url --jq '.[0].url' 2>/dev/null || true)"
-  gh pr edit "${EXISTING_PR_NUM}" --repo "${REPO_FULL_NAME}" \
-    --add-label "${PR_LABEL}" 2>/dev/null || true
   echo "PR #${EXISTING_PR_NUM} already exists — branch updated with new commits"
   echo "PR: ${EXISTING_PR_URL}"
   echo "pr_url=${EXISTING_PR_URL}" >> "${GITHUB_OUTPUT:-/dev/null}"
@@ -204,7 +176,7 @@ fi
 echo "Creating PR..."
 
 COMMIT_SUBJECT="$(git log -1 --format='%s' HEAD)"
-COMMIT_BODY_RAW="$(git log -1 --format='%b' HEAD | sed '/^Signed-off-by:/d' | sed -e :a -e '/^\n*$/{ $d; N; ba; }')"
+COMMIT_BODY_RAW="$(git log -1 --format='%b' HEAD | sed '/^Signed-off-by:/d' | sed '/^Closes #/d' | sed -e :a -e '/^\n*$/{ $d; N; ba; }')"
 
 COMMIT_BODY="$(echo "${COMMIT_BODY_RAW}" | awk '
   /^$/           { if (buf) print buf; print; buf=""; next }
@@ -214,22 +186,29 @@ COMMIT_BODY="$(echo "${COMMIT_BODY_RAW}" | awk '
   END            { if (buf) print buf }
 ')"
 
-PR_TITLE="${COMMIT_SUBJECT}"
-
-FILE_SUMMARY="$(echo "${CHANGED_FILES}" | sort | sed 's|^|  - `|; s|$|`|')"
+# ---------------------------------------------------------------------------
+# Ensure PR title includes an issue reference.
+#
+# Many repos enforce PR title conventions like "type(TICKET): description".
+# The code agent may produce a plain "type: description" commit subject that
+# omits the issue reference. When the title follows conventional commit format
+# (word + colon), inject the issue number as a scope if no scope is present.
+# ---------------------------------------------------------------------------
+if echo "${COMMIT_SUBJECT}" | grep -qE '^[a-z]+\('; then
+  # Already has a scope — e.g. "fix(#42): ..." or "feat(PROJ-123): ..."
+  PR_TITLE="${COMMIT_SUBJECT}"
+elif echo "${COMMIT_SUBJECT}" | grep -qE '^[a-z]+: '; then
+  # Conventional commit without scope — inject issue reference
+  PR_TITLE="$(echo "${COMMIT_SUBJECT}" | sed "s/^\([a-z]*\): /\1(#${ISSUE_NUMBER}): /")"
+else
+  # Non-conventional title — leave as-is
+  PR_TITLE="${COMMIT_SUBJECT}"
+fi
 
 if [ -z "${COMMIT_BODY}" ]; then
-  DESCRIPTION="Automated implementation for issue #${ISSUE_NUMBER}.
-
-### Changed files
-
-${FILE_SUMMARY}"
+  DESCRIPTION="Automated implementation for issue #${ISSUE_NUMBER}."
 else
-  DESCRIPTION="${COMMIT_BODY}
-
-### Changed files
-
-${FILE_SUMMARY}"
+  DESCRIPTION="${COMMIT_BODY}"
 fi
 
 PR_BODY="${DESCRIPTION}
@@ -241,12 +220,9 @@ Closes #${ISSUE_NUMBER}
 ### Post-script verification
 
 - [x] Branch is not main/master (\`${BRANCH}\`)
-- [x] No protected paths modified
 - [x] Secret scan passed (gitleaks — \`${SCAN_RANGE}\`)
 - [x] Pre-commit hooks passed (authoritative run on runner)
-- [x] Tests ran inside sandbox
-
-<sub>Created by <a href=\"https://github.com/fullsend-ai/fullsend\">fullsend</a> code agent</sub>"
+- [x] Tests ran inside sandbox"
 
 PR_URL="$(gh pr create \
   --repo "${REPO_FULL_NAME}" \
@@ -254,7 +230,7 @@ PR_URL="$(gh pr create \
   --base "${TARGET_BRANCH}" \
   --title "${PR_TITLE}" \
   --body "${PR_BODY}" \
-  --label "${PR_LABEL}" 2>&1)"
+  2>&1)"
 
 echo "PR created: ${PR_URL}"
 echo "pr_url=${PR_URL}" >> "${GITHUB_OUTPUT:-/dev/null}"

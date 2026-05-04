@@ -198,14 +198,76 @@ func TestProvision_NilGCPClient_Mode3_OK(t *testing.T) {
 }
 
 func TestProvision_AnalyzeOnly(t *testing.T) {
-	p := NewAnalyzeOnly()
+	t.Run("sa_key mode", func(t *testing.T) {
+		p := NewAnalyzeOnly(AuthModeSAKey)
+		assert.Equal(t, "vertex", p.Name())
+		assert.Equal(t, []string{SecretCredentials, SecretProjectID}, p.SecretNames())
 
-	assert.Equal(t, "vertex", p.Name())
-	assert.Equal(t, []string{SecretCredentials, SecretProjectID}, p.SecretNames())
+		_, err := p.Provision(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "project ID is required")
+	})
+
+	t.Run("wif mode", func(t *testing.T) {
+		p := NewAnalyzeOnly(AuthModeWIF)
+		assert.Equal(t, "vertex", p.Name())
+		assert.Equal(t, []string{SecretWIFProvider, SecretWIFServiceAccount, SecretProjectID}, p.SecretNames())
+	})
+
+	t.Run("empty defaults to sa_key", func(t *testing.T) {
+		p := NewAnalyzeOnly("")
+		assert.Equal(t, []string{SecretCredentials, SecretProjectID}, p.SecretNames())
+	})
+}
+
+func TestProvision_WIF(t *testing.T) {
+	p := New(Config{
+		ProjectID:         "my-project",
+		Region:            "global",
+		Mode:              AuthModeWIF,
+		WIFProvider:       "projects/123/locations/global/workloadIdentityPools/pool/providers/gh",
+		WIFServiceAccount: "sa@my-project.iam.gserviceaccount.com",
+	}, nil)
+
+	secrets, err := p.Provision(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, "projects/123/locations/global/workloadIdentityPools/pool/providers/gh", secrets[SecretWIFProvider])
+	assert.Equal(t, "sa@my-project.iam.gserviceaccount.com", secrets[SecretWIFServiceAccount])
+	assert.Equal(t, "my-project", secrets[SecretProjectID])
+	assert.Len(t, secrets, 3)
+}
+
+func TestProvision_WIF_MissingProvider(t *testing.T) {
+	p := New(Config{
+		ProjectID:         "my-project",
+		Region:            "global",
+		Mode:              AuthModeWIF,
+		WIFServiceAccount: "sa@my-project.iam.gserviceaccount.com",
+	}, nil)
 
 	_, err := p.Provision(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "project ID is required")
+	assert.Contains(t, err.Error(), "WIF provider resource name is required")
+}
+
+func TestProvision_WIF_MissingSA(t *testing.T) {
+	p := New(Config{
+		ProjectID:   "my-project",
+		Region:      "global",
+		Mode:        AuthModeWIF,
+		WIFProvider: "projects/123/locations/global/workloadIdentityPools/pool/providers/gh",
+	}, nil)
+
+	_, err := p.Provision(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "WIF service account email is required")
+}
+
+func TestSecretNames_WIF(t *testing.T) {
+	p := New(Config{Mode: AuthModeWIF}, nil)
+	names := p.SecretNames()
+	assert.Equal(t, []string{SecretWIFProvider, SecretWIFServiceAccount, SecretProjectID}, names)
 }
 
 func TestName(t *testing.T) {
@@ -222,11 +284,17 @@ func TestSecretNames(t *testing.T) {
 func TestVariables_WithRegion(t *testing.T) {
 	p := New(Config{Region: "global"}, nil)
 	vars := p.Variables()
-	assert.Equal(t, map[string]string{VariableRegion: "global"}, vars)
+	assert.Equal(t, map[string]string{VariableAuthMode: "sa_key", VariableRegion: "global"}, vars)
 }
 
 func TestVariables_WithoutRegion(t *testing.T) {
 	p := New(Config{}, nil)
 	vars := p.Variables()
-	assert.Nil(t, vars)
+	assert.Equal(t, map[string]string{VariableAuthMode: "sa_key"}, vars)
+}
+
+func TestVariables_WIFMode(t *testing.T) {
+	p := New(Config{Mode: AuthModeWIF, Region: "global"}, nil)
+	vars := p.Variables()
+	assert.Equal(t, map[string]string{VariableAuthMode: "wif", VariableRegion: "global"}, vars)
 }

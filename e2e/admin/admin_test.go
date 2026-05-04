@@ -213,12 +213,36 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 	var agentCreds []layers.AgentCredentials
 	for _, role := range defaultRoles {
 		t.Logf("Setting up app for role: %s", role)
-		// Use a per-role timeout so a failed manifest flow doesn't hang
-		// until the Go test timeout (which produces an unhelpful panic).
-		roleCtx, roleCancel := context.WithTimeout(ctx, 2*time.Minute)
-		appCreds, err := setup.Run(roleCtx, testOrg, role)
-		roleCancel()
-		require.NoError(t, err, "setting up app for role %s", role)
+
+		var appCreds *appsetup.AppCredentials
+		// Retry the manifest flow once per role to handle transient callback
+		// timeouts (see #287). On failure, delete any partially-created app
+		// before retrying so the second attempt starts clean.
+		const maxAttempts = 2
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			// Use a per-role timeout so a failed manifest flow doesn't hang
+			// until the Go test timeout (which produces an unhelpful panic).
+			roleCtx, roleCancel := context.WithTimeout(ctx, 2*time.Minute)
+			var runErr error
+			appCreds, runErr = setup.Run(roleCtx, testOrg, role)
+			roleCancel()
+
+			if runErr == nil {
+				break
+			}
+
+			t.Logf("Attempt %d/%d for role %s failed: %v", attempt, maxAttempts, role, runErr)
+			if attempt < maxAttempts {
+				// Clean up any partially-created app before retrying.
+				slug := appsetup.ExpectedAppSlug(testOrg, role)
+				t.Logf("Cleaning up potentially stale app %s before retry", slug)
+				if delErr := deleteAppViaPlaywright(env.page, slug, t.Logf, env.screenshotDir); delErr != nil {
+					t.Logf("Warning: cleanup of %s failed (may not exist): %v", slug, delErr)
+				}
+				continue
+			}
+			require.NoError(t, runErr, "setting up app for role %s", role)
+		}
 
 		agentCreds = append(agentCreds, layers.AgentCredentials{
 			AgentEntry: config.AgentEntry{
@@ -398,6 +422,16 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 		"scripts/post-triage.sh",
 		"scripts/reconcile-repos.sh",
 		"skills/code-implementation/SKILL.md",
+		"skills/fix-review/SKILL.md",
+		".github/workflows/fix.yml",
+		"agents/fix.md",
+		"harness/fix.yaml",
+		"policies/fix.yaml",
+		"env/fix-agent.env",
+		"schemas/fix-result.schema.json",
+		"scripts/pre-fix.sh",
+		"scripts/post-fix.sh",
+		"scripts/process-fix-result.py",
 		"templates/shim-workflow.yaml",
 		"CODEOWNERS",
 	} {
@@ -763,7 +797,7 @@ func runUnenrollmentTest(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, ag
 
 	var removalPR *forge.ChangeProposal
 	for _, pr := range prs {
-		if pr.Title == "Disconnect from fullsend agent pipeline" {
+		if pr.Title == "chore: disconnect from fullsend agent pipeline" {
 			cp := pr
 			removalPR = &cp
 			break

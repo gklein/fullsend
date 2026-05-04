@@ -293,9 +293,10 @@ func (s *Setup) checkPermissions(inst *forge.Installation, org, role string) {
 		return
 	}
 	s.ui.StepWarn(fmt.Sprintf("app %s missing permissions: %s", inst.AppSlug, strings.Join(missing, ", ")))
+	permURL := fmt.Sprintf("https://github.com/organizations/%s/settings/apps/%s/permissions", org, inst.AppSlug)
 	s.permErrors = append(s.permErrors, fmt.Sprintf(
-		"%s — update at https://github.com/organizations/%s/settings/apps/%s/permissions",
-		inst.AppSlug, org, inst.AppSlug,
+		"%s — update at %s",
+		inst.AppSlug, permURL,
 	))
 }
 
@@ -503,10 +504,10 @@ func (s *Setup) ensureInstalled(ctx context.Context, org, slug string) error {
 	installURL := fmt.Sprintf("https://github.com/apps/%s/installations/new", slug)
 	s.ui.StepWarn(fmt.Sprintf("App %s is not yet installed on %s", slug, org))
 	s.ui.StepStart("Opening browser for installation...")
+	s.ui.StepInfo(fmt.Sprintf("URL: %s", installURL))
 
 	if err := s.browser.Open(ctx, installURL); err != nil {
 		s.ui.StepWarn(fmt.Sprintf("Could not open browser: %v", err))
-		s.ui.StepInfo(fmt.Sprintf("Install manually at: %s", installURL))
 	}
 
 	s.ui.StepInfo("Waiting for installation (will detect automatically)...")
