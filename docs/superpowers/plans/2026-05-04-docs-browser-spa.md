@@ -12,6 +12,8 @@
 
 **Branch:** Work on **`feat/docs-browser-spa-spec`** (or rebase from it) so the spec commit stays off `main` until merge.
 
+**Implementation status:** Tasks **1–8** are implemented on `feat/docs-browser-spa-spec`. Step checkboxes below are marked complete except **Task 8 Step 2** (optional preview deep-link smoke test — same static SPA fallback as `/admin/` is assumed).
+
 ---
 
 ## File map
@@ -50,7 +52,7 @@
 
 - Modify: `package.json`
 
-- [ ] **Step 1: Add runtime + dev dependencies**
+- [x] **Step 1: Add runtime + dev dependencies**
 
 Run:
 
@@ -62,7 +64,7 @@ npm install -D @types/mdast @types/hast
 
 Expected: `package.json` and `package-lock.json` update with no peer conflicts (Node ≥22 per `engines`).
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add package.json package-lock.json
@@ -83,7 +85,7 @@ git commit -m "chore(docs-app): add remark/rehype and mermaid dependencies"
 - **Route key:** POSIX-style path relative to `docs/` **without** leading `./`, **without** `.md` suffix (e.g. `guides/admin/installation`). For `docs/foo/README.md` the key is `foo/README` (keep literal `README` segment so URLs stay unambiguous).
 - **URL:** `/docs/<routeKey>` with no trailing slash for document pages (match admin-style paths; be consistent in the tree `href`).
 
-- [ ] **Step 1: Write `web/docs/build/paths.ts`**
+- [x] **Step 1: Write `web/docs/build/paths.ts`**
 
 ```typescript
 import fs from "node:fs";
@@ -155,7 +157,7 @@ export function pathnameToRouteKey(pathname: string): string {
 }
 ```
 
-- [ ] **Step 2: Write failing tests `web/docs/build/paths.test.ts`**
+- [x] **Step 2: Write failing tests `web/docs/build/paths.test.ts`**
 
 ```typescript
 import { describe, expect, it } from "vitest";
@@ -207,11 +209,11 @@ describe("paths", () => {
 });
 ```
 
-- [ ] **Step 3: Defer test run**
+- [x] **Step 3: Defer test run**
 
 Run **`npm test`** only **after** Task 4 (Vitest `include` / `environmentMatchGlobs`) **and** Task 5 (admin entry fixes). Expected: **`docs/build/**/*.test.ts`** runs in the **`node`** environment and **PASS**s.
 
-- [ ] **Step 4: Commit** (optional: squash with Tasks 3–5)
+- [x] **Step 4: Commit** (optional: squash with Tasks 3–5)
 
 ```bash
 git add web/docs/build/paths.ts web/docs/build/paths.test.ts
@@ -227,7 +229,7 @@ git commit -m "feat(docs-app): path helpers and listDocMarkdownFiles with filter
 - Create: `web/docs/build/markdown.ts`
 - Create: `web/docs/build/markdown.test.ts`
 
-- [ ] **Step 1: Implement `web/docs/build/markdown.ts`**
+- [x] **Step 1: Implement `web/docs/build/markdown.ts`**
 
 ```typescript
 import { unified } from "unified";
@@ -336,7 +338,7 @@ export async function markdownToHtml(
 }
 ```
 
-- [ ] **Step 2: Add dependency for title extraction**
+- [x] **Step 2: Add dependency for title extraction**
 
 Run:
 
@@ -344,7 +346,7 @@ Run:
 npm install mdast-util-to-string
 ```
 
-- [ ] **Step 3: Write `web/docs/build/markdown.test.ts`**
+- [x] **Step 3: Write `web/docs/build/markdown.test.ts`**
 
 ```typescript
 import { describe, expect, it } from "vitest";
@@ -373,9 +375,9 @@ describe("markdownToHtml", () => {
 });
 ```
 
-- [ ] **Step 4: Defer test run** — same as Task 2: run **`npm test`** after Tasks 4–5.
+- [x] **Step 4: Defer test run** — same as Task 2: run **`npm test`** after Tasks 4–5.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/docs/build/markdown.ts web/docs/build/markdown.test.ts package.json package-lock.json
@@ -391,7 +393,7 @@ git commit -m "feat(docs-app): remark/rehype markdown pipeline with GFM, links, 
 - Create: `web/docs/build/vitePluginDocs.ts`
 - Modify: `vite.config.ts`
 
-- [ ] **Step 1: Write `web/docs/build/vitePluginDocs.ts`**
+- [x] **Step 1: Write `web/docs/build/vitePluginDocs.ts`**
 
 ```typescript
 import type { Plugin } from "vite";
@@ -503,7 +505,7 @@ async function loadVirtualModule(repoRoot: string): Promise<string> {
 }
 ```
 
-- [ ] **Step 2: Replace `vite.config.ts` with multi-app config**
+- [x] **Step 2: Replace `vite.config.ts` with multi-app config**
 
 Use this structure (merge existing admin debug plugins as needed):
 
@@ -626,7 +628,7 @@ export default defineConfig(() => ({
 
 **Note:** Setting `publicDir: false` avoids Vite serving a non-existent `web/public` as static; the site’s static root **`web/public/index.html`** is still copied by CI separately (unchanged). If you need a shared static dir under `web/`, set `publicDir: path.join(webRoot, 'static')` and move files — **YAGNI:** keep CI copy of `web/public/index.html` as today.
 
-- [ ] **Step 3: Run admin unit tests**
+- [x] **Step 3: Run admin unit tests**
 
 ```bash
 npm test
@@ -634,7 +636,7 @@ npm test
 
 Expected: all Vitest suites **PASS** (admin + docs build tests).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add vite.config.ts web/docs/build/vitePluginDocs.ts
@@ -651,13 +653,13 @@ git commit -m "feat(docs-app): Vite multi-entry root web/ + fullsend-docs virtua
 - Modify: `web/admin/src/lib/auth/oauth.ts`
 - Modify: `web/admin/src/vite-env.d.ts`
 
-- [ ] **Step 1: `web/admin/index.html` script src**
+- [x] **Step 1: `web/admin/index.html` script src**
 
 ```html
 <script type="module" src="./src/main.ts"></script>
 ```
 
-- [ ] **Step 2: `adminAppBasePath()` — always `/admin/`**
+- [x] **Step 2: `adminAppBasePath()` — always `/admin/`**
 
 Replace the body of `adminAppBasePath` with:
 
@@ -669,11 +671,11 @@ function adminAppBasePath(): string {
 
 Remove or shorten the `import.meta.env.BASE` comment block above it; keep `DEFAULT_ADMIN_BASE` as the single source of truth.
 
-- [ ] **Step 3: Update `web/admin/src/vite-env.d.ts` comment**
+- [x] **Step 3: Update `web/admin/src/vite-env.d.ts` comment**
 
 State that production assets use **`base: '/'`** at the Vite project level and the admin app’s **public path** remains **`/admin/`** for OAuth and routing.
 
-- [ ] **Step 4: Run tests and `npm run build`**
+- [x] **Step 4: Run tests and `npm run build`**
 
 ```bash
 npm test
@@ -682,7 +684,7 @@ npm run build
 
 Expected: **PASS**; `web/dist/admin/index.html` and `web/dist/docs/index.html` exist; `web/dist/assets/` contains hashed chunks.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/admin/index.html web/admin/src/lib/auth/oauth.ts web/admin/src/vite-env.d.ts
@@ -706,7 +708,7 @@ git commit -m "fix(admin): adapt to Vite root web/ and base / for shared build"
 - Create: `web/docs/src/lib/routing.ts`
 - Create: `web/docs/src/lib/tree.ts`
 
-- [ ] **Step 1: `web/docs/index.html`**
+- [x] **Step 1: `web/docs/index.html`**
 
 ```html
 <!doctype html>
@@ -723,7 +725,7 @@ git commit -m "fix(admin): adapt to Vite root web/ and base / for shared build"
 </html>
 ```
 
-- [ ] **Step 2: `web/docs/svelte.config.js`** (copy pattern from admin)
+- [x] **Step 2: `web/docs/svelte.config.js`** (copy pattern from admin)
 
 ```javascript
 import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
@@ -732,7 +734,7 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 export default { preprocess: vitePreprocess() };
 ```
 
-- [ ] **Step 3: `web/docs/tsconfig.json`**
+- [x] **Step 3: `web/docs/tsconfig.json`**
 
 ```json
 {
@@ -750,7 +752,7 @@ export default { preprocess: vitePreprocess() };
 }
 ```
 
-- [ ] **Step 4: `web/docs/src/vite-env.d.ts`**
+- [x] **Step 4: `web/docs/src/vite-env.d.ts`**
 
 ```typescript
 /// <reference types="svelte" />
@@ -771,7 +773,7 @@ declare module "virtual:fullsend-docs" {
 }
 ```
 
-- [ ] **Step 5: `web/docs/src/lib/docUrls.ts`** (browser-safe; mirrors `build/paths.ts` string helpers only)
+- [x] **Step 5: `web/docs/src/lib/docUrls.ts`** (browser-safe; mirrors `build/paths.ts` string helpers only)
 
 ```typescript
 /** Same rules as `web/docs/build/paths.ts` — duplicated to avoid bundling `node:fs` in the client. */
@@ -789,7 +791,7 @@ export function routeKeyToUrl(routeKey: string): string {
 }
 ```
 
-- [ ] **Step 6: `web/docs/src/lib/routing.ts`**
+- [x] **Step 6: `web/docs/src/lib/routing.ts`**
 
 ```typescript
 import { pathnameToRouteKey, routeKeyToUrl } from "./docUrls";
@@ -816,9 +818,9 @@ export function defaultRouteKey(
 }
 ```
 
-- [ ] **Step 7: `web/docs/src/lib/tree.ts`** — optional helpers to flatten manifest for active highlight (implement as needed).
+- [x] **Step 7: `web/docs/src/lib/tree.ts`** — optional helpers to flatten manifest for active highlight (implement as needed).
 
-- [ ] **Step 8: `web/docs/src/main.ts`**
+- [x] **Step 8: `web/docs/src/main.ts`**
 
 ```typescript
 import { mount } from "svelte";
@@ -828,7 +830,7 @@ import "./app.css";
 mount(App, { target: document.getElementById("app")! });
 ```
 
-- [ ] **Step 9: `web/docs/src/App.svelte`** (minimal working shell)
+- [x] **Step 9: `web/docs/src/App.svelte`** (minimal working shell)
 
 Use Svelte 5 runes:
 
@@ -841,11 +843,11 @@ Use Svelte 5 runes:
 - Collapse: `localStorage` key e.g. `fullsend-docs-nav-collapsed` boolean
 - Narrow viewport: toggle button to show/hide sidebar (CSS `@media`)
 
-- [ ] **Step 10: `web/docs/src/app.css`** — flex row (main | aside), readable max-width, `pre` overflow
+- [x] **Step 10: `web/docs/src/app.css`** — flex row (main | aside), readable max-width, `pre` overflow
 
-- [ ] **Step 11: `package.json` `check` script** — extend to run `svelte-check` for **`web/docs/tsconfig.json`** as well as admin (or add `check:docs`), so CI-style typing catches docs Svelte errors.
+- [x] **Step 11: `package.json` `check` script** — extend to run `svelte-check` for **`web/docs/tsconfig.json`** as well as admin (or add `check:docs`), so CI-style typing catches docs Svelte errors.
 
-- [ ] **Step 12: Manual dev check**
+- [x] **Step 12: Manual dev check**
 
 ```bash
 npm run dev
@@ -853,7 +855,7 @@ npm run dev
 
 Open `http://127.0.0.1:5173/docs/` and `http://127.0.0.1:5173/admin/` — both should load; follow an internal doc link; confirm Mermaid renders on a page under `docs/ADRs/`.
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 ```bash
 git add web/docs/ package.json
@@ -869,7 +871,7 @@ git commit -m "feat(docs-app): Svelte shell, tree nav, mermaid, virtual docs dat
 - Modify: `.github/workflows/site-build.yml`
 - Modify: `docs/site-deployment.md`
 
-- [ ] **Step 1: Update `site-build.yml` “Prepare deploy bundle”**
+- [x] **Step 1: Update `site-build.yml` “Prepare deploy bundle”**
 
 After `npm run build`, replace the copy block with:
 
@@ -889,9 +891,9 @@ After `npm run build`, replace the copy block with:
           cp -a cloudflare_site/worker/. _bundle/worker/
 ```
 
-- [ ] **Step 2: Update `docs/site-deployment.md`** — document **`_bundle/public/assets/`**, **`/docs/`** app, and local preview commands mirroring CI (copy `web/dist/*` into `cloudflare_site/public/` including **`assets`**, **`admin`**, **`docs`**).
+- [x] **Step 2: Update `docs/site-deployment.md`** — document **`_bundle/public/assets/`**, **`/docs/`** app, and local preview commands mirroring CI (copy `web/dist/*` into `cloudflare_site/public/` including **`assets`**, **`admin`**, **`docs`**).
 
-- [ ] **Step 3: `make lint`**
+- [x] **Step 3: `make lint`**
 
 ```bash
 make lint
@@ -899,7 +901,7 @@ make lint
 
 Expected: **PASS**.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add .github/workflows/site-build.yml docs/site-deployment.md
@@ -914,11 +916,11 @@ git commit -m "ci(site): bundle shared Vite assets plus admin and docs SPAs"
 
 - Create: `web/docs/README.md`
 
-- [ ] **Step 1: Write `web/docs/README.md`** — link to design spec, `npm run dev` URLs, note **`/api`** is irrelevant here.
+- [x] **Step 1: Write `web/docs/README.md`** — link to design spec, `npm run dev` URLs, note **`/api`** is irrelevant here.
 
 - [ ] **Step 2: Worker verification** — load a preview deployment `/docs/guides/...` deep link; if static asset routing fails, add a one-line note to `docs/site-deployment.md` or `cloudflare_site/wrangler.toml` comment (no Worker code required for v1 per spec).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add web/docs/README.md
@@ -949,10 +951,4 @@ git commit -m "docs(web): README for docs browser app"
 
 ---
 
-**Plan complete and saved to `docs/superpowers/plans/2026-05-04-docs-browser-spa.md`. Two execution options:**
-
-1. **Subagent-driven (recommended)** — dispatch a fresh subagent per task, review between tasks, fast iteration (**subagent-driven-development**).
-
-2. **Inline execution** — run tasks in this session using **executing-plans**, batch execution with checkpoints.
-
-**Which approach do you want?**
+**Plan saved to `docs/superpowers/plans/2026-05-04-docs-browser-spa.md`.** Execution used **subagent-driven development** (tasks 1–8); optional **Task 8 Step 2** (preview Worker smoke) remains open if you want an explicit production/preview check.
