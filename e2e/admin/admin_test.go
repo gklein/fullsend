@@ -422,6 +422,16 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 		"scripts/post-triage.sh",
 		"scripts/reconcile-repos.sh",
 		"skills/code-implementation/SKILL.md",
+		"skills/fix-review/SKILL.md",
+		".github/workflows/fix.yml",
+		"agents/fix.md",
+		"harness/fix.yaml",
+		"policies/fix.yaml",
+		"env/fix-agent.env",
+		"schemas/fix-result.schema.json",
+		"scripts/pre-fix.sh",
+		"scripts/post-fix.sh",
+		"scripts/process-fix-result.py",
 		"templates/shim-workflow.yaml",
 		"CODEOWNERS",
 	} {
@@ -742,13 +752,13 @@ Files over 64KB save fine if they contain only ASCII characters.`
 
 	hasTriageLabel := false
 	for _, name := range labelNames {
-		if name == "needs-info" || name == "ready-to-code" || name == "duplicate" {
+		if name == "needs-info" || name == "ready-to-code" || name == "duplicate" || name == "blocked" {
 			hasTriageLabel = true
 			break
 		}
 	}
 	assert.True(t, hasTriageLabel,
-		"issue should have a triage label (needs-info, ready-to-code, or duplicate), got: %v", labelNames)
+		"issue should have a triage label (needs-info, ready-to-code, duplicate, or blocked), got: %v", labelNames)
 }
 
 // runUnenrollmentTest disables test-repo in config.yaml, runs install to
