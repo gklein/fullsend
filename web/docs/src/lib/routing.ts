@@ -1,20 +1,37 @@
-import { pathnameToRouteKey, routeKeyToUrl } from "./docUrls";
+import {
+  formatDocHash,
+  parseDocHash,
+  type DocHashRoute,
+} from "./hashRoute";
 
-export function getRouteKeyFromLocation(): string {
-  return pathnameToRouteKey(window.location.pathname);
+export function getDocRouteFromWindow(): DocHashRoute | null {
+  return parseDocHash(window.location.hash);
 }
 
-export function navigateToRouteKey(key: string): void {
-  const url = key === "" ? "/docs/" : routeKeyToUrl(key);
-  if (url !== window.location.pathname) {
-    history.pushState(null, "", url);
-    window.dispatchEvent(new PopStateEvent("popstate"));
+export function navigateToRouteKey(
+  routeKey: string,
+  options?: { replace?: boolean; slug?: string },
+): void {
+  const hash = formatDocHash(routeKey, options?.slug);
+  const url = `${window.location.pathname}${window.location.search}${hash}`;
+  if (options?.replace) {
+    location.replace(url);
+  } else {
+    location.hash = hash;
   }
 }
 
-export function defaultRouteKey(pages: Record<string, unknown>): string | null {
-  const keys = Object.keys(pages).sort((a, b) => a.localeCompare(b));
-  const vision = keys.find((k) => k === "vision");
+export function defaultRouteKeyFromKeys(keys: string[]): string | null {
+  const sorted = [...keys].sort((a, b) => a.localeCompare(b));
+  const vision = sorted.find((k) => k === "vision");
   if (vision) return vision;
-  return keys[0] ?? null;
+  return sorted[0] ?? null;
+}
+
+/** If pathname has /docs/<rest> with non-empty rest, return rest; else null. */
+export function legacyPathnameDocRest(): string | null {
+  const p = window.location.pathname.replace(/\/+$/, "") || "/";
+  if (!p.startsWith("/docs")) return null;
+  const rest = p.slice("/docs".length).replace(/^\/+/, "");
+  return rest || null;
 }
