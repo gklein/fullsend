@@ -1,10 +1,9 @@
 ---
-title: "XXX. GitLab Support Architecture"
+title: "27. GitLab Support Architecture"
 status: Proposed
 relates_to:
   - agent-infrastructure
   - agent-architecture
-  - security-threat-model
 topics:
   - gitlab
   - forge
@@ -12,7 +11,7 @@ topics:
   - multi-platform
 ---
 
-# XXX. GitLab Support Architecture
+# 27. GitLab Support Architecture
 
 Date: 2026-04-29
 
@@ -148,10 +147,19 @@ dispatch:
       SOURCE_PROJECT="${SOURCE_PROJECT}"
       WEBHOOK_TOKEN="${WEBHOOK_TOKEN}"
 
-      # Look up expected token for this repo in config
-      EXPECTED_TOKEN=$(yq ".repos.\"${SOURCE_PROJECT}\".webhook_token" config.yaml)
+      # Look up expected token from masked CI/CD variable
+      # Variable name format: WEBHOOK_TOKEN_<sanitized_project_path>
+      SANITIZED_PROJECT=$(echo "${SOURCE_PROJECT}" | tr '/' '_' | tr '-' '_')
+      EXPECTED_TOKEN_VAR="WEBHOOK_TOKEN_${SANITIZED_PROJECT}"
+      EXPECTED_TOKEN="${!EXPECTED_TOKEN_VAR}"
+
+      if [ -z "${EXPECTED_TOKEN}" ]; then
+        echo "ERROR: No webhook token configured for ${SOURCE_PROJECT}"
+        exit 1
+      fi
+
       if [ "$WEBHOOK_TOKEN" != "$EXPECTED_TOKEN" ]; then
-        echo "::error::Invalid webhook token"
+        echo "ERROR: Invalid webhook token"
         exit 1
       fi
 
@@ -159,11 +167,11 @@ dispatch:
       PROJECT_NAME="${SOURCE_PROJECT##*/}"
       ENABLED=$(yq ".repos.\"$PROJECT_NAME\".enabled" config.yaml)
       if [ "$ENABLED" != "true" ]; then
-        echo "Project not enrolled"
+        echo "ERROR: Project not enrolled"
         exit 1
       fi
 
-      # Parse event payload and trigger stage pipeline
+      # Parse event payload and trigger stage pipeline as child pipeline
       # (same dispatch logic as GitHub workflow_dispatch)
 ```
 
@@ -171,7 +179,7 @@ dispatch:
 - `fullsend admin install` creates webhook in enrolled repo via GitLab API
 - Webhook URL: `https://gitlab.com/api/v4/projects/<fullsend-project-id>/trigger/pipeline`
 - Webhook triggers: Merge Request events, Issue events, Note events
-- Webhook secret token: stored in `.fullsend` config.yaml, validated by dispatch pipeline
+- Webhook secret token: stored as masked CI/CD variable in `.fullsend` project (e.g., `WEBHOOK_TOKEN_myorg_myrepo`), validated by dispatch pipeline
 
 **Security properties**:
 - Webhook payload constructed by GitLab, not by MR author code
@@ -195,12 +203,18 @@ dispatch:
 ```yaml
 # fullsend-stage: dispatch
 # Dispatcher pipeline that fans out to stage pipelines
+# Uses child pipelines to avoid infinite recursion
+
+workflow:
+  rules:
+    # Run dispatch logic only when not already in a child pipeline
+    - if: $IS_CHILD_PIPELINE != "true"
 
 dispatch:
   stage: dispatch
   image: alpine:latest
   script:
-    - apk add --no-cache yq jq curl
+    - apk add --no-cache yq jq
     - |
       # Extract inputs
       STAGE="${STAGE}"
@@ -211,31 +225,38 @@ dispatch:
       PROJECT_NAME="${SOURCE_PROJECT##*/}"
       ENABLED=$(yq ".repos.\"$PROJECT_NAME\".enabled" config.yaml)
       if [ "$ENABLED" != "true" ]; then
-        echo "Project not enrolled"
+        echo "ERROR: Project not enrolled"
         exit 1
       fi
 
-      # Scan for workflows with matching stage marker
+      # Scan for workflows with matching stage marker and trigger child pipeline
       for pipeline_file in .gitlab/ci/*.yml; do
         STAGE_MARKER=$(grep -E '^# fullsend-stage:' "$pipeline_file" | head -1 | sed 's/^# fullsend-stage: *//')
 
         if [ "$STAGE_MARKER" = "$STAGE" ]; then
-          echo "Triggering $pipeline_file"
+          echo "Triggering child pipeline: $pipeline_file"
+          # Create child pipeline config
+          cat > .gitlab-ci-child.yml <<EOF
+      include:
+        - local: '$pipeline_file'
 
-          # Use downstream pipeline trigger
-          curl -X POST \
-            -H "PRIVATE-TOKEN: $FULLSEND_ORCHESTRATOR_TOKEN" \
-            -F ref=main \
-            -F "variables[EVENT_PAYLOAD]=$EVENT_PAYLOAD" \
-            -F "variables[SOURCE_PROJECT]=$SOURCE_PROJECT" \
-            "https://gitlab.com/api/v4/projects/${CI_PROJECT_ID}/trigger/pipeline"
+      variables:
+        IS_CHILD_PIPELINE: "true"
+        EVENT_PAYLOAD: "$EVENT_PAYLOAD"
+        SOURCE_PROJECT: "$SOURCE_PROJECT"
+      EOF
         fi
       done
+  trigger:
+    include:
+      - artifact: .gitlab-ci-child.yml
+        job: dispatch
+    strategy: depend
   rules:
     - if: $STAGE
 ```
 
-**Alternative considered**: GitLab child pipelines via `trigger:` keyword. This requires pre-defining child pipeline files, whereas the dispatch pattern needs dynamic discovery. The trigger API approach matches GitHub's `workflow_dispatch` flexibility.
+**Child pipeline approach**: Uses GitLab's `trigger:` keyword with `include:` to create child pipelines. The `IS_CHILD_PIPELINE` variable prevents the dispatch workflow from running recursively. This is safer than the trigger API approach which would re-invoke the entire parent pipeline.
 
 ### 6. Stage Markers
 
@@ -346,13 +367,16 @@ func detectForge(repoURL string) (string, error) {
     }
     host := strings.ToLower(u.Hostname())
 
-    if strings.Contains(host, "github.com") || strings.Contains(host, "github") {
+    // Exact domain matching for known forges
+    if host == "github.com" || strings.HasSuffix(host, ".github.com") {
         return "github", nil
     }
-    if strings.Contains(host, "gitlab.com") || strings.Contains(host, "gitlab") {
+    if host == "gitlab.com" || strings.HasSuffix(host, ".gitlab.com") {
         return "gitlab", nil
     }
-    return "", fmt.Errorf("unknown forge: %s", repoURL)
+
+    // For self-hosted instances, require explicit --forge flag
+    return "", fmt.Errorf("unknown forge: %s (use --forge flag for self-hosted instances)", repoURL)
 }
 ```
 
