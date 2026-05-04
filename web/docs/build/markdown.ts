@@ -4,12 +4,17 @@ import remarkGfm from "remark-gfm";
 import remarkRehype from "remark-rehype";
 import rehypeStringify from "rehype-stringify";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import rehypeSlug from "rehype-slug";
 import { visit } from "unist-util-visit";
 import path from "node:path";
 import { toString } from "mdast-util-to-string";
 import type { Root as MdastRoot } from "mdast";
 import type { Element, Root as HastRoot } from "hast";
-import { filePathToRouteKey, routeKeyToUrl, type DocsFilePath } from "./paths";
+import matter from "gray-matter";
+import GitHubSlugger from "github-slugger";
+import { filePathToRouteKey, type DocsFilePath } from "./paths";
+
+const SLUG_FRAGMENT_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /** Derive display title: first heading text, else route last segment. */
 export function extractTitle(mdast: MdastRoot, routeKey: string): string {
@@ -26,25 +31,82 @@ export function extractTitle(mdast: MdastRoot, routeKey: string): string {
     : base;
 }
 
+function decodeFragment(encoded: string): string {
+  try {
+    return decodeURIComponent(encoded.replace(/\+/g, "%20"));
+  } catch {
+    return encoded;
+  }
+}
+
+function normalizeFragmentToSlug(fragmentEncoded: string): string {
+  const raw = decodeFragment(fragmentEncoded);
+  let slug: string;
+  if (SLUG_FRAGMENT_PATTERN.test(raw)) {
+    slug = raw;
+  } else {
+    slug = new GitHubSlugger().slug(raw);
+  }
+  return slug.replace(/::/g, "-");
+}
+
+function isDocLinkPath(resolvedPosix: string): boolean {
+  if (resolvedPosix.endsWith(".md") || resolvedPosix.endsWith(".markdown")) {
+    return true;
+  }
+  const base = path.posix.basename(resolvedPosix);
+  if (!base.includes(".")) return true;
+  return false;
+}
+
+function resolvedPathToRouteKey(resolvedPosix: string): string {
+  if (resolvedPosix.endsWith(".md")) {
+    return resolvedPosix.slice(0, -".md".length);
+  }
+  if (resolvedPosix.endsWith(".markdown")) {
+    return resolvedPosix.replace(/\.markdown$/, "");
+  }
+  return resolvedPosix;
+}
+
 function remarkRewriteMdLinks(this: import("unified").Processor, sourceFile: DocsFilePath) {
   return (tree: MdastRoot) => {
     visit(tree, "link", (node) => {
       const url = node.url;
       if (!url || /^(https?:|mailto:|#)/i.test(url)) return;
+      if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return;
+      if (url.startsWith("/")) return;
 
-      const [pathPart, frag] = url.split("#", 2);
-      if (!pathPart.endsWith(".md") && !pathPart.endsWith(".markdown")) return;
-
-      const dir = path.posix.dirname(filePathToRouteKey(sourceFile));
+      const [pathPart, fragEncoded] = url.split("#", 2);
+      const routeKeyDir = path.posix.dirname(filePathToRouteKey(sourceFile));
+      const baseDir = routeKeyDir === "." ? "" : routeKeyDir;
       const resolvedPosix = path.posix.normalize(
-        path.posix.join(dir === "." ? "" : dir, pathPart),
+        path.posix.join(baseDir, pathPart),
       );
-      const key = resolvedPosix.endsWith(".md")
-        ? resolvedPosix.slice(0, -".md".length)
-        : resolvedPosix.replace(/\.markdown$/, "");
-      let href = routeKeyToUrl(key);
-      if (frag) href += `#${frag}`;
-      node.url = href;
+
+      if (!isDocLinkPath(resolvedPosix)) return;
+
+      const routeKey = resolvedPathToRouteKey(resolvedPosix);
+      const frag = fragEncoded ?? "";
+      if (!frag) {
+        node.url = `#/${routeKey}`;
+      } else {
+        const slug = normalizeFragmentToSlug(frag);
+        node.url = `#/${routeKey}::${slug}`;
+      }
+    });
+    return tree;
+  };
+}
+
+/** Strip `::` from element ids so they never contain the hash-route delimiter. */
+function rehypeStripColonIds() {
+  return (tree: HastRoot) => {
+    visit(tree, "element", (node: Element) => {
+      const id = node.properties?.id;
+      if (typeof id === "string") {
+        node.properties.id = id.replace(/::/g, "-");
+      }
     });
     return tree;
   };
@@ -72,10 +134,19 @@ function rehypeMermaidClass() {
   };
 }
 
+const headingLevels = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
+const headingAttributes = Object.fromEntries(
+  headingLevels.map((tag) => [
+    tag,
+    [...(defaultSchema.attributes?.[tag] ?? []), "id"],
+  ]),
+) as Record<string, string[]>;
+
 const sanitizeSchema = {
   ...defaultSchema,
   attributes: {
     ...defaultSchema.attributes,
+    ...headingAttributes,
     code: [
       ...(defaultSchema.attributes?.code ?? []),
       "className",
@@ -89,20 +160,29 @@ const sanitizeSchema = {
 export async function markdownToHtml(
   markdown: string,
   sourceFile: DocsFilePath,
-): Promise<{ title: string; html: string }> {
+): Promise<{
+  title: string;
+  html: string;
+  frontmatter: Record<string, unknown>;
+}> {
   const routeKey = filePathToRouteKey(sourceFile);
+  const { data, content } = matter(markdown);
+  const frontmatter = data as Record<string, unknown>;
+
   const processor = unified()
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkRewriteMdLinks, sourceFile)
     .use(remarkRehype, { allowDangerousHtml: false })
+    .use(rehypeSlug)
     .use(rehypeMermaidClass)
+    .use(rehypeStripColonIds)
     .use(rehypeSanitize, sanitizeSchema)
     .use(rehypeStringify);
 
-  const file = await processor.process(markdown);
+  const file = await processor.process(content);
   const html = String(file);
-  const mdast = unified().use(remarkParse).use(remarkGfm).parse(markdown) as MdastRoot;
+  const mdast = unified().use(remarkParse).use(remarkGfm).parse(content) as MdastRoot;
   const title = extractTitle(mdast, routeKey);
-  return { title, html };
+  return { title, html, frontmatter };
 }

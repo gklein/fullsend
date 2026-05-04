@@ -9,13 +9,30 @@ describe("markdownToHtml", () => {
     expect(html).toContain("1");
   });
 
-  it("rewrites relative md link to /docs/ URL", async () => {
+  it("rewrites relative md link to hash doc URL", async () => {
     const md = "[x](./other.md)";
     const { html } = await markdownToHtml(
       md,
       "docs/guides/admin/installation.md",
     );
-    expect(html).toContain('href="/docs/guides/admin/other"');
+    expect(html).toContain('href="#/guides/admin/other"');
+  });
+
+  it("strips front matter from HTML body", async () => {
+    const md = "---\ntitle: Hello\n---\n\n# Body\n";
+    const { html, frontmatter } = await markdownToHtml(md, "docs/x.md");
+    expect(frontmatter.title).toBe("Hello");
+    expect(html).toContain("Body");
+    expect(html).not.toContain("Hello");
+  });
+
+  it("rewrites link with heading fragment to :: slug form", async () => {
+    const md = "[z](./other.md#Section-One)";
+    const { html } = await markdownToHtml(
+      md,
+      "docs/guides/admin/installation.md",
+    );
+    expect(html).toMatch(/href="#\/guides\/admin\/other::section-one"/);
   });
 
   it("marks mermaid fence for client render", async () => {
