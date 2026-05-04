@@ -1,14 +1,33 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProxyOptions } from "vite";
+import { normalizePath } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vitest/config";
 import type { Plugin } from "vite";
+import { fullsendDocsPlugin } from "./web/docs/build/vitePluginDocs";
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
-const adminDir = path.join(repoRoot, "web", "admin");
+const webRoot = path.join(repoRoot, "web");
 
 const debugProxy = process.env.ADMIN_DEBUG_PROXY === "1";
+
+function spaFallbackPlugin(): Plugin {
+  return {
+    name: "fullsend-spa-fallback",
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        const url = req.url?.split("?")[0] ?? "";
+        if (url.startsWith("/admin/") && !path.extname(url)) {
+          req.url = "/admin/index.html";
+        } else if (url.startsWith("/docs/") && !path.extname(url)) {
+          req.url = "/docs/index.html";
+        }
+        next();
+      });
+    },
+  };
+}
 
 function adminDevEnvLogPlugin(): Plugin {
   return {
@@ -17,14 +36,13 @@ function adminDevEnvLogPlugin(): Plugin {
       if (config.command !== "serve" || process.env.VITEST) return;
       if (debugProxy) {
         console.info(
-          "\n[fullsend-admin] ADMIN_DEBUG_PROXY=1 — logging Vite requests and /api → Worker proxy traffic.\n",
+          "\n[fullsend] ADMIN_DEBUG_PROXY=1 — logging Vite requests and /api → Worker proxy traffic.\n",
         );
       }
     },
   };
 }
 
-/** Log every HTTP request the Vite dev server receives (not Worker-native). */
 function adminRequestLogPlugin(): Plugin {
   return {
     name: "admin-request-log",
@@ -43,9 +61,7 @@ function apiProxy(): ProxyOptions {
     target: "http://127.0.0.1:8787",
     changeOrigin: true,
   };
-
   if (!debugProxy) return base;
-
   return {
     ...base,
     configure(proxy) {
@@ -66,25 +82,41 @@ function apiProxy(): ProxyOptions {
   };
 }
 
-export default defineConfig(() => {
-  return {
-    root: adminDir,
-    base: "/admin/",
-    plugins: [
-      svelte(),
-      adminDevEnvLogPlugin(),
-      adminRequestLogPlugin(),
-    ],
-    server: {
-      proxy: {
-        "/api": apiProxy(),
+export default defineConfig(() => ({
+  root: webRoot,
+  base: "/",
+  publicDir: false,
+  plugins: [
+    svelte({
+      configFile: path.join(webRoot, "admin/svelte.config.js"),
+      include: normalizePath(path.join(webRoot, "admin/**/*.svelte")),
+    }),
+    svelte({
+      configFile: path.join(webRoot, "docs/svelte.config.js"),
+      include: normalizePath(path.join(webRoot, "docs/**/*.svelte")),
+    }),
+    fullsendDocsPlugin(repoRoot),
+    spaFallbackPlugin(),
+    adminDevEnvLogPlugin(),
+    adminRequestLogPlugin(),
+  ],
+  build: {
+    rollupOptions: {
+      input: {
+        admin: path.join(webRoot, "admin/index.html"),
+        docs: path.join(webRoot, "docs/index.html"),
       },
     },
-    test: {
-      environment: "jsdom",
-      environmentMatchGlobs: [["../docs/build/**/*.test.ts", "node"]],
-      include: ["src/**/*.test.ts", "../docs/build/**/*.test.ts"],
-      passWithNoTests: true,
+  },
+  server: {
+    proxy: {
+      "/api": apiProxy(),
     },
-  };
-});
+  },
+  test: {
+    environment: "jsdom",
+    environmentMatchGlobs: [["docs/build/**/*.test.ts", "node"]],
+    include: ["admin/src/**/*.test.ts", "docs/build/**/*.test.ts"],
+    passWithNoTests: true,
+  },
+}));
