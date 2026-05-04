@@ -1,5 +1,5 @@
 ---
-title: "26. GitLab Support Architecture"
+title: "XXX. GitLab Support Architecture"
 status: Proposed
 relates_to:
   - agent-infrastructure
@@ -12,7 +12,7 @@ topics:
   - multi-platform
 ---
 
-# 26. GitLab Support Architecture
+# XXX. GitLab Support Architecture
 
 Date: 2026-04-29
 
@@ -47,7 +47,7 @@ GitLab support mirrors the GitHub architecture where primitives map cleanly, and
 ### 1. Directory Structure
 
 **GitHub**: `.github/workflows/*.yml`
-**GitLab**: `.gitlab/ci/*.yml` 
+**GitLab**: `.gitlab/ci/*.yml`
 
 GitLab allows organizing CI/CD files in subdirectories via `include:`. The `.fullsend` config repo uses:
 
@@ -103,7 +103,7 @@ GitLab doesn't have an exact GitHub Apps equivalent, but Project Access Tokens (
 
 **Storage**: Project Access Token values stored as CI/CD variables:
 - Group-level masked variable: `FULLSEND_DISPATCH_TOKEN` (visible to all enrolled projects)
-- Project-level masked variables in `.fullsend`: 
+- Project-level masked variables in `.fullsend`:
   - `FULLSEND_TRIAGE_TOKEN`
   - `FULLSEND_CODE_TOKEN`
   - `FULLSEND_REVIEW_TOKEN`
@@ -147,14 +147,14 @@ dispatch:
       # Validate webhook token (passed as pipeline variable)
       SOURCE_PROJECT="${SOURCE_PROJECT}"
       WEBHOOK_TOKEN="${WEBHOOK_TOKEN}"
-      
+
       # Look up expected token for this repo in config
       EXPECTED_TOKEN=$(yq ".repos.\"${SOURCE_PROJECT}\".webhook_token" config.yaml)
       if [ "$WEBHOOK_TOKEN" != "$EXPECTED_TOKEN" ]; then
         echo "::error::Invalid webhook token"
         exit 1
       fi
-      
+
       # Validate source project is enrolled
       PROJECT_NAME="${SOURCE_PROJECT##*/}"
       ENABLED=$(yq ".repos.\"$PROJECT_NAME\".enabled" config.yaml)
@@ -162,7 +162,7 @@ dispatch:
         echo "Project not enrolled"
         exit 1
       fi
-      
+
       # Parse event payload and trigger stage pipeline
       # (same dispatch logic as GitHub workflow_dispatch)
 ```
@@ -186,7 +186,7 @@ dispatch:
 **GitHub**: `workflow_dispatch` API call with input parameters
 **GitLab**: Pipeline trigger API with pipeline variables
 
-**Trigger token creation**: 
+**Trigger token creation**:
 - Created via GitLab API: `POST /projects/:id/triggers`
 - Stored as group-level variable `FULLSEND_DISPATCH_TOKEN`
 - Scoped to `.fullsend` project
@@ -206,7 +206,7 @@ dispatch:
       STAGE="${STAGE}"
       SOURCE_PROJECT="${SOURCE_PROJECT}"
       EVENT_PAYLOAD="${EVENT_PAYLOAD}"
-      
+
       # Validate source project is enrolled
       PROJECT_NAME="${SOURCE_PROJECT##*/}"
       ENABLED=$(yq ".repos.\"$PROJECT_NAME\".enabled" config.yaml)
@@ -214,14 +214,14 @@ dispatch:
         echo "Project not enrolled"
         exit 1
       fi
-      
+
       # Scan for workflows with matching stage marker
       for pipeline_file in .gitlab/ci/*.yml; do
         STAGE_MARKER=$(grep -E '^# fullsend-stage:' "$pipeline_file" | head -1 | sed 's/^# fullsend-stage: *//')
-        
+
         if [ "$STAGE_MARKER" = "$STAGE" ]; then
           echo "Triggering $pipeline_file"
-          
+
           # Use downstream pipeline trigger
           curl -X POST \
             -H "PRIVATE-TOKEN: $FULLSEND_ORCHESTRATOR_TOKEN" \
@@ -253,7 +253,7 @@ This keeps the dispatch scanning logic identical across GitHub and GitLab.
 | pull_request_target | merge_request_event | Webhook → .fullsend dispatch pipeline |
 | pull_request_review.submitted | Merge request approval | Webhook → .fullsend dispatch pipeline |
 
-**GitLab webhook limitations**: 
+**GitLab webhook limitations**:
 - No direct equivalent to GitHub's granular event types
 - Must filter events in pipeline logic (e.g., check `$CI_MERGE_REQUEST_EVENT_TYPE`)
 - Issue webhooks don't include label details in all cases (may need API call)
@@ -345,7 +345,7 @@ func detectForge(repoURL string) (string, error) {
         return "", fmt.Errorf("invalid repo URL: %w", err)
     }
     host := strings.ToLower(u.Hostname())
-    
+
     if strings.Contains(host, "github.com") || strings.Contains(host, "github") {
         return "github", nil
     }
@@ -383,7 +383,7 @@ gitlab_instance_url: https://gitlab.example.com  # optional, defaults to gitlab.
 
 ### Security Considerations
 
-**Protected branch requirement**: 
+**Protected branch requirement**:
 - Must be enforced before enrollment
 - CLI validates via GitLab API: `GET /projects/:id/protected_branches/:branch`
 - Error if `main` is not protected
