@@ -143,9 +143,15 @@ dispatch:
   script:
     - apk add --no-cache yq jq curl
     - |
-      # Validate webhook token (passed as pipeline variable)
+      # Validate inputs and webhook token
       SOURCE_PROJECT="${SOURCE_PROJECT}"
       WEBHOOK_TOKEN="${WEBHOOK_TOKEN}"
+
+      # Validate SOURCE_PROJECT format before using in variable lookup
+      if [[ ! "$SOURCE_PROJECT" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
+        echo "ERROR: Invalid source project format"
+        exit 1
+      fi
 
       # Look up expected token from masked CI/CD variable
       # Variable name format: WEBHOOK_TOKEN_<sanitized_project_path>
@@ -171,8 +177,8 @@ dispatch:
         exit 1
       fi
 
-      # Parse event payload and trigger stage pipeline as child pipeline
-      # (same dispatch logic as GitHub workflow_dispatch)
+      # Webhook payload will be base64-encoded before passing to child pipeline
+      # to prevent YAML injection attacks via event content
 ```
 
 **Enrollment setup**:
@@ -191,8 +197,10 @@ dispatch:
 
 ### 5. Cross-Repo Dispatch Mechanism
 
+**End-to-end flow**: Enrolled repos send webhooks to `.fullsend` project's pipeline trigger endpoint → webhook triggers the dispatch pipeline on `.fullsend` protected `main` branch → dispatch pipeline validates the webhook token and source project → dispatch pipeline scans for stage workflows matching the requested stage → dispatch pipeline generates a child pipeline config and triggers it → child pipeline runs the stage workflow (triage, code, review, or fix) with the event payload and source project context.
+
 **GitHub**: `workflow_dispatch` API call with input parameters
-**GitLab**: Pipeline trigger API with pipeline variables
+**GitLab**: Pipeline trigger API with pipeline variables + child pipelines
 
 **Trigger token creation**:
 - Created via GitLab API: `POST /projects/:id/triggers`
@@ -202,24 +210,30 @@ dispatch:
 **Dispatch workflow** (`.gitlab/ci/dispatch.yml`):
 ```yaml
 # fullsend-stage: dispatch
-# Dispatcher pipeline that fans out to stage pipelines
-# Uses child pipelines to avoid infinite recursion
+# Dispatcher pipeline that fans out to stage pipelines via child pipelines
+# Split into two jobs: generate-config creates the child pipeline config,
+# trigger-stage triggers it as a downstream pipeline
 
 workflow:
   rules:
     # Run dispatch logic only when not already in a child pipeline
     - if: $IS_CHILD_PIPELINE != "true"
 
-dispatch:
-  stage: dispatch
+generate-config:
+  stage: prepare
   image: alpine:latest
   script:
     - apk add --no-cache yq jq
     - |
-      # Extract inputs
+      # Validate and extract inputs
       STAGE="${STAGE}"
       SOURCE_PROJECT="${SOURCE_PROJECT}"
-      EVENT_PAYLOAD="${EVENT_PAYLOAD}"
+
+      # Validate SOURCE_PROJECT format before using in variable lookup
+      if [[ ! "$SOURCE_PROJECT" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
+        echo "ERROR: Invalid source project format"
+        exit 1
+      fi
 
       # Validate source project is enrolled
       PROJECT_NAME="${SOURCE_PROJECT##*/}"
@@ -229,34 +243,53 @@ dispatch:
         exit 1
       fi
 
-      # Scan for workflows with matching stage marker and trigger child pipeline
+      # Scan for workflows with matching stage marker
       for pipeline_file in .gitlab/ci/*.yml; do
         STAGE_MARKER=$(grep -E '^# fullsend-stage:' "$pipeline_file" | head -1 | sed 's/^# fullsend-stage: *//')
 
         if [ "$STAGE_MARKER" = "$STAGE" ]; then
-          echo "Triggering child pipeline: $pipeline_file"
-          # Create child pipeline config
-          cat > .gitlab-ci-child.yml <<EOF
+          echo "Generating child pipeline config for: $pipeline_file"
+          # Create child pipeline config without injecting EVENT_PAYLOAD
+          # Event payload passed via trigger API variables, not embedded in YAML
+          cat > .gitlab-ci-child.yml <<'EOF'
       include:
         - local: '$pipeline_file'
 
       variables:
         IS_CHILD_PIPELINE: "true"
-        EVENT_PAYLOAD: "$EVENT_PAYLOAD"
-        SOURCE_PROJECT: "$SOURCE_PROJECT"
       EOF
+          # Replace $pipeline_file placeholder
+          sed -i "s|\$pipeline_file|$pipeline_file|g" .gitlab-ci-child.yml
         fi
       done
+  artifacts:
+    paths:
+      - .gitlab-ci-child.yml
+    expire_in: 1 hour
+  rules:
+    - if: $STAGE
+
+trigger-stage:
+  stage: deploy
+  needs:
+    - generate-config
   trigger:
     include:
       - artifact: .gitlab-ci-child.yml
-        job: dispatch
+        job: generate-config
     strategy: depend
+  variables:
+    # Pass event payload and source project via trigger variables (safe serialization)
+    # Base64-encode EVENT_PAYLOAD to prevent YAML injection
+    EVENT_PAYLOAD_B64: ${EVENT_PAYLOAD_B64}
+    SOURCE_PROJECT: ${SOURCE_PROJECT}
   rules:
     - if: $STAGE
 ```
 
-**Child pipeline approach**: Uses GitLab's `trigger:` keyword with `include:` to create child pipelines. The `IS_CHILD_PIPELINE` variable prevents the dispatch workflow from running recursively. This is safer than the trigger API approach which would re-invoke the entire parent pipeline.
+**Two-job pattern**: GitLab CI requires separating config generation (`script:`) from pipeline triggering (`trigger:`). The `generate-config` job creates the child pipeline YAML as an artifact without embedding untrusted event content. The `trigger-stage` bridge job then triggers the child pipeline, passing the event payload safely via base64-encoded variables. This prevents YAML injection attacks where attacker-controlled event content (issue titles, MR descriptions) could break out of the `variables:` block and inject arbitrary pipeline configuration.
+
+**Child pipeline approach**: Uses GitLab's `trigger: include: artifact:` pattern to create child pipelines. The `IS_CHILD_PIPELINE` variable prevents the dispatch workflow from running recursively.
 
 ### 6. Stage Markers
 
