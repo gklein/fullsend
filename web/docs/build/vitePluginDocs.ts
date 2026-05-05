@@ -5,7 +5,7 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import matter from "gray-matter";
-import type { MdastRoot } from "mdast";
+import type { Root as MdastRoot } from "mdast";
 import {
   listDocMarkdownFiles,
   filePathToRouteKey,

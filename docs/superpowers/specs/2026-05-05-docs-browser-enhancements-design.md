@@ -1,6 +1,6 @@
 # Design: Docs browser enhancements (layout, hash routing, chunks)
 
-Date: 2026-05-05  
+Date: 2026-05-05
 Status: Approved (implementation plan: [2026-05-05-docs-browser-enhancements.md](../plans/2026-05-05-docs-browser-enhancements.md))
 
 ## Relationship to prior spec

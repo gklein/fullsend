@@ -50,7 +50,7 @@ Add tests that expect:
 
 - [ ] **Step 2: Run tests — expect failures**
 
-Run: `cd web && npx vitest run docs/src/lib/hashRoute.test.ts`  
+Run: `cd web && npx vitest run docs/src/lib/hashRoute.test.ts`
 Expected: new tests fail.
 
 - [ ] **Step 3: Implement**
@@ -381,7 +381,7 @@ git commit -m "fix(docs-app): address lint/test for nav layout follow-up"
 
 **Plan complete and saved to `docs/superpowers/plans/2026-05-05-docs-nav-layout-directory-hash.md`. Two execution options:**
 
-1. **Subagent-Driven (recommended)** — fresh subagent per task, review between tasks.  
+1. **Subagent-Driven (recommended)** — fresh subagent per task, review between tasks.
 2. **Inline execution** — run tasks in this session with executing-plans checkpoints.
 
 **Which approach do you want?**
