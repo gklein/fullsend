@@ -44,7 +44,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&targetRepo, "target-repo", "", "path to the target repository")
 	cmd.Flags().StringVar(&fullsendBinary, "fullsend-binary", "", "path to a Linux fullsend binary to copy into the sandbox (default: current executable)")
 	cmd.Flags().StringArrayVar(&envFiles, "env-file", nil, "load environment variables from a dotenv file (repeatable)")
-	cmd.Flags().BoolVar(&noPostScript, "no-post-script", false, "skip post-script execution (agent inference still runs)")
+	cmd.Flags().BoolVar(&noPostScript, "no-post-script", false, "skip post-script execution (agent still runs full inference)")
 	_ = cmd.MarkFlagRequired("fullsend-dir")
 	_ = cmd.MarkFlagRequired("target-repo")
 
@@ -145,7 +145,11 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		printer.KeyValue("Pre-script", h.PreScript)
 	}
 	if h.PostScript != "" {
-		printer.KeyValue("Post-script", h.PostScript)
+		if noPostScript {
+			printer.KeyValue("Post-script", h.PostScript+" (SKIPPED: --no-post-script)")
+		} else {
+			printer.KeyValue("Post-script", h.PostScript)
+		}
 	}
 	if h.TimeoutMinutes > 0 {
 		printer.KeyValue("Timeout", fmt.Sprintf("%d minutes", h.TimeoutMinutes))
@@ -233,7 +237,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	if h.PostScript != "" {
 		defer func() {
 			if noPostScript {
-				printer.StepWarn("Skipping post-script: --no-post-script")
+				printer.StepWarn(fmt.Sprintf("Skipping post-script %s: --no-post-script", h.PostScript))
 				return
 			}
 			if h.ValidationLoop != nil && !validationPassed {
