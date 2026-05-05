@@ -118,6 +118,7 @@
           type="button"
           class="doc-tree-link"
           class:doc-tree-link--active={node.routeKey === activeRouteKey}
+          data-doc-tree-route={node.routeKey}
           onclick={() => navigateToRouteKey(node.routeKey)}
         >
           <span class="doc-tree-chevron-slot" aria-hidden="true"></span>
