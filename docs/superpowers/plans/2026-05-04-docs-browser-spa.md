@@ -57,7 +57,7 @@
 Run:
 
 ```bash
-cd /home/bkorren/src/github.com/konflux-ci/fullsend
+cd path/to/your/fullsend/clone
 npm install unified remark-parse remark-gfm remark-rehype rehype-stringify rehype-sanitize unist-util-visit mermaid
 npm install -D @types/mdast @types/hast
 ```

@@ -1,4 +1,4 @@
-import type { Plugin } from "vite";
+import type { ModuleNode, Plugin } from "vite";
 import fs from "node:fs";
 import path from "node:path";
 import { unified } from "unified";
@@ -90,6 +90,15 @@ function buildTree(
   }
 
   return toManifest(root);
+}
+
+function isRepoDocMarkdownFile(repoRoot: string, filePath: string): boolean {
+  const docsDir = path.join(repoRoot, "docs");
+  const normalized = path.normalize(filePath);
+  const prefix = path.normalize(`${docsDir}${path.sep}`);
+  if (!normalized.startsWith(prefix)) return false;
+  const ext = path.extname(normalized);
+  return ext === ".md" || ext === ".markdown";
 }
 
 function manifestMetaForFile(
@@ -193,6 +202,31 @@ export function fullsendDocsPlugin(repoRoot: string): Plugin {
       if (fs.existsSync(docsDir)) {
         server.watcher.add(docsDir);
       }
+    },
+    handleHotUpdate({ file, server }) {
+      if (!isRepoDocMarkdownFile(repoRoot, file)) return;
+
+      const graph = server.moduleGraph;
+      const hmrMods: ModuleNode[] = [];
+
+      const bootstrap = graph.getModuleById(VIRTUAL_BOOTSTRAP);
+      if (bootstrap) {
+        graph.invalidateModule(bootstrap, undefined, undefined, true);
+        hmrMods.push(bootstrap);
+      }
+
+      const pageIds = [...graph.idToModuleMap.keys()].filter((id) =>
+        id.startsWith(PAGE_INTERNAL_PREFIX),
+      );
+      for (const id of pageIds) {
+        const mod = graph.getModuleById(id);
+        if (mod) {
+          graph.invalidateModule(mod, undefined, undefined, true);
+          hmrMods.push(mod);
+        }
+      }
+
+      return hmrMods;
     },
   };
 }

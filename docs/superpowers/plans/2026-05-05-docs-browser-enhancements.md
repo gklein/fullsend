@@ -133,7 +133,7 @@ describe("formatDocHash", () => {
 - [ ] **Step 4: Run tests**
 
 ```bash
-cd /home/bkorren/src/github.com/konflux-ci/fullsend
+cd path/to/your/fullsend/clone
 npx vitest run web/docs/src/lib/hashRoute.test.ts
 ```
 
@@ -159,7 +159,7 @@ git commit -m "feat(docs-app): add hash route parse/format helpers and tests"
 - [ ] **Step 1: Install deps**
 
 ```bash
-cd /home/bkorren/src/github.com/konflux-ci/fullsend
+cd path/to/your/fullsend/clone
 npm install gray-matter github-slugger
 npm install rehype-slug
 ```
@@ -308,7 +308,7 @@ export function loadPage(routeKey: string): Promise<DocPagePayload>;
 - [ ] **Step 5: Build to verify chunks**
 
 ```bash
-cd /home/bkorren/src/github.com/konflux-ci/fullsend
+cd path/to/your/fullsend/clone
 npm run build
 ```
 

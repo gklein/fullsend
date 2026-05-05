@@ -71,11 +71,7 @@ function resolvedPathToRouteKey(resolvedPosix: string): string {
   return resolvedPosix;
 }
 
-function remarkRewriteMdLinks(
-  this: import("unified").Processor,
-  repoRoot: string,
-  sourceFile: DocsFilePath,
-) {
+function remarkRewriteMdLinks(repoRoot: string, sourceFile: DocsFilePath) {
   return (tree: MdastRoot) => {
     visit(tree, "link", (node) => {
       const url = node.url;
