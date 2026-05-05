@@ -30,7 +30,7 @@ following tags depending on the trigger event:
 | `dev` | Any non-PR event (push to `main`, tag push, `workflow_dispatch`) | Pre-release tag for CI and local testing. PR builds use this as the base image fallback when no digest is available. |
 | `<version>` (e.g. `1.2.3`) | Tag push matching `v*` | Immutable release tag extracted from the git tag via semver. |
 | `<major>.<minor>` (e.g. `1.2`) | Tag push matching `v*` | Floating minor-version tag for consumers that want automatic patch updates. |
-| `<commit-sha>` | Every non-PR build | Immutable per-commit reference for debugging and rollback. |
+| `<commit-sha>` (e.g. `a1b2c3d`) | Every non-PR build | Immutable per-commit reference for debugging and rollback. |
 
 On **pull requests**, images are built but **not pushed** — this validates
 the Containerfile without publishing unreleased images.
