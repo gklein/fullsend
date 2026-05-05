@@ -511,7 +511,7 @@ func TestPrioritizeAgentPromptContent(t *testing.T) {
 	assert.Contains(t, s, "Impact")
 	assert.Contains(t, s, "Confidence")
 	assert.Contains(t, s, "Effort")
-	assert.Contains(t, s, "customer-research")
+	assert.Contains(t, s, "customer-research skill")
 }
 
 func TestPrioritizeSchemaContent(t *testing.T) {

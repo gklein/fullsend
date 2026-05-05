@@ -60,11 +60,11 @@ func ValidProviders() []string {
 	return []string{"vertex"}
 }
 
-// DefaultAgentRoles returns the standard set of agent roles used
-// when no custom roles are specified. This is the same as ValidRoles
-// but exists as a separate function for semantic clarity.
+// DefaultAgentRoles returns the standard set of agent roles installed
+// when no custom roles are specified. This excludes optional roles
+// like "prioritize" that must be explicitly requested via --agents.
 func DefaultAgentRoles() []string {
-	return ValidRoles()
+	return []string{"fullsend", "triage", "coder", "review", "fix"}
 }
 
 // NewOrgConfig creates a new OrgConfig with sensible defaults.

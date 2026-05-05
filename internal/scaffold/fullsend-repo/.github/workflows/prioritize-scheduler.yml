@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: fullsend-prioritize-scheduler
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   dispatch:
