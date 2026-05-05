@@ -24,6 +24,9 @@ host_files:
     expand: true
   - src: ${GOOGLE_APPLICATION_CREDENTIALS}
     dest: /tmp/workspace/.gcp-credentials.json
+  - src: ${GCP_OIDC_TOKEN_FILE}
+    dest: /tmp/workspace/.gcp-oidc-token
+    optional: true
 
 skills:
   - skills/code-implementation
@@ -38,4 +41,4 @@ runner_env:
   REPO_DIR: "${GITHUB_WORKSPACE}/target-repo"
   TARGET_BRANCH: "${TARGET_BRANCH}"
 
-timeout_minutes: 25
+timeout_minutes: 35

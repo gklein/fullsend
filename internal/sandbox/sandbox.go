@@ -339,6 +339,24 @@ func SCPFrom(sshConfigPath, sandboxName, remotePath, localPath string) error {
 	return nil
 }
 
+// CollectLogs runs `openshell logs <name> --source <source> -n 0` and returns
+// the log output. The -n 0 flag requests all available log lines (no limit).
+// This is a host-side command that talks to the gateway — no SSH needed.
+func CollectLogs(name, source string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "openshell", "logs", name, "--source", source, "-n", "0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("openshell logs %q --source %s timed out after 30s", name, source)
+		}
+		return "", fmt.Errorf("openshell logs %q --source %s: %s", name, source, string(out))
+	}
+	return string(out), nil
+}
+
 // ExtractTranscripts copies Claude transcript files (.jsonl) from the sandbox
 // to a local output directory.
 func ExtractTranscripts(sshConfigPath, sandboxName, agentName, outputDir string) error {

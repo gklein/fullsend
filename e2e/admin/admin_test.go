@@ -213,12 +213,37 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 	var agentCreds []layers.AgentCredentials
 	for _, role := range defaultRoles {
 		t.Logf("Setting up app for role: %s", role)
-		// Use a per-role timeout so a failed manifest flow doesn't hang
-		// until the Go test timeout (which produces an unhelpful panic).
-		roleCtx, roleCancel := context.WithTimeout(ctx, 2*time.Minute)
-		appCreds, err := setup.Run(roleCtx, testOrg, role)
-		roleCancel()
-		require.NoError(t, err, "setting up app for role %s", role)
+
+		var appCreds *appsetup.AppCredentials
+		// Retry the manifest flow to handle transient callback timeouts
+		// (see #287). On failure, delete any partially-created app and
+		// wait before retrying so the next attempt starts clean.
+		const maxAttempts = 3
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			// Per-attempt timeout: generous to handle slow manifest flows
+			// (90s callback wait + page navigation overhead).
+			roleCtx, roleCancel := context.WithTimeout(ctx, 6*time.Minute)
+			var runErr error
+			appCreds, runErr = setup.Run(roleCtx, testOrg, role)
+			roleCancel()
+
+			if runErr == nil {
+				break
+			}
+
+			t.Logf("Attempt %d/%d for role %s failed: %v", attempt, maxAttempts, role, runErr)
+			if attempt < maxAttempts {
+				slug := appsetup.ExpectedAppSlug(testOrg, role)
+				t.Logf("Cleaning up potentially stale app %s before retry", slug)
+				if delErr := deleteAppViaPlaywright(env.page, slug, t.Logf, env.screenshotDir); delErr != nil {
+					t.Logf("Warning: cleanup of %s failed (may not exist): %v", slug, delErr)
+				}
+				t.Logf("Waiting 10s before retry to let GitHub settle...")
+				time.Sleep(10 * time.Second)
+				continue
+			}
+			require.NoError(t, runErr, "setting up app for role %s", role)
+		}
 
 		agentCreds = append(agentCreds, layers.AgentCredentials{
 			AgentEntry: config.AgentEntry{
@@ -398,6 +423,16 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 		"scripts/post-triage.sh",
 		"scripts/reconcile-repos.sh",
 		"skills/code-implementation/SKILL.md",
+		"skills/fix-review/SKILL.md",
+		".github/workflows/fix.yml",
+		"agents/fix.md",
+		"harness/fix.yaml",
+		"policies/fix.yaml",
+		"env/fix-agent.env",
+		"schemas/fix-result.schema.json",
+		"scripts/pre-fix.sh",
+		"scripts/post-fix.sh",
+		"scripts/process-fix-result.py",
 		"templates/shim-workflow.yaml",
 		"CODEOWNERS",
 	} {
@@ -718,13 +753,13 @@ Files over 64KB save fine if they contain only ASCII characters.`
 
 	hasTriageLabel := false
 	for _, name := range labelNames {
-		if name == "needs-info" || name == "ready-to-code" || name == "duplicate" {
+		if name == "needs-info" || name == "ready-to-code" || name == "duplicate" || name == "blocked" {
 			hasTriageLabel = true
 			break
 		}
 	}
 	assert.True(t, hasTriageLabel,
-		"issue should have a triage label (needs-info, ready-to-code, or duplicate), got: %v", labelNames)
+		"issue should have a triage label (needs-info, ready-to-code, duplicate, or blocked), got: %v", labelNames)
 }
 
 // runUnenrollmentTest disables test-repo in config.yaml, runs install to
@@ -763,7 +798,7 @@ func runUnenrollmentTest(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, ag
 
 	var removalPR *forge.ChangeProposal
 	for _, pr := range prs {
-		if pr.Title == "Disconnect from fullsend agent pipeline" {
+		if pr.Title == "chore: disconnect from fullsend agent pipeline" {
 			cp := pr
 			removalPR = &cp
 			break

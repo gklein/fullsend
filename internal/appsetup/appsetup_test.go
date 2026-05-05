@@ -121,6 +121,92 @@ func TestSetup_ExistingApp_SecretExists_AutoReuse(t *testing.T) {
 	assert.False(t, prompter.confirmCalled, "should not prompt for reuse")
 }
 
+func TestSetup_ExistingApp_Reuse_StoreSecretNotCalled(t *testing.T) {
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{
+			{ID: 100, AppID: 10, AppSlug: "myorg-fullsend"},
+		},
+		AppClientIDs: map[string]string{
+			"myorg-fullsend": "Iv1.fullsend123",
+		},
+	}
+	printer := ui.New(&discardWriter{})
+
+	storeCalled := false
+	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithSecretExists(func(_ string) (bool, error) { return true, nil }).
+		WithStoreSecret(func(_ context.Context, _, _ string) error {
+			storeCalled = true
+			return nil
+		})
+
+	creds, err := s.Run(context.Background(), "myorg", "fullsend")
+	require.NoError(t, err)
+	assert.Empty(t, creds.PEM)
+	assert.False(t, storeCalled, "storeSecret should not be called on reuse")
+}
+
+func TestSetup_RecoverCreatedApp_PEMExists(t *testing.T) {
+	client := &forge.FakeClient{
+		AppClientIDs: map[string]string{
+			"myorg-coder": "Iv1.coder456",
+		},
+	}
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithSecretExists(func(_ string) (bool, error) { return true, nil })
+
+	creds, err := s.recoverCreatedApp(context.Background(), "myorg", "coder", "myorg-coder")
+	require.NoError(t, err)
+	require.NotNil(t, creds)
+	assert.Equal(t, "myorg-coder", creds.Slug)
+	assert.Equal(t, "Iv1.coder456", creds.ClientID)
+	assert.Empty(t, creds.PEM, "PEM should be empty — already stored")
+}
+
+func TestSetup_RecoverCreatedApp_KnownSlug(t *testing.T) {
+	client := &forge.FakeClient{
+		AppClientIDs: map[string]string{
+			"custom-coder-app": "Iv1.custom789",
+		},
+	}
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithKnownSlugs(map[string]string{"coder": "custom-coder-app"}).
+		WithSecretExists(func(_ string) (bool, error) { return true, nil })
+
+	creds, err := s.recoverCreatedApp(context.Background(), "myorg", "coder", "myorg-coder")
+	require.NoError(t, err)
+	require.NotNil(t, creds)
+	assert.Equal(t, "custom-coder-app", creds.Slug)
+	assert.Equal(t, "Iv1.custom789", creds.ClientID)
+}
+
+func TestSetup_RecoverCreatedApp_NoPEM(t *testing.T) {
+	client := &forge.FakeClient{}
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithSecretExists(func(_ string) (bool, error) { return false, nil })
+
+	creds, err := s.recoverCreatedApp(context.Background(), "myorg", "coder", "myorg-coder")
+	require.NoError(t, err)
+	assert.Nil(t, creds, "should return nil when no PEM exists")
+}
+
+func TestSetup_RecoverCreatedApp_NoSecretExistsFunc(t *testing.T) {
+	client := &forge.FakeClient{}
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer)
+
+	creds, err := s.recoverCreatedApp(context.Background(), "myorg", "coder", "myorg-coder")
+	require.NoError(t, err)
+	assert.Nil(t, creds, "should return nil when no secretExists func")
+}
+
 func TestSetup_ExistingApp_NoSecret(t *testing.T) {
 	client := &forge.FakeClient{
 		Installations: []forge.Installation{
@@ -360,6 +446,7 @@ func TestSetup_CorrectPermissions_NoError(t *testing.T) {
 			{
 				ID: 100, AppID: 10, AppSlug: "myorg-fullsend",
 				Permissions: map[string]string{
+					"actions":        "write",
 					"contents":       "write",
 					"workflows":      "write",
 					"issues":         "read",

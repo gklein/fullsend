@@ -132,6 +132,64 @@ func TestDispatchTokenLayer_Analyze_NotInstalled(t *testing.T) {
 	assert.Contains(t, report.WouldInstall, "create FULLSEND_DISPATCH_TOKEN org secret")
 }
 
+func TestDispatchTokenLayer_Analyze_InstalledAllReposAccessible(t *testing.T) {
+	client := &forge.FakeClient{
+		OrgSecrets: map[string]bool{
+			"test-org/FULLSEND_DISPATCH_TOKEN": true,
+		},
+		OrgSecretRepoIDs: map[string][]int64{
+			"test-org/FULLSEND_DISPATCH_TOKEN": {100, 200, 300},
+		},
+	}
+	layer, _ := newDispatchLayer(t, client, "", []int64{100, 200})
+
+	report, err := layer.Analyze(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, StatusInstalled, report.Status)
+	assert.Contains(t, report.Details, "FULLSEND_DISPATCH_TOKEN org secret exists")
+	assert.Empty(t, report.WouldFix)
+}
+
+func TestDispatchTokenLayer_Analyze_DegradedRepoInaccessible(t *testing.T) {
+	client := &forge.FakeClient{
+		OrgSecrets: map[string]bool{
+			"test-org/FULLSEND_DISPATCH_TOKEN": true,
+		},
+		OrgSecretRepoIDs: map[string][]int64{
+			"test-org/FULLSEND_DISPATCH_TOKEN": {100}, // only repo 100 has access
+		},
+	}
+	// Enrolled repos include 100 and 200, but 200 is inaccessible
+	layer, _ := newDispatchLayer(t, client, "", []int64{100, 200})
+
+	report, err := layer.Analyze(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, StatusDegraded, report.Status)
+	assert.Contains(t, report.Details, "FULLSEND_DISPATCH_TOKEN org secret exists")
+	assert.Contains(t, report.Details, "FULLSEND_DISPATCH_TOKEN inaccessible in 1 enrolled repo(s)")
+	assert.Contains(t, report.WouldFix, "grant FULLSEND_DISPATCH_TOKEN access to 1 repo(s)")
+}
+
+func TestDispatchTokenLayer_Analyze_DegradedAllReposInaccessible(t *testing.T) {
+	client := &forge.FakeClient{
+		OrgSecrets: map[string]bool{
+			"test-org/FULLSEND_DISPATCH_TOKEN": true,
+		},
+		OrgSecretRepoIDs: map[string][]int64{
+			"test-org/FULLSEND_DISPATCH_TOKEN": {}, // no repos have access
+		},
+	}
+	layer, _ := newDispatchLayer(t, client, "", []int64{100, 200})
+
+	report, err := layer.Analyze(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, StatusDegraded, report.Status)
+	assert.Contains(t, report.WouldFix, "grant FULLSEND_DISPATCH_TOKEN access to 2 repo(s)")
+}
+
 func TestDispatchTokenLayer_RequiredScopes(t *testing.T) {
 	layer, _ := newDispatchLayer(t, &forge.FakeClient{}, "", nil)
 

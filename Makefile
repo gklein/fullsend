@@ -4,6 +4,11 @@
        script-test test \
        e2e-test e2e-playwright e2e-export-session e2e-upload-session
 
+# Let Go automatically download the toolchain version required by go.mod.
+# This ensures local builds use the right version without manual intervention.
+# goreleaser is unaffected because it does not invoke Makefile targets.
+export GOTOOLCHAIN := auto
+
 help:
 	@echo "Available targets:"
 	@echo "  help                 - Show this help message"
@@ -19,7 +24,7 @@ help:
 	@echo "  go-fmt               - Format Go code"
 	@echo "  go-vet               - Run go vet"
 	@echo "  go-tidy              - Run go mod tidy"
-	@echo "  script-test          - Run shell script tests (post-triage, validate-output-schema)"
+	@echo "  script-test          - Run shell script tests (post-triage, post-code, validate-output-schema)"
 	@echo "  test                 - Run all checks: lint, go-vet, go-test, script-test"
 	@echo "  e2e-test             - Run admin e2e tests (requires E2E_GITHUB_SESSION_FILE or E2E_GITHUB_USERNAME + E2E_GITHUB_PASSWORD)"
 	@echo "  e2e-export-session   - Login to GitHub and export a Playwright session file"
@@ -94,7 +99,9 @@ go-tidy:
 
 script-test:
 	bash internal/scaffold/fullsend-repo/scripts/post-triage-test.sh
+	bash internal/scaffold/fullsend-repo/scripts/post-code-test.sh
 	bash internal/scaffold/fullsend-repo/scripts/validate-output-schema-test.sh
+	python3 internal/scaffold/fullsend-repo/scripts/process-fix-result-test.py
 
 test: lint go-vet go-test script-test
 
@@ -109,7 +116,7 @@ e2e-test: e2e-playwright
 		$(MAKE) e2e-export-session; \
 		export E2E_GITHUB_SESSION_FILE="$(E2E_SESSION_FILE)"; \
 	fi; \
-	go test -tags e2e -v -count=1 -timeout 10m ./e2e/admin/
+	go test -tags e2e -v -count=1 -timeout 30m ./e2e/admin/
 
 e2e-export-session: e2e-playwright
 	@if [ -n "$$E2E_GITHUB_PASSWORD_FILE" ] && [ -z "$$E2E_GITHUB_PASSWORD" ]; then \

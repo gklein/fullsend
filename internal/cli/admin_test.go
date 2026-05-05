@@ -1,10 +1,15 @@
 package cli
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fullsend-ai/fullsend/internal/forge"
+	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
 func TestAdminCommand_HasSubcommands(t *testing.T) {
@@ -45,6 +50,12 @@ func TestInstallCmd_Flags(t *testing.T) {
 	vendorBinaryFlag := cmd.Flags().Lookup("vendor-fullsend-binary")
 	require.NotNil(t, vendorBinaryFlag, "expected --vendor-fullsend-binary flag")
 	assert.Equal(t, "false", vendorBinaryFlag.DefValue)
+
+	wifProviderFlag := cmd.Flags().Lookup("gcp-wif-provider")
+	require.NotNil(t, wifProviderFlag, "expected --gcp-wif-provider flag")
+
+	wifSAEmailFlag := cmd.Flags().Lookup("gcp-wif-sa-email")
+	require.NotNil(t, wifSAEmailFlag, "expected --gcp-wif-sa-email flag")
 }
 
 func TestUninstallCmd_RequiresOrg(t *testing.T) {
@@ -99,6 +110,50 @@ func TestValidateOrgName_Invalid(t *testing.T) {
 	}
 }
 
+func TestValidateEnabledRepos_AllValid(t *testing.T) {
+	err := validateEnabledRepos(
+		[]string{"web-app", "api-server"},
+		[]string{"web-app", "api-server", "docs"},
+	)
+	assert.NoError(t, err)
+}
+
+func TestValidateEnabledRepos_NoRepoFlag(t *testing.T) {
+	err := validateEnabledRepos(nil, []string{"web-app", "docs"})
+	assert.NoError(t, err)
+}
+
+func TestValidateEnabledRepos_MissingOne(t *testing.T) {
+	err := validateEnabledRepos(
+		[]string{"integration-service"},
+		[]string{"web-app", "docs"},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "integration-service")
+	assert.Contains(t, err.Error(), "forks, archived, or misspelled")
+}
+
+func TestValidateEnabledRepos_MultipleMissing(t *testing.T) {
+	err := validateEnabledRepos(
+		[]string{"web-app", "fork-repo", "archived-repo"},
+		[]string{"web-app", "docs"},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fork-repo")
+	assert.Contains(t, err.Error(), "archived-repo")
+	// web-app is valid, should not appear in the error.
+	assert.NotContains(t, err.Error(), "web-app")
+}
+
+func TestValidateEnabledRepos_EmptyDiscovered(t *testing.T) {
+	err := validateEnabledRepos(
+		[]string{"some-repo"},
+		[]string{},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "some-repo")
+}
+
 func TestResolveToken_EnvVar(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token-123")
 	t.Setenv("GITHUB_TOKEN", "")
@@ -115,4 +170,41 @@ func TestResolveToken_GitHubTokenFallback(t *testing.T) {
 	token, err := resolveToken()
 	require.NoError(t, err)
 	assert.Equal(t, "github-token-456", token)
+}
+
+type discardWriter struct{}
+
+func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+func TestEnsureConfigRepoExists_CreatesWhenMissing(t *testing.T) {
+	client := forge.NewFakeClient()
+	printer := ui.New(&discardWriter{})
+
+	err := ensureConfigRepoExists(context.Background(), client, printer, "myorg")
+	require.NoError(t, err)
+	require.Len(t, client.CreatedRepos, 1)
+	assert.Equal(t, ".fullsend", client.CreatedRepos[0].Name)
+	assert.True(t, client.CreatedRepos[0].Private)
+}
+
+func TestEnsureConfigRepoExists_NoOpWhenExists(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.Repos = []forge.Repository{
+		{Name: ".fullsend", FullName: "myorg/.fullsend"},
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := ensureConfigRepoExists(context.Background(), client, printer, "myorg")
+	require.NoError(t, err)
+	assert.Empty(t, client.CreatedRepos)
+}
+
+func TestEnsureConfigRepoExists_ReturnsError(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.Errors["GetRepo"] = fmt.Errorf("network error")
+	printer := ui.New(&discardWriter{})
+
+	err := ensureConfigRepoExists(context.Background(), client, printer, "myorg")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "checking for config repo")
 }

@@ -4,6 +4,7 @@ import "fmt"
 
 // AppPermissions defines the permissions for a GitHub App.
 type AppPermissions struct {
+	Actions        string `json:"actions,omitempty"`
 	Issues         string `json:"issues,omitempty"`
 	PullRequests   string `json:"pull_requests,omitempty"`
 	Checks         string `json:"checks,omitempty"`
@@ -63,6 +64,7 @@ func AgentAppConfig(org, role string) AppConfig {
 	case "fullsend":
 		base.Description = fmt.Sprintf("Fullsend orchestrator for %s", org)
 		base.Permissions = AppPermissions{
+			Actions:        "write",
 			Contents:       "write",
 			Workflows:      "write",
 			Issues:         "read",
@@ -98,7 +100,7 @@ func AgentAppConfig(org, role string) AppConfig {
 			Checks:       "read",
 			Issues:       "read",
 		}
-		base.Events = []string{"pull_request", "pull_request_review"}
+		base.Events = []string{"pull_request"}
 
 	default:
 		base.Description = fmt.Sprintf("Fullsend %s agent for %s", role, org)
