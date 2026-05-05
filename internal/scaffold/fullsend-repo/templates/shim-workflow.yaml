@@ -130,7 +130,8 @@ jobs:
         github.event.comment.body == '/review' ||
         startsWith(github.event.comment.body, '/review ')
       )) ||
-      github.event_name == 'pull_request_target'
+      (github.event_name == 'pull_request_target'
+        && github.event.action != 'closed')
     steps:
       - name: Build minimal payload
         id: payload
@@ -312,6 +313,7 @@ jobs:
       cancel-in-progress: true
     if: >-
       github.event_name == 'issue_comment'
+        && github.event.comment.user.type != 'Bot'
         && (
           github.event.comment.body == '/retro'
           || startsWith(github.event.comment.body, '/retro ')
@@ -330,17 +332,11 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
-          # Determine if this is a PR or issue comment.
-          # GitHub API: issue_comment events on PRs have issue.pull_request set.
-          # We use gh api to get the PR HTML URL if needed.
-          ORIGINATING_URL="${ISSUE_HTML_URL}"
           PAYLOAD=$(jq -cn \
             --arg in "${ISSUE_NUMBER}" \
             --arg iu "${ISSUE_HTML_URL}" \
-            --arg ou "${ORIGINATING_URL}" \
             --arg cb "${COMMENT_BODY:-}" \
             '{issue: {number: ($in | tonumber), html_url: $iu},
-              pull_request: {html_url: (if $ou != $iu then $ou else null end)},
               comment: {body: $cb}}')
           echo "json=$PAYLOAD" >> "$GITHUB_OUTPUT"
       - name: Dispatch retro stage
