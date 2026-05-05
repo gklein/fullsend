@@ -29,15 +29,16 @@
 
   function isExpanded(dirPath: string): boolean {
     void treeEpoch;
+    const focus = expandFocusPath ?? "";
+    // Directory hash navigation must reveal the target path even if the user collapsed nodes earlier.
+    if (focus !== "" && descendantMatchesActive(dirPath, focus)) {
+      return true;
+    }
     const key = `fullsend-docs-tree:${dirPath}`;
     const raw = sessionStorage.getItem(key);
     if (raw === "1") return true;
     if (raw === "0") return false;
-    const focus = expandFocusPath ?? "";
-    return (
-      descendantMatchesActive(dirPath, activeRouteKey) ||
-      descendantMatchesActive(dirPath, focus)
-    );
+    return descendantMatchesActive(dirPath, activeRouteKey);
   }
 
   function toggleDir(dirPath: string): void {

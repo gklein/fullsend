@@ -67,11 +67,22 @@
     if (narrowViewport) {
       mobileNavOpen = true;
     }
+    const sel = `[data-doc-tree-dir="${CSS.escape(dirPath)}"]`;
+    const tryScroll = (): boolean => {
+      const el = document.querySelector(sel);
+      if (el) {
+        el.scrollIntoView({ block: "nearest" });
+        return true;
+      }
+      return false;
+    };
     void tick().then(() =>
       requestAnimationFrame(() => {
-        document
-          .querySelector(`[data-doc-tree-dir="${CSS.escape(dirPath)}"]`)
-          ?.scrollIntoView({ block: "nearest" });
+        if (!tryScroll()) {
+          requestAnimationFrame(() => {
+            tryScroll();
+          });
+        }
       }),
     );
   }
