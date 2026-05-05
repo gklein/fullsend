@@ -212,6 +212,37 @@ func TestFixWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "cancel-in-progress: true")
 }
 
+func TestSetupGcpActionContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/actions/setup-gcp/action.yml")
+	require.NoError(t, err)
+	s := string(content)
+	// Verify inputs (composite actions cannot access vars/secrets directly)
+	assert.Contains(t, s, "inputs:")
+	assert.Contains(t, s, "gcp_auth_mode:")
+	assert.Contains(t, s, "gcp_wif_provider:")
+	assert.Contains(t, s, "gcp_wif_sa_email:")
+	assert.Contains(t, s, "gcp_sa_key_json:")
+	// Verify WIF authentication path
+	assert.Contains(t, s, "if: inputs.gcp_auth_mode == 'wif'")
+	assert.Contains(t, s, "google-github-actions/auth@v3")
+	assert.Contains(t, s, "workload_identity_provider:")
+	assert.Contains(t, s, "service_account:")
+	// Verify SA key authentication path
+	assert.Contains(t, s, "if: inputs.gcp_auth_mode != 'wif'")
+	assert.Contains(t, s, "credentials_json:")
+	// Verify OIDC token workaround for non-WIF
+	assert.Contains(t, s, "RUNNER_TEMP/empty-oidc-token")
+	assert.Contains(t, s, "GCP_OIDC_TOKEN_FILE")
+	// Verify credential masking
+	assert.Contains(t, s, "Mask GCP credential file paths")
+	assert.Contains(t, s, "::add-mask::")
+	assert.Contains(t, s, "GOOGLE_GHA_CREDS_PATH")
+	assert.Contains(t, s, "GOOGLE_APPLICATION_CREDENTIALS")
+	assert.Contains(t, s, "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE")
+	// Verify sandbox preparation
+	assert.Contains(t, s, "prepare-sandbox-credentials.sh")
+}
+
 func TestCodeHarnessContent(t *testing.T) {
 	content, err := FullsendRepoFile("harness/code.yaml")
 	require.NoError(t, err)
