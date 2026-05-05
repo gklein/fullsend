@@ -1,7 +1,7 @@
 # Design: Directory links resolve to BFS default document
 
 Date: 2026-05-05
-Status: Draft (supersedes conflicting behavior in [2026-05-05-docs-nav-layout-and-directory-hash-design.md](./2026-05-05-docs-nav-layout-and-directory-hash-design.md))
+Status: Approved (supersedes conflicting behavior in [2026-05-05-docs-nav-layout-and-directory-hash-design.md](./2026-05-05-docs-nav-layout-and-directory-hash-design.md))
 
 ## Relationship to prior specs
 
