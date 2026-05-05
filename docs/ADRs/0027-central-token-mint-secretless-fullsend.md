@@ -1,5 +1,5 @@
 ---
-title: "0026. Central token mint and shared apps for a secretless .fullsend"
+title: "0027. Central token mint and shared apps for a secretless .fullsend"
 status: Proposed
 relates_to:
   - agent-infrastructure
@@ -12,7 +12,7 @@ topics:
   - deployment
 ---
 
-# 0026. Central token mint and shared apps for a secretless .fullsend
+# 0027. Central token mint and shared apps for a secretless .fullsend
 
 Date: 2026-05-05
 
