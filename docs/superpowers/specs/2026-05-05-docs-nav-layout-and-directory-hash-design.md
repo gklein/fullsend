@@ -3,6 +3,8 @@
 Date: 2026-05-05  
 Status: Approved (implementation plan: [2026-05-05-docs-nav-layout-directory-hash.md](../plans/2026-05-05-docs-nav-layout-directory-hash.md))
 
+> **Update:** Directory **article** behavior (“option C”: keep the previous document while the hash shows a folder) is **superseded** by [2026-05-05-docs-directory-default-navigation-design.md](./2026-05-05-docs-directory-default-navigation-design.md). Shell layout, `#/<dir>/` link syntax, and tree sorting in this document stay in force.
+
 ## Relationship to prior specs
 
 - [2026-05-04-docs-browser-design.md](./2026-05-04-docs-browser-design.md) — overall `/docs/` SPA; still authoritative for build and deployment boundaries.
