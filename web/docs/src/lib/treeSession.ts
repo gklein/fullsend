@@ -14,3 +14,16 @@ export function persistExpandedPathInSession(dirPath: string): void {
     }
   }
 }
+
+/** Expand every manifest directory prefix of `routeKey` (parent path of the file). */
+export function persistExpandedPathForRouteKey(
+  routeKey: string,
+  dirPaths: Set<string>,
+): void {
+  const segments = routeKey.split("/").filter(Boolean);
+  if (segments.length < 2) return;
+  const parentDir = segments.slice(0, -1).join("/");
+  if (dirPaths.has(parentDir)) {
+    persistExpandedPathInSession(parentDir);
+  }
+}
