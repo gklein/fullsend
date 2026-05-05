@@ -18,6 +18,10 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Pre-mask GCP credential file path
+      shell: bash
+      run: echo "::add-mask::${GITHUB_WORKSPACE}/gha-creds-"
+
     - name: Authenticate to Google Cloud (WIF)
       if: inputs.gcp_auth_mode == 'wif'
       uses: google-github-actions/auth@v3

@@ -59,6 +59,7 @@ type Issue struct {
 type IssueComment struct {
 	ID        int
 	NodeID    string
+	HTMLURL   string
 	Body      string
 	Author    string
 	CreatedAt string
@@ -143,6 +144,9 @@ type Client interface {
 	OrgSecretExists(ctx context.Context, org, name string) (bool, error)
 	DeleteOrgSecret(ctx context.Context, org, name string) error
 	SetOrgSecretRepos(ctx context.Context, org, name string, repoIDs []int64) error
+	// GetOrgSecretRepos returns the list of repository IDs that have access
+	// to the given org-level secret.
+	GetOrgSecretRepos(ctx context.Context, org, name string) ([]int64, error)
 
 	// CI/Workflow operations
 	GetLatestWorkflowRun(ctx context.Context, owner, repo, workflowFile string) (*WorkflowRun, error)

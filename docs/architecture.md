@@ -86,7 +86,7 @@ The harness draws its configuration from the adopting organization's **`.fullsen
 
 **Open questions:**
 
-- Does the harness live inside the sandbox (configuring the agent from within its isolation boundary) or outside it (preparing the environment before the agent starts)?
+- Does the harness live inside the sandbox (configuring the agent from within its isolation boundary) or outside it (preparing the environment before the agent starts)? (Tool permissions are injected as a host-managed `.claude/settings.json` — configured outside, enforced inside; see [ADR 0027](ADRs/0027-allowed-and-disallowed-tools-for-agents.md). General harness placement remains open.)
 - How is codebase context assembled? (See [codebase-context.md](problems/codebase-context.md).)
 - How do we version and test harness configurations? (See [testing-agents.md](problems/testing-agents.md).)
 
@@ -99,7 +99,7 @@ This is the thing that actually reasons and acts. Everything else in this docume
 **Open questions:**
 
 - Is the runtime a single model call, a loop (plan-act-observe), or something more structured?
-- How does the runtime interact with the sandbox boundaries — does it know what it can't do, or does it just hit walls?
+- How does the runtime interact with the sandbox boundaries — does it know what it can't do, or does it just hit walls? (For tool access: both — prose instructions inform the runtime, and `permissions.deny` hard-blocks execution; see [ADR 0027](ADRs/0027-allowed-and-disallowed-tools-for-agents.md). Broader sandbox interaction remains open.)
 - How do we swap model providers or versions without changing the rest of the stack?
 - What is the interface between the harness and the runtime? (A system prompt? A configuration file? An API contract?)
 
@@ -213,12 +213,12 @@ ADR 0002: [Building block 2](ADRs/0002-initial-fullsend-design.md#2-slash-comman
 
 ### 3. Label state machine guard
 
-Validates legal label transitions and enforces mutual exclusion and run-start reset semantics (triage start clears **`duplicate`** and downstream labels; PR/review strips per ADR).
+Validates legal label transitions and enforces mutual exclusion and run-start reset semantics (triage start clears **`duplicate`** and downstream labels; **`blocked`** is cleared by the post-script when a non-blocked outcome is reached; PR/review strips per ADR).
 ADR 0002: [Building block 3](ADRs/0002-initial-fullsend-design.md#3-label-state-machine-guard).
 
 ### 4. triage agent runtime
 
-Runs triage from issue `title`/`body` + GitHub-native attachments only; each run starts with **`duplicate`** and other reset labels cleared; duplicate detection, readiness, reproducibility, test handoff; can close as duplicate again if still a match.
+Runs triage from issue `title`/`body` + GitHub-native attachments only; each run starts with **`duplicate`** and other reset labels cleared; duplicate detection, blocking dependency detection (cross-repo), readiness, reproducibility, test handoff; can close as duplicate again if still a match, or label **`blocked`** when progress depends on another open issue or PR.
 ADR 0002: [Building block 4](ADRs/0002-initial-fullsend-design.md#4-triage-agent-runtime).
 
 ### 5. Duplicate / similarity search
@@ -238,7 +238,7 @@ ADR 0002: [Building block 7](ADRs/0002-initial-fullsend-design.md#7-test-artifac
 
 ### 8. code agent runtime
 
-Implements changes, runs local/CI-equivalent tests, handles check failures, and advances handoff to **Review** (`ready-for-review`).
+Implements changes, runs local/CI-equivalent tests, handles check failures, and opens or updates a PR. Review dispatch is triggered automatically by `pull_request_target` events.
 ADR 0002: [Building block 8](ADRs/0002-initial-fullsend-design.md#8-implementation-agent-runtime).
 
 ### 9. PR sandbox / CI mirror
@@ -270,6 +270,324 @@ ADR 0002: [Building block 12](ADRs/0002-initial-fullsend-design.md#12-coordinato
 
 Traceability layer across issue, **Triage**, **Code**, **Review**, checks, and merge for incident response and correlation across automation runs.
 ADR 0002: [Building block 13](ADRs/0002-initial-fullsend-design.md#13-observability).
+
+## Configuration layering
+
+Fullsend uses a three-tier inheritance model for all configuration: agent definitions, skills, policies, harness definitions, and guardrails. Each tier can extend or override the one below it. Guardrails can only be tightened, never weakened.
+
+```
+
+
+  ┌──────────────────────────────────────────────────────────────────┐
+  │  fullsend-ai/fullsend                    (upstream open source)  │
+  │                                                                  │
+  │  Framework defaults:                                             │
+  │    base agents, skills, policies                                 │
+  │    fullsend CLI (fullsend run, fullsend install, ...)            │
+  │    scaffold templates, security scanners                         │
+  │                                                                  │
+  │  Owned by: fullsend project maintainers                          │
+  ├──────────────────────────────────────────────────────────────────┤
+  │  <org>/.fullsend                              (dedicated repo)   │
+  │                                                                  │
+  │  Org-wide configuration:                                         │
+  │    agents/            org agent definitions (.md)                │
+  │    skills/            org skills (shared across repos)           │
+  │    policies/          sandbox network/filesystem policies        │
+  │    harness/           per-agent harness configs (.yaml)          │
+  │    guardrails.yaml    org-wide guardrails (can only be tightened)│
+  │    config.yaml        intent repo, runtime, infrastructure       │
+  │                                                                  │
+  │  Owned by: org platform team (CODEOWNERS, human-only)            │
+  ├──────────────────────────────────────────────────────────────────┤
+  │  <org>/<repo>                               (directory in repo)  │
+  │                                                                  │
+  │  Repo-specific overrides:                                        │
+  │    AGENTS.md          per-repo agent instructions                │
+  │    skills/            repo-specific skills (domain knowledge)    │
+  │    .fullsend/config   overrides -  adjust timeouts, prompts      │
+  │                                                                  │
+  │  Owned by: repo maintainers (CODEOWNERS)                         │
+  └──────────────────────────────────────────────────────────────────┘
+
+  Inheritance:  fullsend defaults  <  org .fullsend config  <  per-repo overrides
+                (base)                (extend/override)        (extend/tighten)
+```
+
+Skills flow downward through this stack. A repo-level skill might encode domain knowledge ("this repo uses a custom ORM — here's how queries work"). An org-level skill might encode org conventions ("all services use structured logging via zerolog"). Upstream fullsend provides foundational skills (code implementation, triage coordination, testing conventions).
+
+AGENTS.md files follow the same layering. A repo's `.fullsend/AGENTS.md` gives agents repo-specific instructions (build commands, test patterns, architectural constraints). The org's `.fullsend/agents/` directory provides role-specific agent definitions that apply across all enrolled repos.
+
+See [ADR 0003](ADRs/0003-org-config-repo-convention.md) for the config repo convention and [ADR 0024](ADRs/0024-harness-definitions.md) for harness definitions.
+
+## Multi-org deployment model
+
+Each organization that adopts fullsend operates independently. There is no shared control plane, no central service, and no relationship between orgs. Each org brings its own inference API keys and runs its own version of fullsend.
+
+```
+  ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
+  │  Org A               │  │  Org B               │  │  Org C               │
+  │                      │  │                      │  │                      │
+  │  .fullsend repo      │  │  .fullsend repo      │  │  .fullsend repo      │
+  │  ┌────────────────┐  │  │  ┌────────────────┐  │  │  ┌────────────────┐  │
+  │  │ config.yaml    │  │  │  │ config.yaml    │  │  │  │ config.yaml    │  │
+  │  │ agents/        │  │  │  │ agents/        │  │  │  │ agents/        │  │
+  │  │ skills/        │  │  │  │ skills/        │  │  │  │ skills/        │  │
+  │  │ harness/       │  │  │  │ harness/       │  │  │  │ harness/       │  │
+  │  └────────────────┘  │  │  └────────────────┘  │  │  └────────────────┘  │
+  │                      │  │                      │  │                      │
+  │  API keys: own       │  │  API keys: own       │  │  API keys: own       │
+  │  Enrolled repos: ... │  │  Enrolled repos: ... │  │  Enrolled repos: ... │
+  │  fullsend v0.2.0     │  │  fullsend v0.4.1     │  │  fullsend v0.2.0     │
+  │                      │  │                      │  │                      │
+  └──────────┬───────────┘  └──────────┬───────────┘  └──────────┬───────────┘
+             │                         │                         │
+             │            no relationship between orgs           │
+             │                         │                         │
+             └─────────────────────────┼─────────────────────────┘
+                                       │
+                            ┌──────────┴───────────┐
+                            │  fullsend-ai/fullsend│
+                            │                      │
+                            │  Open source project │
+                            │  CLI, base agents,   │
+                            │  skills, scaffold    │
+                            │                      │
+                            │  Orgs pull releases  │
+                            │  at their own pace   │
+                            └──────────────────────┘
+```
+
+Each org is a fully independent instance. They choose when to upgrade. They configure their own agents, skills, and policies. They use their own model providers and API keys. The only shared element is the upstream fullsend project they all pull from.
+
+## Downstream/upstream federation
+
+Independent orgs can optionally collaborate across the forge boundary. A downstream org — a vendor, contributor, or consumer — runs its own fullsend instance for internal work. An agent in that downstream instance can push feature proposals upstream to a project that has its own full SDLC.
+
+```
+  ┌─── Upstream Project ───────────────────────────────────────────┐
+  │                                                                │
+  │       Refinement ──► Prioritization ──► Execution              │
+  │      ╱                                           ╲             │
+  │  Discovery                                        Verification │
+  │      ╲                                           ╱             │
+  │       Feedback ◄─────── Monitor ◄──────── Release              │
+  │          ▲                                   │                 │
+  └──────────│───────────────────────────────────│─────────────────┘
+             │                                   └─────────┐
+             │      upstreaming agent                      │
+             │     proposes enhancement                    │ release
+             └────────────────────────────────┐            │
+                                              │            │
+  ┌─── Downstream Org (vendor/consumer) ──────│────────────│───────┐
+  │                                           │            │       │
+  │       Refinement ──► Prioritization ──► Execution      │       │
+  │      ╱                                                 ▼       │
+  │  Discovery                                        Verification │
+  │      ╲                                           ╱             │
+  │       Feedback ◄──── Monitor ◄──────── Delivery                │
+  │                                                                │
+  └────────────────────────────────────────────────────────────────┘
+```
+
+Both orgs run the full [SDLC loop](vision.md#the-agentic-sdlc). The two cross-org handoff points are:
+
+1. **Downstream Prioritization → Upstreaming agent → Upstream Refinement.** When the downstream org's SDLC prioritizes work that belongs upstream, the handoff at Prioritization → Execution goes to an *upstreaming agent* instead of a coding agent. This agent drafts proposals (issues or PRs) and ferries them into the upstream project's Refinement or Prioritization process via the forge.
+
+2. **Upstream Delivery → Downstream Verification.** When the upstream project delivers a release, the downstream org consumes it. The new release enters the downstream SDLC at Verification — the downstream validates against its own integration tests, compatibility requirements, and deployment constraints.
+
+The forge (GitHub) is the interface between the two orgs. The upstream project doesn't need to know or care that the proposal was generated by an agent in a downstream fullsend instance — it evaluates contributions through its own SDLC the same way it evaluates any human or agent contribution.
+
+This connects to the [downstream/upstream problem doc](problems/downstream-upstream.md), which explores how competing sources of strategic intent get reconciled when multiple downstream contributors propose features into the same upstream project.
+
+## Runtime execution flow
+
+The diagrams below show the runtime path from event to completed agent task. The installer, admin CLI, and enrollment machinery are not shown — only what happens when an agent actually runs.
+
+The architecture is a set of concentric layers, each wrapping the next:
+
+```
+Dispatcher → Agent Runner → Sandbox → Agent Runtime → LLM
+```
+
+Each outer layer configures and constrains the layer inside it. No inner layer can modify an outer layer. Credentials exist only in the outermost layers and never cross the sandbox boundary inward.
+
+### Abstract model
+
+This diagram is platform-agnostic. It uses a nested-box layout to show the concentric wrapping structure: each layer wraps the one inside it, and control flows inward (setup), then outward (teardown and delivery). No specific SCM, CI system, sandbox runtime, or LLM is named.
+
+```
+event ──► DISPATCHER
+          Filters event, selects agent role, dispatches run
+                │
+                ▼
+          ╔═══════════════════════════════════════════════════════╗
+          ║ AGENT RUNNER                                          ║
+          ║                                                       ║
+          ║ Loads harness definition for agent role:              ║
+          ║   agent prompt, sandbox image, network policy,        ║
+          ║   skills, pre/post scripts, validation config,        ║
+          ║   output schema, host files, env vars                 ║
+          ║                                                       ║
+          ║ Runs pre-script on host:                              ║
+          ║   validate inputs, prefetch data                      ║
+          ║                                                       ║
+          ║ ┌───────────────────────────────────────────────────┐ ║
+          ║ │ SANDBOX (ephemeral, per-run)                      │ ║
+          ║ │                                                   │ ║
+          ║ │ Created with image + network policy.              │ ║
+          ║ │ Bootstrapped with agent def, skills, repo code,   │ ║
+          ║ │ env vars, host files, security hooks.             │ ║
+          ║ │ No credentials present inside this boundary.      │ ║
+          ║ │                                                   │ ║
+          ║ │ Pre-agent security scan (context injection).      │ ║
+          ║ │                                                   │ ║
+          ║ │ ┌───────────────────────────────────────────────┐ │ ║
+          ║ │ │ AGENT RUNTIME                                 │ │ ║
+          ║ │ │                                               │ │ ║
+          ║ │ │ LLM tool-use loop:                            │ │ ║
+          ║ │ │   read code, edit files, run tests, iterate   │ │ ║
+          ║ │ │                                               │ │ ║
+          ║ │ │ Boundaries enforced by enclosing sandbox:     │ │ ║
+          ║ │ │   network policy, security hooks,             │ │ ║
+          ║ │ │   no credentials, filesystem restrictions     │ │ ║
+          ║ │ │                                               │ │ ║
+          ║ │ │ Produces: modified repo, output artifacts     │ │ ║
+          ║ │ └───────────────────────────────────────────────┘ │ ║
+          ║ │                                                   │ ║
+          ║ └───────────────────────────────────────────────────┘ ║
+          ║                                                       ║
+          ║ Extracts from destroyed sandbox:                      ║
+          ║   output files, reasoning transcripts, modified repo  ║
+          ║                                                       ║
+          ║ Post-agent security scan (redact secrets from output) ║
+          ║                                                       ║
+          ║ Validation loop (if configured):                      ║
+          ║   schema check on host                                ║
+          ║   ├─ pass: continue                                   ║
+          ║   ├─ fail + retries remain: re-run agent w/ feedback  ║
+          ║   └─ fail + retries exhausted: HARD FAILURE           ║
+          ║     (no unvalidated output emitted)                   ║
+          ║                                                       ║
+          ║ Runs post-script on host (outside sandbox):           ║
+          ║   push code, create PR, post comments, apply labels   ║
+          ║                                                       ║
+          ╚═══════════════════════════════════════════════════════╝
+                │
+                ▼
+          Results applied to external system
+```
+
+**Key invariants visible in this layout:**
+
+- **Credentials never cross the sandbox boundary.** They exist in the agent runner layer; the sandbox and everything inside it operate without them.
+- **Control flows inward (setup) then outward (teardown).** The harness configures the sandbox; the sandbox constrains the runtime. No inner layer can modify an outer layer.
+- **Validation gates output.** When configured, no unvalidated output crosses from runner to external system. Exhausted retries are a hard failure, not a fallback.
+- **The sandbox is ephemeral.** Created per-run, destroyed after extraction. No state carries between runs.
+
+### MVP embodiment: GitHub + GitHub Actions + OpenShell + Claude Code
+
+The same wrapping structure, with each layer mapped to its concrete technology.
+
+```
+GitHub event ──► SHIM WORKFLOW (fullsend.yml in enrolled repo)
+                 Evaluates dispatch conditions (event type, labels, /slash commands).
+                 Sends workflow_dispatch to .fullsend repo via FULLSEND_DISPATCH_TOKEN.
+                       │
+                       ▼
+                 ╔═══════════════════════════════════════════════════════════════╗
+                 ║ GITHUB ACTIONS JOB (.fullsend repo, e.g. code.yml)            ║
+                 ║                                                               ║
+                 ║ Validates source repo is enrolled in config.yaml.             ║
+                 ║ Generates scoped GitHub App tokens:                           ║
+                 ║   read-only token → enters sandbox (clone, read issues)       ║
+                 ║   read-write token → stays on runner (push, create PR)        ║
+                 ║ Checks out .fullsend repo + target repo.                      ║
+                 ║                                                               ║
+                 ║ ┌───────────────────────────────────────────────────────────┐ ║
+                 ║ │ FULLSEND CLI (fullsend run code)                          │ ║
+                 ║ │                                                           │ ║
+                 ║ │ Loads harness/code.yaml:                                  │ ║
+                 ║ │   agent: agents/code.md                                   │ ║
+                 ║ │   image: ghcr.io/fullsend-ai/fullsend-code:latest         │ ║
+                 ║ │   policy: policies/code.yaml                              │ ║
+                 ║ │   skills: [skills/code-implementation]                    │ ║
+                 ║ │   pre_script: scripts/pre-code.sh                         │ ║
+                 ║ │   post_script: scripts/post-code.sh                       │ ║
+                 ║ │                                                           │ ║
+                 ║ │ Pre-script: validates ISSUE_NUMBER, REPO_FULL_NAME,       │ ║
+                 ║ │ URL consistency.                                          │ ║
+                 ║ │                                                           │ ║
+                 ║ │ ┌───────────────────────────────────────────────────────┐ │ ║
+                 ║ │ │ OPENSHELL SANDBOX                                     │ │ ║
+                 ║ │ │                                                       │ │ ║
+                 ║ │ │ Created with --from image, --policy code.yaml.        │ │ ║
+                 ║ │ │ Bootstrapped via SCP/SSH:                             │ │ ║
+                 ║ │ │   agent def    → /tmp/claude-config/agents/           │ │ ║
+                 ║ │ │   skills       → /tmp/claude-config/skills/           │ │ ║
+                 ║ │ │   .env, host files (GCP creds), security hooks        │ │ ║
+                 ║ │ │   target repo  → /tmp/workspace/target-repo/          │ │ ║
+                 ║ │ │                                                       │ │ ║
+                 ║ │ │ Network policy enforced (L7, per-binary):             │ │ ║
+                 ║ │ │   Vertex AI     → claude, node only                   │ │ ║
+                 ║ │ │   GitHub API    → gh, git only                        │ │ ║
+                 ║ │ │   Pkg registries → npm, pip, go                       │ │ ║
+                 ║ │ │                                                       │ │ ║
+                 ║ │ │ Pre-agent scan: fullsend scan context                 │ │ ║
+                 ║ │ │ (injection detection on CLAUDE.md, AGENTS.md, etc.)   │ │ ║
+                 ║ │ │                                                       │ │ ║
+                 ║ │ │ ┌───────────────────────────────────────────────────┐ │ │ ║
+                 ║ │ │ │ CLAUDE CODE (claude --agent code)                 │ │ │ ║
+                 ║ │ │ │                                                   │ │ │ ║
+                 ║ │ │ │ Tool-use loop:                                    │ │ │ ║
+                 ║ │ │ │   read files, edit code, run tests, iterate       │ │ │ ║
+                 ║ │ │ │                                                   │ │ │ ║
+                 ║ │ │ │ Model: Opus (via Vertex AI)                       │ │ │ ║
+                 ║ │ │ │ Security hooks active: Tirith, SSRF, secret scan  │ │ │ ║
+                 ║ │ │ │ No credentials in environment.                    │ │ │ ║
+                 ║ │ │ │                                                   │ │ │ ║
+                 ║ │ │ │ Produces: modified repo, output artifacts         │ │ │ ║
+                 ║ │ │ └───────────────────────────────────────────────────┘ │ │ ║
+                 ║ │ │                                                       │ │ ║
+                 ║ │ └───────────────────────────────────────────────────────┘ │ ║
+                 ║ │                                                           │ ║
+                 ║ │ Extracts from destroyed sandbox:                          │ ║
+                 ║ │   /tmp/workspace/output/, JSONL transcripts,              │ ║
+                 ║ │   rsync repo back (--no-links, exclude .git/hooks/)       │ ║
+                 ║ │                                                           │ ║
+                 ║ │ Post-agent secret scan (redact from extracted output).    │ ║
+                 ║ │                                                           │ ║
+                 ║ │ Post-script (scripts/post-code.sh, with PUSH_TOKEN):      │ ║
+                 ║ │   1. Verify feature branch (not main/master)              │ ║
+                 ║ │   2. Protected-path check                                 │ ║
+                 ║ │   3. gitleaks secret scan                                 │ ║
+                 ║ │   4. pre-commit hooks                                     │ ║
+                 ║ │   5. git push --force-with-lease                          │ ║
+                 ║ │   6. Create/update PR with ready-for-review label         │ ║
+                 ║ │                                                           │ ║
+                 ║ └───────────────────────────────────────────────────────────┘ ║
+                 ║                                                               ║
+                 ║ Upload artifacts (fullsend-code)                              ║
+                 ╚═══════════════════════════════════════════════════════════════╝
+                       │
+                       ▼
+                 Branch pushed, PR created with ready-for-review label
+```
+
+**Layer mapping (abstract → MVP):**
+
+| Abstract layer | MVP technology | ADR |
+|---|---|---|
+| Dispatcher | Shim workflow (`fullsend.yml`) in enrolled repo → `workflow_dispatch` to `.fullsend` | [ADR 0008](ADRs/0008-workflow-dispatch-for-cross-repo-dispatch.md) |
+| Agent runner | GitHub Actions job → `fullsend run` CLI (via `.github/actions/fullsend` composite action) | |
+| Harness store | YAML files in `.fullsend/harness/` (e.g. `code.yaml`, `triage.yaml`) | |
+| Sandbox | OpenShell with per-agent L7 network policies (endpoint + binary restrictions) | |
+| Agent runtime | Claude Code (`claude --agent --dangerously-skip-permissions`) | |
+| Sandbox image | `ghcr.io/fullsend-ai/fullsend-code:latest` (pre-built with tools, runtimes, security scanners) | |
+| Credential isolation | Read-only GitHub App token inside sandbox; write token only in post-script | [ADR 0017](ADRs/0017-credential-isolation-for-sandboxed-agents.md) |
+| Validation | Host-side schema validation script with retry loop | [ADR 0022](ADRs/0022-harness-level-output-schema-enforcement.md) |
+| Post-script | `post-code.sh`: protected-path check, gitleaks scan, pre-commit, push, PR creation | |
+| Observability | JSONL transcript extraction, security findings, trace ID correlation | [ADR 0021](ADRs/0021-jsonl-reasoning-trace-exposure.md) |
 
 ## Repository layout (design workspace vs. web delivery)
 

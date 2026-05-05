@@ -111,6 +111,28 @@ func TestDispatchWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "skipped")
 }
 
+func TestShimDispatchCodeExcludesPRContext(t *testing.T) {
+	content, err := FullsendRepoFile("templates/shim-workflow.yaml")
+	require.NoError(t, err)
+	s := string(content)
+
+	// The guard must appear between "dispatch-code:" and the next job
+	// definition, not just anywhere in the file. See #533.
+	codeIdx := strings.Index(s, "dispatch-code:")
+	require.NotEqual(t, -1, codeIdx, "dispatch-code job must exist")
+
+	// Find the next job after dispatch-code (next top-level "  dispatch-" or end of file).
+	rest := s[codeIdx+len("dispatch-code:"):]
+	nextJob := strings.Index(rest, "\n  dispatch-")
+	if nextJob == -1 {
+		nextJob = len(rest)
+	}
+	codeBlock := rest[:nextJob]
+
+	assert.Contains(t, codeBlock, "!github.event.issue.pull_request",
+		"dispatch-code job must exclude PR contexts with !github.event.issue.pull_request guard")
+}
+
 func TestWalkFullsendRepo(t *testing.T) {
 	var paths []string
 	err := WalkFullsendRepo(func(path string, content []byte) error {
@@ -222,6 +244,9 @@ func TestSetupGcpActionContent(t *testing.T) {
 	assert.Contains(t, s, "gcp_wif_provider:")
 	assert.Contains(t, s, "gcp_wif_sa_email:")
 	assert.Contains(t, s, "gcp_sa_key_json:")
+	// Verify pre-mask step
+	assert.Contains(t, s, "Pre-mask GCP credential file path")
+	assert.Contains(t, s, "GITHUB_WORKSPACE}/gha-creds-")
 	// Verify WIF authentication path
 	assert.Contains(t, s, "if: inputs.gcp_auth_mode == 'wif'")
 	assert.Contains(t, s, "google-github-actions/auth@v3")

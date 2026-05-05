@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/fullsend-ai/fullsend/internal/envfile"
 	"github.com/fullsend-ai/fullsend/internal/harness"
 	"github.com/fullsend-ai/fullsend/internal/sandbox"
 	"github.com/fullsend-ai/fullsend/internal/security"
@@ -22,6 +23,8 @@ func newRunCmd() *cobra.Command {
 	var fullsendDir string
 	var outputBase string
 	var targetRepo string
+	var fullsendBinary string
+	var envFiles []string
 
 	cmd := &cobra.Command{
 		Use:   "run <agent-name>",
@@ -31,24 +34,33 @@ func newRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentName := args[0]
 			printer := ui.New(os.Stdout)
-			return runAgent(agentName, fullsendDir, outputBase, targetRepo, printer)
+			return runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary, envFiles, printer)
 		},
 	}
 
 	cmd.Flags().StringVar(&fullsendDir, "fullsend-dir", "", "base directory containing the .fullsend layout")
 	cmd.Flags().StringVar(&outputBase, "output-dir", "", "base directory for run output (default: /tmp/fullsend)")
 	cmd.Flags().StringVar(&targetRepo, "target-repo", "", "path to the target repository")
+	cmd.Flags().StringVar(&fullsendBinary, "fullsend-binary", "", "path to a Linux fullsend binary to copy into the sandbox (default: current executable)")
+	cmd.Flags().StringArrayVar(&envFiles, "env-file", nil, "load environment variables from a dotenv file (repeatable)")
 	_ = cmd.MarkFlagRequired("fullsend-dir")
 	_ = cmd.MarkFlagRequired("target-repo")
 
 	return cmd
 }
 
-func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui.Printer) (runErr error) {
+func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary string, envFiles []string, printer *ui.Printer) (runErr error) {
 	printer.Banner()
 	printer.Blank()
 	printer.Header("Running agent: " + agentName)
 	printer.Blank()
+
+	// 0. Load env files before anything else so vars are available for harness expansion.
+	for _, ef := range envFiles {
+		if err := envfile.Load(ef); err != nil {
+			return fmt.Errorf("loading env file %s: %w", ef, err)
+		}
+	}
 
 	// 1. Resolve and load harness.
 	harnessPath := filepath.Join(fullsendDir, "harness", agentName+".yaml")
@@ -68,6 +80,11 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 	if err := h.ResolveRelativeTo(absFullsendDir); err != nil {
 		printer.StepFail("Path validation failed")
 		return fmt.Errorf("resolving paths: %w", err)
+	}
+
+	if resolved, overridden := applySandboxImageOverride(h.Image); overridden {
+		printer.StepInfo(fmt.Sprintf("Image override via FULLSEND_SANDBOX_IMAGE: %s -> %s", h.Image, resolved))
+		h.Image = resolved
 	}
 
 	// Expand env vars in runner_env values. FULLSEND_DIR is injected so
@@ -239,6 +256,9 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 		}()
 	}
 	defer func() {
+		// Collect OpenShell logs before sandbox deletion for post-mortem debugging.
+		collectOpenshellLogs(sandboxName, runDir, printer)
+
 		cleanupStart := time.Now()
 		printer.StepStart("Cleaning up sandbox")
 		if err := sandbox.Delete(sandboxName); err != nil {
@@ -280,7 +300,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 	// 7. Bootstrap sandbox.
 	bootstrapStart := time.Now()
 	printer.StepStart("Bootstrapping sandbox")
-	if err := bootstrapSandbox(sshConfigPath, sandboxName, repoDir, h); err != nil {
+	if err := bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary, h); err != nil {
 		printer.StepFail("Failed to bootstrap sandbox")
 		return err
 	}
@@ -548,7 +568,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo string, printer *ui
 	return nil
 }
 
-func bootstrapSandbox(sshConfigPath, sandboxName, repoDir string, h *harness.Harness) error {
+func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string, h *harness.Harness) error {
 	// Create workspace structure and Claude config dir for transcripts.
 	// Agent and skill definitions go in CLAUDE_CONFIG_DIR so `claude --agent`
 	// finds them regardless of the repo's own .claude/ directory. When
@@ -562,12 +582,16 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir string, h *harness.Har
 	// Copy fullsend binary into sandbox so `fullsend scan context` works.
 	// The pre-agent security scan runs inside the sandbox and needs the
 	// fullsend CLI to scan context files.
-	fullsendBinary, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("finding fullsend executable: %w", err)
+	localBinary := fullsendBinary
+	if localBinary == "" {
+		var err error
+		localBinary, err = os.Executable()
+		if err != nil {
+			return fmt.Errorf("finding fullsend executable: %w", err)
+		}
 	}
 	remoteBinary := fmt.Sprintf("%s/bin/fullsend", sandbox.SandboxWorkspace)
-	if err := sandbox.SCP(sshConfigPath, sandboxName, fullsendBinary, remoteBinary); err != nil {
+	if err := sandbox.SCP(sshConfigPath, sandboxName, localBinary, remoteBinary); err != nil {
 		return fmt.Errorf("copying fullsend binary to sandbox: %w", err)
 	}
 	chmodCmd := fmt.Sprintf("chmod +x %s", remoteBinary)
@@ -901,6 +925,50 @@ func buildScanContextCommand(repoDir, traceID string) string {
 	)
 }
 
+// collectOpenshellLogs extracts OpenShell logs (sandbox and gateway sources)
+// into <runDir>/logs/ before sandbox deletion. Failures are warned but never
+// block the run — log collection is best-effort.
+func collectOpenshellLogs(sandboxName, runDir string, printer *ui.Printer) {
+	if runDir == "" {
+		return
+	}
+
+	logsDir := filepath.Join(runDir, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		printer.StepWarn("Failed to create logs directory: " + err.Error())
+		return
+	}
+
+	printer.StepStart("Collecting OpenShell logs")
+	collected := 0
+
+	sources := []struct {
+		name string
+		file string
+	}{
+		{"sandbox", "openshell-sandbox.log"},
+		{"gateway", "openshell-gateway.log"},
+	}
+
+	for _, src := range sources {
+		output, err := sandbox.CollectLogs(sandboxName, src.name)
+		if err != nil {
+			printer.StepWarn(fmt.Sprintf("Could not collect %s logs: %s", src.name, err.Error()))
+			continue
+		}
+		logPath := filepath.Join(logsDir, src.file)
+		if err := os.WriteFile(logPath, []byte(output), 0o644); err != nil {
+			printer.StepWarn(fmt.Sprintf("Could not write %s: %s", src.file, err.Error()))
+			continue
+		}
+		collected++
+	}
+
+	if collected > 0 {
+		printer.StepDone(fmt.Sprintf("Collected %d OpenShell log source(s) to %s", collected, logsDir))
+	}
+}
+
 // relOrAbs returns path relative to base, falling back to the absolute path if Rel fails.
 func relOrAbs(base, path string) string {
 	rel, err := filepath.Rel(base, path)
@@ -1164,4 +1232,13 @@ func injectTraceID(sshConfigPath, sandboxName, traceID string) error {
 	cmd := fmt.Sprintf("echo 'export FULLSEND_TRACE_ID=%s' >> %s/.env", traceID, sandbox.SandboxWorkspace)
 	_, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, cmd, 10*time.Second)
 	return err
+}
+
+// applySandboxImageOverride replaces image with the FULLSEND_SANDBOX_IMAGE env
+// var value when set. Returns the resolved image and whether an override was applied.
+func applySandboxImageOverride(image string) (string, bool) {
+	if override := os.Getenv("FULLSEND_SANDBOX_IMAGE"); override != "" {
+		return override, true
+	}
+	return image, false
 }

@@ -201,7 +201,7 @@ func TestSubmitFormalReview_CreatesAndMinimizesStale(t *testing.T) {
 	}
 
 	printer := ui.New(io.Discard)
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "abc123def456", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "abc123def456", "", false, printer)
 	require.NoError(t, err)
 
 	require.Len(t, fc.CreatedReviews, 1)
@@ -219,7 +219,7 @@ func TestSubmitFormalReview_DryRun(t *testing.T) {
 	fc := forge.NewFakeClient()
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", true, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", true, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.CreatedReviews)
 }
@@ -228,7 +228,7 @@ func TestSubmitFormalReview_UnknownAction(t *testing.T) {
 	fc := forge.NewFakeClient()
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "unknown-action", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "unknown-action", "", "", false, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.CreatedReviews)
 }
@@ -327,11 +327,9 @@ func TestSubmitFormalReview_PassesCommitSHA(t *testing.T) {
 	fc.AuthenticatedUser = "fullsend-bot"
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "deadbeef1234", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "deadbeef1234", "", false, printer)
 	require.NoError(t, err)
-	require.Len(t, fc.CreatedReviews, 1)
-	assert.Equal(t, "COMMENT", fc.CreatedReviews[0].Event)
-	assert.Equal(t, "deadbeef1234", fc.CreatedReviews[0].CommitSHA)
+	assert.Empty(t, fc.CreatedReviews, "COMMENT events should skip formal review")
 }
 
 func TestSubmitFormalReview_EmptyCommitSHA(t *testing.T) {
@@ -339,8 +337,55 @@ func TestSubmitFormalReview_EmptyCommitSHA(t *testing.T) {
 	fc.AuthenticatedUser = "fullsend-bot"
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", false, printer)
 	require.NoError(t, err)
 	require.Len(t, fc.CreatedReviews, 1)
 	assert.Equal(t, "", fc.CreatedReviews[0].CommitSHA)
+}
+
+func TestSubmitFormalReview_ApproveEmptyBody(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	printer := ui.New(io.Discard)
+
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", false, printer)
+	require.NoError(t, err)
+	require.Len(t, fc.CreatedReviews, 1)
+	assert.Empty(t, fc.CreatedReviews[0].Body, "APPROVE body should be empty to avoid duplicate notifications")
+}
+
+func TestSubmitFormalReview_RequestChangesIncludesCommentURL(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	printer := ui.New(io.Discard)
+
+	commentURL := "https://github.com/acme/repo/pull/1#issuecomment-42"
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "request-changes", "", commentURL, false, printer)
+	require.NoError(t, err)
+	require.Len(t, fc.CreatedReviews, 1)
+	assert.Equal(t, "REQUEST_CHANGES", fc.CreatedReviews[0].Event)
+	assert.Contains(t, fc.CreatedReviews[0].Body, commentURL)
+	assert.Contains(t, fc.CreatedReviews[0].Body, "[review comment]")
+}
+
+func TestSubmitFormalReview_RequestChangesFallbackWithoutURL(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	printer := ui.New(io.Discard)
+
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "request-changes", "", "", false, printer)
+	require.NoError(t, err)
+	require.Len(t, fc.CreatedReviews, 1)
+	assert.Equal(t, "REQUEST_CHANGES", fc.CreatedReviews[0].Event)
+	assert.Equal(t, "See the review comment above for full details.", fc.CreatedReviews[0].Body)
+}
+
+func TestSubmitFormalReview_CommentSkipped(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	printer := ui.New(io.Discard)
+
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "", "", false, printer)
+	require.NoError(t, err)
+	assert.Empty(t, fc.CreatedReviews, "COMMENT events should skip formal review")
 }

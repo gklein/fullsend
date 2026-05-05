@@ -580,6 +580,7 @@ func (f *FakeClient) CreateIssueComment(_ context.Context, owner, repo string, n
 	comment := IssueComment{
 		ID:        f.commentCounter,
 		NodeID:    fmt.Sprintf("IC_fake_%d", f.commentCounter),
+		HTMLURL:   fmt.Sprintf("https://github.com/%s/%s/issues/%d#issuecomment-%d", owner, repo, number, f.commentCounter),
 		Body:      body,
 		Author:    f.AuthenticatedUser,
 		CreatedAt: "2026-01-01T00:00:00Z",
@@ -798,4 +799,18 @@ func (f *FakeClient) SetOrgSecretRepos(_ context.Context, org, name string, repo
 	}
 	f.OrgSecretRepoIDs[org+"/"+name] = repoIDs
 	return nil
+}
+
+func (f *FakeClient) GetOrgSecretRepos(_ context.Context, org, name string) ([]int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("GetOrgSecretRepos"); e != nil {
+		return nil, e
+	}
+
+	if f.OrgSecretRepoIDs == nil {
+		return nil, nil
+	}
+	return f.OrgSecretRepoIDs[org+"/"+name], nil
 }
