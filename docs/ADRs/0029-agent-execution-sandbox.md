@@ -4,7 +4,6 @@ status: Proposed
 relates_to:
   - agent-infrastructure
   - agent-execution-environment
-  - gitlab-implementation
 topics:
   - sandbox
   - container
@@ -23,7 +22,7 @@ Proposed
 
 ## Context
 
-Fullsend agents execute within isolated sandboxes that enforce security boundaries: filesystem access control, network policy enforcement, and credential isolation (ADR-0017, ADR-0025). The current implementation uses OpenShell with per-agent L7 network policies and runs on GitHub Actions runners. With GitLab support (ADR-0028) now under development, the execution architecture needs to work on both GitHub Actions and GitLab CI runners.
+Fullsend agents execute within isolated sandboxes that enforce security boundaries: filesystem access control, network policy enforcement, and credential isolation (ADR-0017, ADR-0025). The current implementation uses OpenShell with per-agent L7 network policies and runs on GitHub Actions runners. With GitLab support now under development (proposed in PR #601), the execution architecture needs to work on both GitHub Actions and GitLab CI runners.
 
 The sandbox architecture has multiple concerns that need to be resolved together:
 
@@ -33,7 +32,7 @@ The sandbox architecture has multiple concerns that need to be resolved together
 4. **Resource limits**: CPU, memory, and timeout constraints need platform-independent expression
 5. **OpenShell integration**: The sandbox runtime (OpenShell gateway + L7 policies + providers) must work in all executor environments
 
-The [gitlab-implementation.md](../problems/gitlab-implementation.md) open questions section explicitly deferred this decision: "The agent execution environment is orthogonal to the CI/CD dispatch architecture. GitLab runner configuration, sandbox isolation, and compute architecture should be documented separately."
+The GitLab support design (PR #601) explicitly deferred this decision: "The agent execution environment is orthogonal to the CI/CD dispatch architecture. GitLab runner configuration, sandbox isolation, and compute architecture should be documented separately."
 
 The forge abstraction (ADR-0005) keeps dispatch logic platform-neutral. This ADR addresses what happens *after* the dispatch pipeline triggers an agent job: how the agent actually executes.
 
@@ -285,7 +284,6 @@ The implementation document is structured for iterative evolution as the sandbox
 - ADR-0005: Forge abstraction layer (dispatch is platform-neutral, execution must also be)
 - ADR-0017: Credential isolation for sandboxed agents (zero credentials in sandbox)
 - ADR-0025: Provider credential delivery (OpenShell providers for credential injection)
-- ADR-0028: GitLab support architecture (dispatch pipelines, need execution layer)
+- PR #601: GitLab support architecture (dispatch pipelines, explicitly deferred agent execution environment)
 - [agent-infrastructure.md](../problems/agent-infrastructure.md): Infrastructure layer exploration, SIG Agent Sandbox evaluation
-- [gitlab-implementation.md](../problems/gitlab-implementation.md): Explicitly deferred agent execution environment
 - [OpenShell](https://github.com/NVIDIA/OpenShell): Sandbox runtime with L7 network policy enforcement

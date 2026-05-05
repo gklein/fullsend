@@ -25,6 +25,15 @@ The agent sandbox container image is the primary artifact that defines the execu
 The Dockerfile is organized in layers to optimize for cache reuse and minimize image size:
 
 ```dockerfile
+# Builder stage: Compile fullsend CLI binary
+FROM golang:1.23 AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ cmd/
+COPY internal/ internal/
+RUN CGO_ENABLED=0 GOOS=linux go build -o fullsend ./cmd/fullsend
+
 # Base: Ubuntu 22.04 LTS (OpenShell requires glibc)
 FROM ubuntu:22.04 AS base
 
@@ -273,10 +282,12 @@ jobs:
     timeout-minutes: 15  # Maximum 15 minutes per agent run
     steps:
       - name: Run agent
-        uses: docker/run@v1
-        with:
-          image: ghcr.io/fullsend-ai/agent-sandbox:v1.2.3
-          options: --memory=4g --cpus=1.5  # Container resource limits
+        run: |
+          docker run --rm \
+            --memory=4g --cpus=1.5 \
+            -e AGENT_NAME=${{ inputs.agent_name }} \
+            -e EVENT_PAYLOAD=${{ inputs.event_payload }} \
+            ghcr.io/fullsend-ai/agent-sandbox:v1.2.3
 ```
 
 ### GitLab CI (Docker Executor)
@@ -383,7 +394,7 @@ Run the container as a non-root user inside a user namespace. The user appears a
 
 Replace iptables-based L7 enforcement with eBPF programs that hook into the network stack without requiring privileged containers.
 
-**Status**: Not yet implemented in OpenShell. Upstream feature request: [NVIDIA/OpenShell#xyz](https://github.com/NVIDIA/OpenShell/issues/xyz) (placeholder, actual issue TBD).
+**Status**: Not yet implemented in OpenShell. This would require an upstream feature request for eBPF-based L7 enforcement.
 
 #### Accept Privileged Requirement
 
@@ -454,8 +465,9 @@ sudo gitlab-runner register \
   --executor docker \
   --description "fullsend-agent-runner" \
   --docker-image "ghcr.io/fullsend-ai/agent-sandbox:v1.2.3" \
-  --docker-privileged \
-  --docker-volumes "/var/run/docker.sock:/var/run/docker.sock"
+  --docker-privileged
+# Note: --docker-privileged is required for OpenShell network namespace manipulation.
+# Do NOT mount /var/run/docker.sock as this would bypass sandbox isolation.
 ```
 
 **Configure resource limits** (`/etc/gitlab-runner/config.toml`):
@@ -510,6 +522,9 @@ The agent sandbox image is public on ghcr.io, so no authentication is required f
 run-agent:
   image: registry.example.com/fullsend/agent-sandbox:v1.2.3
   before_script:
+    # Registry authentication for pulling additional images during agent execution.
+    # The job's base image is already pulled by the runner before this script runs.
+    # This is only needed if agents pull additional images (e.g., for testing).
     - echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
   script:
     - fullsend run $AGENT_NAME
@@ -631,9 +646,7 @@ The signature is stored in the container registry alongside the image. No privat
       ghcr.io/fullsend-ai/agent-sandbox:${{ inputs.image_tag }}
 
 - name: Run agent
-  uses: docker/run@v1
-  with:
-    image: ghcr.io/fullsend-ai/agent-sandbox:${{ inputs.image_tag }}
+  run: docker run --rm ghcr.io/fullsend-ai/agent-sandbox:${{ inputs.image_tag }}
 ```
 
 **GitLab CI:**
