@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -151,4 +155,159 @@ func TestEnvToList_Sorted(t *testing.T) {
 	assert.Equal(t, "A_VAR=a", list[0])
 	assert.Equal(t, "M_VAR=m", list[1])
 	assert.Equal(t, "Z_VAR=z", list[2])
+}
+
+func TestNeedsCrossCompilation(t *testing.T) {
+	result := needsCrossCompilation()
+	if runtime.GOOS == "linux" {
+		assert.False(t, result, "should not need cross-compilation on Linux")
+	} else {
+		assert.True(t, result, "should need cross-compilation on %s", runtime.GOOS)
+	}
+}
+
+func TestSandboxArch_Default(t *testing.T) {
+	t.Setenv("FULLSEND_SANDBOX_ARCH", "")
+	assert.Equal(t, runtime.GOARCH, sandboxArch())
+}
+
+func TestSandboxArch_Override(t *testing.T) {
+	t.Setenv("FULLSEND_SANDBOX_ARCH", "amd64")
+	assert.Equal(t, "amd64", sandboxArch())
+}
+
+func TestSandboxArch_InvalidFallsBack(t *testing.T) {
+	t.Setenv("FULLSEND_SANDBOX_ARCH", "../../etc/passwd")
+	assert.Equal(t, runtime.GOARCH, sandboxArch())
+}
+
+func TestValidateLinuxBinary_RejectsNonELF(t *testing.T) {
+	// A plain text file should be rejected.
+	tmp := filepath.Join(t.TempDir(), "not-elf")
+	require.NoError(t, os.WriteFile(tmp, []byte("#!/bin/sh\necho hello"), 0o755))
+	err := validateLinuxBinary(tmp)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a valid ELF binary")
+}
+
+func TestValidateLinuxBinary_RejectsMissing(t *testing.T) {
+	err := validateLinuxBinary("/tmp/nonexistent-fullsend-binary-12345")
+	require.Error(t, err)
+}
+
+func TestValidateLinuxBinary_AcceptsHostBinary(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("host binary is only ELF on Linux")
+	}
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	assert.NoError(t, validateLinuxBinary(exe))
+}
+
+func TestIsReleasedVersion(t *testing.T) {
+	tests := []struct {
+		version  string
+		expected bool
+	}{
+		{"0.4.0", true},
+		{"v0.4.0", true},
+		{"1.0.0", true},
+		{"dev", false},
+		{"", false},
+		{"0.4.0-3-gabcdef", false},
+		{"0.4.0-vendored", false},
+		{"0.4.0-crosscompiled", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isReleasedVersion(tt.version), "version=%q", tt.version)
+		})
+	}
+}
+
+func TestExtractFullsendFromTarGz_PathTraversal(t *testing.T) {
+	// Create a tar.gz with a path-traversal entry named "../../../tmp/fullsend".
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	content := []byte("malicious binary content")
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "../../../tmp/fullsend",
+		Size:     int64(len(content)),
+		Mode:     0o755,
+		Typeflag: tar.TypeReg,
+	}))
+	_, err := tw.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	destPath := filepath.Join(t.TempDir(), "fullsend")
+	err = extractFullsendFromTarGz(&buf, destPath)
+	assert.Error(t, err, "should reject traversal entry and report binary not found")
+	assert.Contains(t, err.Error(), "not found in archive")
+}
+
+func TestExtractFullsendFromTarGz_ValidEntry(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	content := []byte("valid binary content")
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "fullsend_0.4.0_linux_amd64/fullsend",
+		Size:     int64(len(content)),
+		Mode:     0o755,
+		Typeflag: tar.TypeReg,
+	}))
+	_, err := tw.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	destPath := filepath.Join(t.TempDir(), "fullsend")
+	err = extractFullsendFromTarGz(&buf, destPath)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(destPath)
+	require.NoError(t, err)
+	assert.Equal(t, "valid binary content", string(data))
+}
+
+func TestCrossCompileFullsend_ProducesBinary(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("cross-compilation test only meaningful on non-Linux hosts")
+	}
+	if testing.Short() {
+		t.Skip("skipping cross-compilation in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	binPath := filepath.Join(tmpDir, "fullsend")
+	err := crossCompileFullsend(runtime.GOARCH, binPath)
+	require.NoError(t, err)
+
+	info, err := os.Stat(binPath)
+	require.NoError(t, err)
+	assert.True(t, info.Size() > 0, "binary should be non-empty")
+}
+
+func TestResolveLinuxBinary_Download(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping download test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	binPath := filepath.Join(tmpDir, "fullsend")
+	err := downloadReleaseBinary("0.4.0", "amd64", binPath)
+	require.NoError(t, err)
+
+	info, err := os.Stat(binPath)
+	require.NoError(t, err)
+	assert.True(t, info.Size() > 0, "downloaded binary should be non-empty")
+
+	// Verify the downloaded artifact is a valid Linux ELF for the requested arch.
+	t.Setenv("FULLSEND_SANDBOX_ARCH", "amd64")
+	assert.NoError(t, validateLinuxBinary(binPath), "downloaded binary should be a valid Linux/amd64 ELF")
 }
