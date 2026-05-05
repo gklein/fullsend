@@ -233,10 +233,13 @@ dispatch:
       fi
 
       # Validate source project is enrolled
-      PROJECT_NAME="${SOURCE_PROJECT##*/}"
-      ENABLED=$(yq ".repos.\"$PROJECT_NAME\".enabled" config.yaml)
+      # Use full project path to avoid collisions (group1/myproject vs group2/myproject)
+      # For nested groups (group/subgroup/project), config.yaml uses dot-separated keys
+      # (e.g., repos."group.subgroup.project".enabled)
+      CONFIG_KEY=$(echo "${SOURCE_PROJECT}" | tr '/' '.')
+      ENABLED=$(yq ".repos.\"${CONFIG_KEY}\".enabled" config.yaml)
       if [ "$ENABLED" != "true" ]; then
-        echo "ERROR: Project not enrolled"
+        echo "ERROR: Project not enrolled: ${SOURCE_PROJECT}"
         exit 1
       fi
 
@@ -274,7 +277,9 @@ dispatch:
 - The token itself authorizes triggering pipelines only in the `.fullsend` project
 - Stored as group-level CI/CD variable `FULLSEND_DISPATCH_TOKEN` (group-level for visibility to all enrolled repos' shim workflows; the token's authorization scope is still limited to `.fullsend`)
 
-**Security consideration - dispatch token exposure**: The group-level `FULLSEND_DISPATCH_TOKEN` is visible to CI/CD jobs in all enrolled repos. A malicious MR could exfiltrate this token (e.g., `curl` it to an external endpoint) and use it to trigger arbitrary pipelines in `.fullsend` with crafted `STAGE` and `EVENT_PAYLOAD` variables. The `workflow:rules` guard (`CI_COMMIT_REF_PROTECTED == "true"`) in `dispatch.yml` prevents execution on unprotected branches, but this relies on correct configuration. This is similar to GitHub's exposure of `FULLSEND_DISPATCH_TOKEN` as an org-level Actions secret (ADR-0008), but GitLab's trigger API accepts arbitrary variables whereas GitHub's `workflow_dispatch` only uses workflows already committed to the target ref. **Mitigation**: Mark `FULLSEND_DISPATCH_TOKEN` as a protected variable (only exposed to pipelines running on protected branches) to prevent MR code from reading it. However, this breaks the webhook translation pattern (option 1 above) which needs the token in enrolled repo pipelines. Alternative: Use webhook secret tokens for authentication instead of the dispatch token (enrolled repos authenticate via webhook secret, `.fullsend` validates and then triggers child pipelines without exposing the dispatch token to enrolled repos).
+**Security consideration - dispatch token exposure**: The webhook-based architecture (chosen approach, see Section 4) avoids exposing `FULLSEND_DISPATCH_TOKEN` to enrolled repos entirely. Enrolled repos send webhooks with webhook secret tokens for authentication, and the `.fullsend` dispatch pipeline uses its internal `FULLSEND_DISPATCH_TOKEN` to trigger child pipelines — enrolled repo code never sees the dispatch token. This is a key security advantage of the webhook approach over alternatives like in-repo shim workflows. 
+
+**Alternative architecture note**: If using in-repo shim workflows (not the chosen approach), the group-level `FULLSEND_DISPATCH_TOKEN` would be visible to all enrolled repo pipelines, creating an exfiltration risk. Mitigations for that alternative would include: (1) marking `FULLSEND_DISPATCH_TOKEN` as a protected variable (only exposed to protected branch pipelines), or (2) using webhook secret tokens for authentication instead. However, the webhook-based architecture already implements (2) by design, so this exposure concern does not apply to the chosen architecture.
 
 **Dispatch workflow** (`.gitlab/ci/dispatch.yml`):
 ```yaml
@@ -314,10 +319,13 @@ generate-config:
       fi
 
       # Validate source project is enrolled
-      PROJECT_NAME="${SOURCE_PROJECT##*/}"
-      ENABLED=$(yq ".repos.\"$PROJECT_NAME\".enabled" config.yaml)
+      # Use full project path to avoid collisions (group1/myproject vs group2/myproject)
+      # For nested groups (group/subgroup/project), config.yaml uses dot-separated keys
+      # (e.g., repos."group.subgroup.project".enabled)
+      CONFIG_KEY=$(echo "${SOURCE_PROJECT}" | tr '/' '.')
+      ENABLED=$(yq ".repos.\"${CONFIG_KEY}\".enabled" config.yaml)
       if [ "$ENABLED" != "true" ]; then
-        echo "ERROR: Project not enrolled"
+        echo "ERROR: Project not enrolled: ${SOURCE_PROJECT}"
         exit 1
       fi
 
