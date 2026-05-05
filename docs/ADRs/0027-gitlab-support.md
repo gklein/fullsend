@@ -249,7 +249,7 @@ dispatch:
 - `fullsend admin install` creates webhook in enrolled repo via GitLab API
 - Webhook URL: Points to the translation intermediary (serverless function or bridge service) that forwards to `.fullsend` trigger API. See "Webhook-to-trigger API incompatibility" above for translation options.
 - Webhook triggers: Merge Request events, Issue events, Note events
-- Webhook secret token: stored as masked CI/CD variable in `.fullsend` project (e.g., `WEBHOOK_TOKEN_myorg__myrepo` for project `myorg/myrepo`, or `WEBHOOK_TOKEN_my_H_org__my_H_repo` for `my-org/my-repo`), validated by dispatch pipeline after translation
+- Webhook secret token: stored as masked CI/CD variable in `.fullsend` project (variable name: `WEBHOOK_TOKEN_<sha256(project_path)>` for collision-free project identification), validated by dispatch pipeline after translation
 
 **Security properties**:
 - Webhook payload constructed by GitLab, not by MR author code
