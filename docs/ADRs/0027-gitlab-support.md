@@ -267,7 +267,7 @@ dispatch:
 
 **End-to-end flow**: Enrolled repos send webhooks to `.fullsend` project's pipeline trigger endpoint → webhook triggers the dispatch pipeline on `.fullsend` protected `main` branch → dispatch pipeline validates the webhook token and source project → dispatch pipeline scans for stage workflows matching the requested stage → dispatch pipeline generates a child pipeline config and triggers it → child pipeline runs the stage workflow (triage, code, review, or fix) with the event payload and source project context.
 
-**Relationship to Section 4**: Section 4 (Shim Pipeline Security) presents the webhook validation portion of the dispatch pipeline, focusing on the security properties (protected branch execution, token validation). This section presents the complete dispatch pipeline architecture, including the stage fan-out logic. Both sections describe the same `dispatch.yml` pipeline — Section 4 shows the validation front-end, this section shows the full implementation including child pipeline generation.
+**Relationship to Section 4**: Section 4 (Shim Pipeline Security) presents the webhook validation portion of the dispatch pipeline, focusing on the security properties (protected branch execution, token validation). This section presents the complete dispatch pipeline architecture, including the stage fan-out logic. Both sections describe the same `dispatch.yml` pipeline — Section 4 shows the validation front-end, this section shows the full implementation including child pipeline generation. **Implementation note**: The validation logic (SOURCE_PROJECT format check, enrollment check, token validation) appears in both snippets for clarity in this design document. During implementation, this should be extracted into a shared script or bash function to avoid maintenance drift between the two job definitions.
 
 **GitHub**: `workflow_dispatch` API call with input parameters
 **GitLab**: Pipeline trigger API with pipeline variables + child pipelines
@@ -586,6 +586,10 @@ func detectForge(repoURL string) (string, error) {
     host := strings.ToLower(u.Hostname())
 
     // Exact domain matching for known forges
+    // NOTE: HasSuffix for subdomain matching is illustrative only. Production
+    // implementations should use an allowlist (e.g., github.com, ghe.example.com)
+    // or DNS-based validation to prevent attacker-controlled domains like
+    // evil.github.com from being detected as GitHub.
     if host == "github.com" || strings.HasSuffix(host, ".github.com") {
         return "github", nil
     }
