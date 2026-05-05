@@ -1,11 +1,35 @@
 import {
+  formatDocDirHash,
   formatDocHash,
   parseDocHash,
-  type DocHashRoute,
+  type ParsedDocHash,
 } from "./hashRoute";
 
-export function getDocRouteFromWindow(): DocHashRoute | null {
+const LAST_DOC_ROUTE_KEY = "fullsend-docs-last-doc-route";
+
+export function getParsedDocHashFromWindow(): ParsedDocHash | null {
   return parseDocHash(window.location.hash);
+}
+
+/** @deprecated Prefer {@link getParsedDocHashFromWindow}. */
+export function getDocRouteFromWindow(): ParsedDocHash | null {
+  return getParsedDocHashFromWindow();
+}
+
+export function persistLastDocRouteKey(routeKey: string): void {
+  try {
+    sessionStorage.setItem(LAST_DOC_ROUTE_KEY, routeKey);
+  } catch {
+    /* quota or private mode */
+  }
+}
+
+export function readLastDocRouteKey(): string | null {
+  try {
+    return sessionStorage.getItem(LAST_DOC_ROUTE_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export function navigateToRouteKey(
@@ -19,6 +43,10 @@ export function navigateToRouteKey(
   } else {
     location.hash = hash;
   }
+}
+
+export function navigateToDirPath(dirPath: string): void {
+  location.hash = formatDocDirHash(dirPath);
 }
 
 export function defaultRouteKeyFromKeys(keys: string[]): string | null {
