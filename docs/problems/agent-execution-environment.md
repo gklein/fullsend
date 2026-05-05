@@ -188,7 +188,7 @@ OpenShell gateway configuration is embedded in the container image at `/etc/open
 # OpenShell gateway configuration
 api:
   listen: 127.0.0.1:8080  # Gateway API (sandbox creation, policy management)
-  
+
 proxy:
   listen: 0.0.0.0:3128    # HTTP proxy for sandbox egress (L7 policy enforcement)
 
@@ -234,12 +234,12 @@ rules:
   - endpoint: "https://api.github.com/repos/*/*/issues/*"
     methods: [GET]
     binaries: [gh, curl]  # Only gh and curl can call this endpoint
-  
+
   # Allow listing issues
   - endpoint: "https://api.github.com/repos/*/*/issues"
     methods: [GET]
     binaries: [gh, curl]
-  
+
   # Deny all other GitHub API calls
   - endpoint: "https://api.github.com/**"
     methods: [GET, POST, PUT, PATCH, DELETE]
@@ -299,7 +299,7 @@ GitLab runner with Docker executor supports container resource limits via runner
 [[runners]]
   name = "fullsend-agent-runner"
   executor = "docker"
-  
+
   [runners.docker]
     image = "ghcr.io/fullsend-ai/agent-sandbox:v1.2.3"
     privileged = true  # Required for OpenShell network namespace manipulation
@@ -327,17 +327,17 @@ Kubernetes executor uses pod resource requests and limits:
 [[runners]]
   name = "fullsend-k8s-runner"
   executor = "kubernetes"
-  
+
   [runners.kubernetes]
     image = "ghcr.io/fullsend-ai/agent-sandbox:v1.2.3"
     namespace = "fullsend-agents"
     privileged = true
-    
+
     cpu_request = "1"
     cpu_limit = "1.5"
     memory_request = "2Gi"
     memory_limit = "4Gi"
-    
+
     service_cpu_request = "0.1"
     service_memory_request = "128Mi"
 ```
