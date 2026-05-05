@@ -1,11 +1,34 @@
 import { challengeS256, randomVerifier } from "./pkce";
 import { refreshSession } from "./session";
 import { obtainTurnstileToken } from "./turnstile";
-import { clearSession, saveToken } from "./tokenStore";
+import { normalizeSlug } from "../orgs/installationOrgRows";
+import {
+  clearSession,
+  persistGithubAppSlugFromOAuth,
+  saveToken,
+} from "./tokenStore";
 
 const PKCE_VERIFIER_KEY = "fullsend_admin_pkce_verifier";
 const OAUTH_STATE_KEY = "fullsend_admin_oauth_state";
 const OAUTH_DOC_HANDOFF_KEY = "fullsend_admin_oauth_doc_handoff";
+/** Hash route to restore after successful OAuth (e.g. `#/orgs`). */
+const INTENDED_HASH_KEY = "fullsend_admin_intended_hash";
+
+/** Returned when `AbortSignal` aborts during `completeGithubOAuthFromHandoff` (user chose another account). */
+export const SIGNING_IN_CANCELLED_MESSAGE =
+  "Signing in was cancelled." as const;
+
+/** Clears OAuth-related `sessionStorage` so a cancelled sign-in can restart cleanly. */
+export function clearSigningInBrowserState(): void {
+  clearOAuthState();
+  clearIntendedHashStash();
+  try {
+    sessionStorage.removeItem(PKCE_VERIFIER_KEY);
+    sessionStorage.removeItem(OAUTH_DOC_HANDOFF_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 const DEFAULT_ADMIN_BASE = "/admin/";
 
@@ -30,7 +53,7 @@ export function getOAuthRedirectUri(): string {
   return new URL(adminAppBasePath(), window.location.origin).href;
 }
 
-type WorkerExpandedOauthState = { v: 1; n: string; k: string };
+type WorkerExpandedOauthState = { v: 1; n: string; k: string; g?: string };
 
 function base64UrlToUtf8(s: string): string {
   const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
@@ -42,8 +65,9 @@ function base64UrlToUtf8(s: string): string {
 }
 
 /**
- * Parses Worker-built OAuth `state` (base64url JSON `{ v, n, k }`). Returns `null` for malformed
- * values or payloads that are not Worker-expanded state.
+ * Parses Worker-built OAuth `state` (base64url JSON `{ v, n, k, g? }`). Returns `null` for malformed
+ * values or payloads that are not Worker-expanded state. Optional `g` is dropped when it fails slug
+ * validation so a misconfigured Worker cannot block sign-in.
  */
 export function tryParseWorkerExpandedOauthState(
   stateParam: string,
@@ -60,10 +84,55 @@ export function tryParseWorkerExpandedOauthState(
     const n = typeof r.n === "string" ? r.n : "";
     const k = typeof r.k === "string" ? r.k : "";
     if (!n || !k) return null;
-    return { v: 1, n, k };
+    let g: string | undefined;
+    if ("g" in r) {
+      if (typeof r.g !== "string") return null;
+      const gt = normalizeSlug(r.g);
+      if (gt) g = gt;
+      /* Invalid slug: omit g so sign-in still works (install link falls back to API slug). */
+    }
+    return g ? { v: 1, n, k, g } : { v: 1, n, k };
   } catch {
     return null;
   }
+}
+
+/** Stash current `location.hash` so we can restore after OAuth (companion UX: anonymous deep link). */
+export function stashIntendedHashBeforeGithubOAuth(): void {
+  const h = window.location.hash?.trim();
+  sessionStorage.setItem(INTENDED_HASH_KEY, h && h.length > 0 ? h : "#/");
+}
+
+/** Remove stashed hash (e.g. after a failed exchange). */
+export function clearIntendedHashStash(): void {
+  sessionStorage.removeItem(INTENDED_HASH_KEY);
+}
+
+/** Max length for a post-OAuth hash fragment (including `#`). */
+const MAX_INTENDED_HASH_LEN = 256;
+
+/**
+ * True when `hash` is a safe, simple in-app route fragment: `#` plus path segments
+ * using only `/`, letters, digits, `_`, `.`, and `-` (no schemes, queries, or `//`).
+ */
+export function isSafeSimpleHashRoute(hash: string): boolean {
+  if (hash.length === 0 || hash.length > MAX_INTENDED_HASH_LEN) return false;
+  if (!hash.startsWith("#")) return false;
+  if (hash.includes("//") || hash.includes("..")) return false;
+  /* # alone, #/, #/orgs, #/foo-bar — no :, ?, &, %, @, \, spaces, etc. */
+  return /^#(?:\/[\w.-]+)*\/?$/.test(hash);
+}
+
+/**
+ * Returns the stashed hash (with `#`) and removes it. Returns `null` if none or if the
+ * value is not a {@link isSafeSimpleHashRoute} (tampered sessionStorage or legacy junk).
+ */
+export function consumeIntendedHashAfterGithubOAuth(): string | null {
+  const raw = sessionStorage.getItem(INTENDED_HASH_KEY);
+  sessionStorage.removeItem(INTENDED_HASH_KEY);
+  if (raw == null || raw === "") return null;
+  const normalized = raw.startsWith("#") ? raw : `#/${raw}`;
+  return isSafeSimpleHashRoute(normalized) ? normalized : null;
 }
 
 /**
@@ -71,6 +140,7 @@ export function tryParseWorkerExpandedOauthState(
  * `/api/oauth/authorize`, which redirects to GitHub with `client_id` (never embedded in the SPA bundle).
  */
 export async function startGithubSignIn(): Promise<void> {
+  stashIntendedHashBeforeGithubOAuth();
   const redirectUri = getOAuthRedirectUri();
   const verifier = randomVerifier();
   const challenge = await challengeS256(verifier);
@@ -147,12 +217,8 @@ export type OAuthCompleteResult =
   | { ok: true }
   | { ok: false; error: string };
 
-/** Returned when `AbortSignal` aborts during `completeGithubOAuthFromHandoff` (e.g. unmount). */
-export const SIGNING_IN_CANCELLED_MESSAGE =
-  "Signing in was cancelled." as const;
-
 export type CompleteGithubOAuthOptions = {
-  /** When aborted, Turnstile + token exchange are skipped. */
+  /** When aborted (unmount or “different account”), Turnstile + token exchange are skipped. */
   signal?: AbortSignal;
 };
 
@@ -336,6 +402,7 @@ export async function completeGithubOAuthFromHandoff(
     tokenType: token_type,
     expiresAt,
   });
+  persistGithubAppSlugFromOAuth(expanded.g);
   clearOAuthState();
 
   if (aborted()) {
