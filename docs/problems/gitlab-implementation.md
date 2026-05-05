@@ -93,13 +93,12 @@ dispatch:
         exit 1
       fi
 
-      # SECURITY: Implementations MUST use constant-time comparison to prevent
-      # timing side-channel attacks that could leak the token byte-by-byte.
-      # Example: echo -n "$WEBHOOK_TOKEN" | openssl dgst -sha256 -hex vs
-      #          echo -n "$EXPECTED_TOKEN" | openssl dgst -sha256 -hex
-      # This illustrative code uses string equality for clarity; production
-      # code must replace this with constant-time comparison.
-      if [ "$WEBHOOK_TOKEN" != "$EXPECTED_TOKEN" ]; then
+      # SECURITY: Use constant-time comparison to prevent timing side-channel
+      # attacks that could leak the token byte-by-byte. Compare SHA256 hashes
+      # instead of raw strings to avoid timing differences.
+      WEBHOOK_HASH=$(echo -n "$WEBHOOK_TOKEN" | openssl dgst -sha256 -hex | cut -d' ' -f2)
+      EXPECTED_HASH=$(echo -n "$EXPECTED_TOKEN" | openssl dgst -sha256 -hex | cut -d' ' -f2)
+      if [ "$WEBHOOK_HASH" != "$EXPECTED_HASH" ]; then
         echo "ERROR: Invalid webhook token"
         exit 1
       fi
@@ -504,6 +503,25 @@ Modified packages (minimized via forge.Client abstraction):
 - Webhook-based architecture eliminates MR code execution risk
 - Dispatch pipeline runs on `.fullsend` protected branch, not enrolled repo
 - MR metadata passed via webhook payload, constructed by GitLab (not MR author)
+
+## Open questions
+
+### Webhook-to-Trigger Translation Architecture
+
+**Problem**: GitLab webhooks (JSON payloads) and the pipeline trigger API (form-encoded parameters) are not wire-compatible. An intermediary is required to translate webhook events to trigger API calls.
+
+**Options**:
+1. **GitLab CI/CD webhook integration**: Runs in enrolled repo, but cannot enforce protected-branch-only execution without blocking MR reactions entirely. Reintroduces security concern.
+2. **GitLab serverless functions**: Keeps compute within GitLab infrastructure, but requires GitLab Premium/Ultimate tier.
+3. **Minimal bridge service**: Works on GitLab Free tier, but reintroduces hosted webhook receiver concern from ADR-0009.
+
+**Status**: For GitLab Free tier, option 3 appears to be the only viable path. For Premium/Ultimate, option 2 keeps compute within GitLab infrastructure. This question should be resolved before production deployment. See ADR-0027 "Open Questions" section for full analysis of trade-offs.
+
+### Forge Interface Design Details
+
+**Problem**: The forge-neutral interface methods (`CreateRoleCredential`, `TriggerPipeline`, `CreateWebhook`) proposed in this document are illustrative. The detailed API signatures, error handling, return types, and edge case behaviors require separate design work.
+
+**Status**: The architectural direction is established (add forge-neutral primitives that push forge-specific logic into Client implementations). Implementation should be documented in a follow-up design document or implementation PR with concrete API signatures, error semantics, and migration strategy for existing callers.
 
 ## References
 

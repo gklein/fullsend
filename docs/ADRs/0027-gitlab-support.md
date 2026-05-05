@@ -137,7 +137,7 @@ GitLab doesn't have an exact GitHub Apps equivalent, but Project Access Tokens (
 **Limitations vs GitHub Apps**:
 - No installation flow (tokens created via API, no OAuth redirect)
 - Less granular permissions (e.g., can't grant "issues:write but not code:write")
-- Expiration requires rotation (GitHub App keys don't expire)
+- Mandatory rotation (GitLab PATs expire after max 1 year; GitHub App private keys never expire, though installation tokens have 1-hour TTL and auto-refresh)
 - No per-permission scoping within a role (e.g., Developer can push and approve, can't separate)
 
 **Alternative considered**: OAuth Applications. Rejected because they're user-scoped (not project-scoped) and require user interaction, similar to GitHub App manifest flow but less suitable for automation.
