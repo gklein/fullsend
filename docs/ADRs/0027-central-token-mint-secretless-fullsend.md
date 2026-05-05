@@ -20,13 +20,18 @@ Date: 2026-05-05
 
 Proposed
 
+<!-- Once this ADR is Accepted, its content is frozen. Do not edit the Context,
+     Decision, or Consequences sections. If circumstances change, write a new
+     ADR that supersedes this one. Only status changes and links to superseding
+     ADRs should be added after acceptance. -->
+
 ## Context
 
 The Fullsend run layer security model must constrain two risks: unauthorized access to model APIs, and impersonation of Fullsend agents on the forge. The current architecture keeps LLM credentials and per-role GitHub App private keys as GitHub Actions secrets in the org’s `.fullsend` config repo, relies on org admins to protect that repo, and assumes only workflows defined there can read those secrets ([ADR 0007](0007-per-role-github-apps.md), [ADR 0008](0008-workflow-dispatch-for-cross-repo-dispatch.md)).
 
 That layout has operational costs: enrolled repos must trigger `.fullsend` via `workflow_dispatch` authenticated with a long-lived fine-grained PAT so that caller-scoped secrets do not block access to PEMs in the config repo ([ADR 0008](0008-workflow-dispatch-for-cross-repo-dispatch.md)). Because those workflows can use the App keys, each org historically needed its own agent apps to avoid cross-org permission leakage. GitHub’s controls also make fully automated PAT and App lifecycle painful, which works against hands-off deployment.
 
-Workload identity federation and related patterns already move LLM access toward short-lived, non-repo-stored credentials (see [ADR 0025](0025-provider-credential-delivery-for-sandboxed-agents.md) and [security-threat-model.md](../problems/security-threat-model.md)). The remaining gap is GitHub agent identity: if App secrets leave the `.fullsend` repo, dispatch can revert to `workflow_call`, and orgs can stop minting their own Apps and PATs for baseline installs.
+Workload identity federation and related patterns already move LLM access toward short-lived, non-repo-stored credentials (see [ADR 0025](0025-provider-credential-delivery-for-sandboxed-agents.md) and [security-threat-model.md](../problems/security-threat-model.md)). The remaining gap is GitHub agent identity: if App secrets leave the `.fullsend` repo, dispatch can revert to `workflow_call`, and orgs can stop minting their own Apps and PATs for baseline installs. That shift interacts with [ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md), which establishes a stage-based `workflow_dispatch` path from shims into `.fullsend` and the trust model around those calls.
 
 ## Options
 
@@ -52,4 +57,4 @@ Non-sensitive configuration that today is stored as secrets only for convenience
 - Org onboarding shifts to installing shared Apps and selecting a mint endpoint rather than creating and rotating org-specific Apps and PATs for the default case.
 - The mint and its key material become a high-value target; compromise affects all orgs using that mint, requiring strong operations, monitoring, and optional regional or vendor-specific mint isolation.
 - Trust in `job_workflow_ref` (or equivalent) binds tokens to approved workflow definitions; spoofing a fake `.fullsend` repo inside another org yields tokens scoped only to that org’s installations, not cross-tenant access.
-- Superseding details of [ADR 0007](0007-per-role-github-apps.md) and [ADR 0008](0008-workflow-dispatch-for-cross-repo-dispatch.md) will require follow-on ADRs once this direction is accepted and implemented.
+- Superseding or updating [ADR 0007](0007-per-role-github-apps.md), [ADR 0008](0008-workflow-dispatch-for-cross-repo-dispatch.md), and [ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md) will require follow-on ADRs once this direction is accepted and implemented — including how a shim→`.fullsend` `workflow_call` boundary replaces the `workflow_dispatch` stage dispatcher and its authentication assumptions.
