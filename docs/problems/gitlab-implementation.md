@@ -457,15 +457,21 @@ func detectForge(repoURL string) (string, error) {
     }
     host := strings.ToLower(u.Hostname())
 
-    // Exact domain matching for known forges
-    // NOTE: HasSuffix for subdomain matching is illustrative only. Production
-    // implementations should use an allowlist (e.g., github.com, ghe.example.com)
-    // or DNS-based validation to prevent attacker-controlled domains like
-    // evil.github.com from being detected as GitHub.
-    if host == "github.com" || strings.HasSuffix(host, ".github.com") {
+    // Use allowlist for known forge domains to prevent subdomain spoofing
+    // (e.g., evil.github.com should not be detected as GitHub)
+    knownGitHubDomains := map[string]bool{
+        "github.com": true,
+        // Add GitHub Enterprise domains as needed: "ghe.example.com": true,
+    }
+    knownGitLabDomains := map[string]bool{
+        "gitlab.com": true,
+        // Add self-hosted GitLab domains as needed: "gitlab.example.com": true,
+    }
+
+    if knownGitHubDomains[host] {
         return "github", nil
     }
-    if host == "gitlab.com" || strings.HasSuffix(host, ".gitlab.com") {
+    if knownGitLabDomains[host] {
         return "gitlab", nil
     }
 
