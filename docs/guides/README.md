@@ -15,3 +15,9 @@ Guides for org administrators who install, configure, and manage fullsend.
 Guides for developers working in repositories where fullsend is active.
 
 - [Bugfix workflow](user/bugfix-workflow.md) — End-to-end guide to how fullsend handles a bug report from issue to merge
+
+## Development
+
+Guides for contributors developing and testing fullsend itself.
+
+- [Local development](dev/local-dev.md) — Run fullsend agents locally on macOS and Linux (amd64 + arm64)
