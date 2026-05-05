@@ -70,21 +70,23 @@ function buildTree(
   }
 
   function toManifest(dir: DirNode): ManifestNode[] {
-    const nodes: ManifestNode[] = [];
-    for (const [name, ch] of [...dir.children.entries()].sort(([a], [b]) =>
+    const entries = [...dir.children.entries()].sort(([a], [b]) =>
       a.localeCompare(b),
-    )) {
+    );
+    const dirNodes: ManifestNode[] = [];
+    const fileNodes: ManifestNode[] = [];
+    for (const [name, ch] of entries) {
       if ("routeKey" in ch) {
-        nodes.push(ch);
+        fileNodes.push(ch);
       } else {
-        nodes.push({
+        dirNodes.push({
           type: "dir",
           name,
           children: toManifest(ch),
         });
       }
     }
-    return nodes;
+    return [...dirNodes, ...fileNodes];
   }
 
   return toManifest(root);
@@ -176,7 +178,11 @@ export function fullsendDocsPlugin(repoRoot: string): Plugin {
           return null;
         }
         const md = fs.readFileSync(abs, "utf8");
-        const { title, html, frontmatter } = await markdownToHtml(md, rel);
+        const { title, html, frontmatter } = await markdownToHtml(
+          md,
+          rel,
+          repoRoot,
+        );
         const payload = { title, html, frontmatter };
         return `export default ${JSON.stringify(payload)};\n`;
       }
