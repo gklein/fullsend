@@ -271,6 +271,10 @@ ADR 0002: [Building block 12](ADRs/0002-initial-fullsend-design.md#12-coordinato
 Traceability layer across issue, **Triage**, **Code**, **Review**, checks, and merge for incident response and correlation across automation runs.
 ADR 0002: [Building block 13](ADRs/0002-initial-fullsend-design.md#13-observability).
 
+### 14. retro agent runtime
+
+Retrospective analyst — examines completed or in-progress agent workflows, identifies improvement opportunities, and files proposals as GitHub issues. Runs automatically on PR close (merged or rejected) and on-demand via `/retro` command. Analyzes the full workflow graph (triage, code, review, fix agent interactions and human interventions) and posts a summary comment on the originating PR/issue linking to all filed proposals.
+
 ## Configuration layering
 
 Fullsend uses a three-tier inheritance model for all configuration: agent definitions, skills, policies, harness definitions, and guardrails. Each tier can extend or override the one below it. Guardrails can only be tightened, never weakened.
