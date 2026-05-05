@@ -160,11 +160,11 @@ GitLab doesn't have an exact GitHub Apps equivalent, but Project Access Tokens (
 **Webhook-to-trigger API incompatibility**: GitLab webhooks send JSON event payloads (merge request objects, issue events), while the pipeline trigger API (`/api/v4/projects/:id/trigger/pipeline`) expects form-encoded parameters (`token`, `ref`, `variables[KEY]=value`). These are not wire-compatible — pointing a webhook URL directly at the trigger endpoint results in a malformed request. This means an intermediary is required to translate webhook payloads to trigger API calls.
 
 **Options for webhook translation**:
-1. **GitLab CI/CD webhook integration**: Use a lightweight `.gitlab-ci.yml` job in the enrolled repo that runs on webhook events (via GitLab's `CI_PIPELINE_SOURCE == "webhook"` trigger) and calls the `.fullsend` trigger API. This keeps everything within GitLab CI/CD but reintroduces the security concern (MR code could modify the webhook job).
+1. **GitLab CI/CD webhook integration**: Use a lightweight `.gitlab-ci.yml` job in the enrolled repo that runs on webhook events (via GitLab's `CI_PIPELINE_SOURCE == "webhook"` trigger) and calls the `.fullsend` trigger API. This keeps everything within GitLab CI/CD but **does not solve the security model** — enforcing protected-branch-only execution via `workflow:rules` prevents the pipeline from reacting to merge request events (which occur on unprotected branches), defeating the purpose. Without protected-branch enforcement, MR code can modify the webhook job.
 2. **GitLab serverless functions**: Use GitLab's serverless integration to deploy a function that receives webhooks and translates to trigger API calls. Maintains compute-platform agnosticism (runs within GitLab infrastructure) but requires GitLab Premium/Ultimate tier.
 3. **Minimal bridge service**: Deploy a lightweight translation service (e.g., Cloud Run, Lambda) that receives webhooks and POSTs to the trigger API. This reintroduces the "hosted webhook receiver" concern from ADR-0009 but may be acceptable given GitLab's lack of a direct webhook-to-pipeline primitive.
 
-**Recommendation**: For initial implementation, use option 1 (GitLab CI/CD webhook integration) with strict protected-branch-only execution enforced via `workflow:rules` and `CI_COMMIT_REF_PROTECTED == "true"`. Document the residual risk (MR authors can modify `.gitlab-ci.yml` if branch protection is misconfigured) and evaluate serverless/bridge options for production deployments. The key difference from GitHub is that GitLab has the primitives (webhook triggers, protected branch variables) even if they require careful configuration, whereas GitHub would need external hosting regardless of configuration.
+**Open question**: The webhook-to-trigger translation requirement creates an architectural tension. Options 2 and 3 both introduce additional infrastructure (serverless functions or hosted bridge), while option 1 reintroduces the security concern that webhooks were meant to solve. This ADR does not prescribe a solution — the implementation choice depends on the acceptable security/infrastructure trade-off. For GitLab Free tier deployments, option 3 (minimal bridge) is likely the only viable path. For Premium/Ultimate, option 2 (serverless) keeps compute within GitLab infrastructure. See "Open Questions" section for full analysis.
 
 **Webhook payload validation** (in `.fullsend` dispatch pipeline):
 
@@ -205,16 +205,15 @@ dispatch:
 
       # Look up expected token from masked CI/CD variable
       # Variable name format: WEBHOOK_TOKEN_<sanitized_project_path>
-      # Sanitization scheme (GitLab var names must match [A-Za-z_][A-Za-z0-9_]*):
-      #   / → __ (double underscore)
-      #   - → _H_ (underscore-H-underscore)
-      # Examples: foo-bar/baz → WEBHOOK_TOKEN_foo_H_bar__baz,
-      #           foo_bar/baz → WEBHOOK_TOKEN_foo_bar__baz (distinct)
-      # Collision risk: Pathological project names like "foo_H_bar/baz" collide
-      # with "foo-bar/baz". Admins should avoid creating projects with _H_ or __
-      # sequences, or use SHA256(project_path) for collision-free guarantee.
-      SANITIZED_PROJECT=$(echo "${SOURCE_PROJECT}" | sed 's/-/_H_/g; s/\//__/g')
-      EXPECTED_TOKEN_VAR="WEBHOOK_TOKEN_${SANITIZED_PROJECT}"
+      # Token variable naming: Use SHA256 hash of project path for collision-free
+      # encoding (GitLab var names must match [A-Za-z_][A-Za-z0-9_]*).
+      # Alternative sanitization (/ → __, - → _H_) is collision-prone for
+      # pathological names like "foo_H_bar/baz" vs "foo-bar/baz".
+      # Examples:
+      #   myorg/myrepo → WEBHOOK_TOKEN_<sha256_hash>
+      #   my-org/my-repo → WEBHOOK_TOKEN_<different_sha256_hash> (distinct)
+      PROJECT_HASH=$(echo -n "${SOURCE_PROJECT}" | sha256sum | cut -d' ' -f1)
+      EXPECTED_TOKEN_VAR="WEBHOOK_TOKEN_${PROJECT_HASH}"
       EXPECTED_TOKEN="${!EXPECTED_TOKEN_VAR}"
 
       if [ -z "${EXPECTED_TOKEN}" ]; then
@@ -248,15 +247,15 @@ dispatch:
 
 **Enrollment setup**:
 - `fullsend admin install` creates webhook in enrolled repo via GitLab API
-- Webhook URL: `https://gitlab.com/api/v4/projects/<fullsend-project-id>/trigger/pipeline`
+- Webhook URL: Points to the translation intermediary (serverless function or bridge service) that forwards to `.fullsend` trigger API. See "Webhook-to-trigger API incompatibility" above for translation options.
 - Webhook triggers: Merge Request events, Issue events, Note events
-- Webhook secret token: stored as masked CI/CD variable in `.fullsend` project (e.g., `WEBHOOK_TOKEN_myorg__myrepo` for project `myorg/myrepo`, or `WEBHOOK_TOKEN_my_H_org__my_H_repo` for `my-org/my-repo`), validated by dispatch pipeline
+- Webhook secret token: stored as masked CI/CD variable in `.fullsend` project (e.g., `WEBHOOK_TOKEN_myorg__myrepo` for project `myorg/myrepo`, or `WEBHOOK_TOKEN_my_H_org__my_H_repo` for `my-org/my-repo`), validated by dispatch pipeline after translation
 
 **Security properties**:
 - Webhook payload constructed by GitLab, not by MR author code
 - Dispatch pipeline runs on `.fullsend` protected `main` branch
 - Token validation prevents unauthorized repos from triggering workflows (implementations MUST use constant-time comparison to prevent timing side-channel attacks)
-- Webhook token variable names use collision-resistant encoding (`/` → `__`, `-` → `_H_`) compatible with GitLab CI/CD variable naming constraints
+- Webhook token variable names use SHA256 hashing for collision-free project identification (`WEBHOOK_TOKEN_<sha256(project_path)>`)
 - MR source code never executes in a pipeline with access to fullsend secrets
 
 **Key difference from GitHub**: Webhooks replace the in-repo shim. This is architecturally cleaner for GitLab's security model but requires webhook management (creation, token rotation) in the admin install flow.
@@ -536,6 +535,23 @@ DeleteWebhook(ctx context.Context, owner, repo, webhookID string) error
 - `GetAppClientID(ctx, slug) (string, error)` — GitHub App-specific. No GitLab equivalent. This should be deprecated or moved to a GitHub-specific extension interface.
 - `DispatchWorkflow(ctx, owner, repo, workflowFile, ref, inputs)` — GitHub Actions-specific (targets a specific workflow file). Replaced by forge-neutral `TriggerPipeline` above.
 
+**Backward compatibility and migration strategy**:
+
+To prevent interface bloat while maintaining backward compatibility:
+
+1. **Deprecation phase**: Mark GitHub-specific methods with deprecation comments and update callers to use forge-neutral equivalents (`TriggerPipeline` instead of `DispatchWorkflow`, etc.). This phase allows gradual migration without breaking existing code.
+2. **Extension interfaces**: Move forge-specific methods that have no neutral equivalent (e.g., `GetAppClientID`) to optional extension interfaces:
+   ```go
+   type GitHubForgeClient interface {
+       Client
+       GetAppClientID(ctx context.Context, slug string) (string, error)
+   }
+   ```
+   Callers that need GitHub-specific behavior can type-assert to the extension interface.
+3. **Breaking change timeline**: After all internal callers migrate to forge-neutral methods, remove deprecated methods in a major version bump. Document this timeline in the interface godoc (e.g., "deprecated: use TriggerPipeline, will be removed in v2.0.0").
+
+This strategy limits interface growth to forge-neutral primitives while preserving GitHub-specific functionality via opt-in extension interfaces.
+
 **Minimizing layer/CLI/appsetup changes**:
 
 By adding the forge-neutral methods above, the implementation phases can be revised to keep layer/CLI changes minimal:
@@ -621,6 +637,25 @@ gitlab_instance_url: https://gitlab.example.com  # optional, defaults to gitlab.
 - Webhook-based architecture eliminates MR code execution risk
 - Dispatch pipeline runs on `.fullsend` protected branch, not enrolled repo
 - MR metadata passed via webhook payload, constructed by GitLab (not MR author)
+
+## Open Questions
+
+### Webhook-to-Trigger Translation Architecture
+
+**Problem**: GitLab webhooks (JSON payloads) and the pipeline trigger API (form-encoded parameters) are not wire-compatible. An intermediary is required to translate webhook events to trigger API calls.
+
+**Trade-offs**:
+- **Option 1 (CI/CD webhook integration)**: Runs in enrolled repo, but cannot enforce protected-branch-only execution without blocking MR reactions entirely. Reintroduces security concern.
+- **Option 2 (GitLab serverless functions)**: Keeps compute within GitLab infrastructure, but requires GitLab Premium/Ultimate tier.
+- **Option 3 (Minimal bridge service)**: Works on GitLab Free tier, but reintroduces hosted webhook receiver concern from ADR-0009.
+
+**Decision needed**: Choose between infrastructure cost (options 2/3) and security model compromise (option 1). For GitLab Free tier, option 3 appears to be the only viable path. This question should be resolved before production deployment.
+
+### ADR Scope and Structure
+
+**Problem**: This ADR is 650+ lines, significantly exceeding typical ADR length (30-50 lines). Much of the content (implementation details, code examples) reads more like design documentation than decision record.
+
+**Consideration**: Should implementation details (Sections 4-7) be moved to a separate design document in `docs/problems/gitlab-implementation.md`, leaving the ADR focused on the architectural decision and high-level consequences? This would improve maintainability and align with the pattern of problem-oriented documents that can evolve independently (per CLAUDE.md).
 
 ## References
 
