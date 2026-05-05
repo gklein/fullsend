@@ -12,6 +12,7 @@
     persistLastDocRouteKey,
     readLastDocRouteKey,
   } from "./lib/routing";
+  import { persistExpandedPathInSession } from "./lib/treeSession";
   import { DocTreeNav } from "./lib/tree";
 
   const NAV_COLLAPSED_KEY = "fullsend-docs-nav-collapsed";
@@ -152,6 +153,7 @@
         return;
       }
       dirFocusPath = parsed.dirPath;
+      persistExpandedPathInSession(parsed.dirPath);
       const last = readLastDocRouteKey();
       const keep =
         last !== null && routeKeys.has(last)
@@ -406,11 +408,7 @@
         </button>
       </div>
       <nav class="docs-tree-wrap">
-        <DocTreeNav
-          nodes={manifest}
-          activeRouteKey={pageRouteKey}
-          expandFocusPath={dirFocusPath}
-        />
+        <DocTreeNav nodes={manifest} activeRouteKey={pageRouteKey} />
       </nav>
     </aside>
 

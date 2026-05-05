@@ -6,18 +6,11 @@
   interface Props {
     nodes: ManifestNode[];
     activeRouteKey: string;
-    /** When set (directory hash), expand ancestors to reveal this path. */
-    expandFocusPath?: string | null;
     /** POSIX path segments for this level’s parent (e.g. `guides/admin`). */
     parentDirPath?: string;
   }
 
-  let {
-    nodes,
-    activeRouteKey,
-    expandFocusPath = null,
-    parentDirPath = "",
-  }: Props = $props();
+  let { nodes, activeRouteKey, parentDirPath = "" }: Props = $props();
 
   /** Bumps when a folder is toggled so `isExpanded` re-reads sessionStorage. */
   let treeEpoch = $state(0);
@@ -29,11 +22,6 @@
 
   function isExpanded(dirPath: string): boolean {
     void treeEpoch;
-    const focus = expandFocusPath ?? "";
-    // Directory hash navigation must reveal the target path even if the user collapsed nodes earlier.
-    if (focus !== "" && descendantMatchesActive(dirPath, focus)) {
-      return true;
-    }
     const key = `fullsend-docs-tree:${dirPath}`;
     const raw = sessionStorage.getItem(key);
     if (raw === "1") return true;
@@ -108,7 +96,6 @@
               <DocTreeNav
                 nodes={node.children}
                 {activeRouteKey}
-                {expandFocusPath}
                 parentDirPath={dirPath}
               />
             </div>
