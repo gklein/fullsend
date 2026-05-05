@@ -6,12 +6,14 @@ import rehypeStringify from "rehype-stringify";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import rehypeSlug from "rehype-slug";
 import { visit } from "unist-util-visit";
+import fs from "node:fs";
 import path from "node:path";
 import { toString } from "mdast-util-to-string";
 import type { Root as MdastRoot } from "mdast";
 import type { Element, Root as HastRoot } from "hast";
 import matter from "gray-matter";
 import GitHubSlugger from "github-slugger";
+import { formatDocDirHash } from "./hashFormat";
 import { filePathToRouteKey, type DocsFilePath } from "./paths";
 
 const SLUG_FRAGMENT_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -69,7 +71,11 @@ function resolvedPathToRouteKey(resolvedPosix: string): string {
   return resolvedPosix;
 }
 
-function remarkRewriteMdLinks(this: import("unified").Processor, sourceFile: DocsFilePath) {
+function remarkRewriteMdLinks(
+  this: import("unified").Processor,
+  repoRoot: string,
+  sourceFile: DocsFilePath,
+) {
   return (tree: MdastRoot) => {
     visit(tree, "link", (node) => {
       const url = node.url;
@@ -85,6 +91,21 @@ function remarkRewriteMdLinks(this: import("unified").Processor, sourceFile: Doc
       );
 
       if (!isDocLinkPath(resolvedPosix)) return;
+
+      const absUnderDocs = path.join(repoRoot, "docs", resolvedPosix);
+      let linkTargetIsDir = false;
+      try {
+        linkTargetIsDir =
+          fs.existsSync(absUnderDocs) && fs.statSync(absUnderDocs).isDirectory();
+      } catch {
+        linkTargetIsDir = false;
+      }
+
+      if (linkTargetIsDir) {
+        const dirKey = resolvedPosix.replace(/\\/g, "/");
+        node.url = formatDocDirHash(dirKey);
+        return;
+      }
 
       const routeKey = resolvedPathToRouteKey(resolvedPosix);
       const frag = fragEncoded ?? "";
@@ -160,6 +181,7 @@ const sanitizeSchema = {
 export async function markdownToHtml(
   markdown: string,
   sourceFile: DocsFilePath,
+  repoRoot: string,
 ): Promise<{
   title: string;
   html: string;
@@ -172,7 +194,7 @@ export async function markdownToHtml(
   const processor = unified()
     .use(remarkParse)
     .use(remarkGfm)
-    .use(remarkRewriteMdLinks, sourceFile)
+    .use(remarkRewriteMdLinks, repoRoot, sourceFile)
     .use(remarkRehype, { allowDangerousHtml: false })
     .use(rehypeSlug)
     .use(rehypeMermaidClass)
