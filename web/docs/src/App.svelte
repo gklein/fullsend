@@ -31,6 +31,8 @@
   let navCollapsed = $state(false);
   let mobileNavOpen = $state(false);
   let narrowViewport = $state(false);
+  /** Bumps when outline session keys change outside the tree (e.g. directory hash); keeps DocTreeNav in sync with sessionStorage. */
+  let outlineSessionEpoch = $state(0);
 
   let outlineExpanded = $derived(
     narrowViewport ? mobileNavOpen : !navCollapsed,
@@ -154,6 +156,7 @@
       }
       dirFocusPath = parsed.dirPath;
       persistExpandedPathInSession(parsed.dirPath);
+      outlineSessionEpoch++;
       const last = readLastDocRouteKey();
       const keep =
         last !== null && routeKeys.has(last)
@@ -408,7 +411,11 @@
         </button>
       </div>
       <nav class="docs-tree-wrap">
-        <DocTreeNav nodes={manifest} activeRouteKey={pageRouteKey} />
+        <DocTreeNav
+          nodes={manifest}
+          activeRouteKey={pageRouteKey}
+          outlineSessionEpoch={outlineSessionEpoch}
+        />
       </nav>
     </aside>
 

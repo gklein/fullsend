@@ -6,11 +6,21 @@
   interface Props {
     nodes: ManifestNode[];
     activeRouteKey: string;
+    /**
+     * Parent bumps when `sessionStorage` outline keys change (e.g. directory-link navigation).
+     * Without this, `pageRouteKey` can stay the same and the tree would skip updates while session changes.
+     */
+    outlineSessionEpoch?: number;
     /** POSIX path segments for this level’s parent (e.g. `guides/admin`). */
     parentDirPath?: string;
   }
 
-  let { nodes, activeRouteKey, parentDirPath = "" }: Props = $props();
+  let {
+    nodes,
+    activeRouteKey,
+    outlineSessionEpoch = 0,
+    parentDirPath = "",
+  }: Props = $props();
 
   /** Bumps when a folder is toggled so `isExpanded` re-reads sessionStorage. */
   let treeEpoch = $state(0);
@@ -22,6 +32,7 @@
 
   function isExpanded(dirPath: string): boolean {
     void treeEpoch;
+    void outlineSessionEpoch;
     const key = `fullsend-docs-tree:${dirPath}`;
     const raw = sessionStorage.getItem(key);
     if (raw === "1") return true;
@@ -96,6 +107,7 @@
               <DocTreeNav
                 nodes={node.children}
                 {activeRouteKey}
+                {outlineSessionEpoch}
                 parentDirPath={dirPath}
               />
             </div>
