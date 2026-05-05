@@ -88,6 +88,7 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		"scripts/pre-prioritize.sh",
 		"scripts/post-prioritize.sh",
 		".github/workflows/prioritize.yml",
+		".github/workflows/prioritize-scheduler.yml",
 	}
 
 	for _, path := range expected {
@@ -470,21 +471,34 @@ func TestPrioritizeWorkflowContent(t *testing.T) {
 	require.NoError(t, err)
 	s := string(content)
 	assert.Contains(t, s, "# fullsend-stage: prioritize")
-	assert.Contains(t, s, "schedule:")
-	assert.Contains(t, s, "cron:")
 	assert.Contains(t, s, "workflow_dispatch")
-	assert.Contains(t, s, "FULLSEND_PRIORITIZE_CLIENT_ID")
-	assert.Contains(t, s, "FULLSEND_PRIORITIZE_APP_PRIVATE_KEY")
+	assert.Contains(t, s, "event_type")
+	assert.Contains(t, s, "source_repo")
+	assert.Contains(t, s, "event_payload")
 	assert.Contains(t, s, "FULLSEND_PROJECT_NUMBER")
 	assert.Contains(t, s, "setup-agent-env.sh")
 	assert.Contains(t, s, "agent: prioritize")
-	// Prioritize uses cancel-in-progress: false (overlapping runs queue).
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-prioritize")
-	assert.Contains(t, s, "cancel-in-progress: false")
+	assert.Contains(t, s, "cancel-in-progress: true")
 	// Org-scoped agent needs an empty target-repo directory.
 	assert.Contains(t, s, "mkdir -p target-repo")
-	assert.Contains(t, s, "pre-prioritize-output.env")
+	// Issue URL comes from event_payload, not pre-script output file.
+	assert.Contains(t, s, "GITHUB_ISSUE_URL")
+	assert.Contains(t, s, "fromJSON(inputs.event_payload)")
+}
+
+func TestPrioritizeSchedulerWorkflowContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/prioritize-scheduler.yml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "schedule:")
+	assert.Contains(t, s, "cron:")
+	assert.Contains(t, s, "workflow_dispatch")
+	assert.Contains(t, s, "fullsend-prioritize-scheduler")
+	assert.Contains(t, s, "RICE Score")
+	assert.Contains(t, s, "prioritize.yml")
+	assert.Contains(t, s, "FULLSEND_PROJECT_NUMBER")
 }
 
 func TestPrioritizeAgentPromptContent(t *testing.T) {
@@ -521,7 +535,6 @@ func TestPrioritizeHarnessContent(t *testing.T) {
 	assert.Contains(t, s, "post_script")
 	assert.Contains(t, s, "runner_env")
 	assert.Contains(t, s, "PROJECT_NUMBER")
-	assert.Contains(t, s, "pre-prioritize-output.env")
 }
 
 func TestValidateTriageDeleted(t *testing.T) {

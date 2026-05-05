@@ -2,13 +2,21 @@
 name: Prioritize
 
 on:
-  schedule:
-    - cron: '*/10 * * * *'
   workflow_dispatch:
+    inputs:
+      event_type:
+        required: true
+        type: string
+      source_repo:
+        required: true
+        type: string
+      event_payload:
+        required: true
+        type: string
 
 concurrency:
-  group: fullsend-prioritize
-  cancel-in-progress: false
+  group: fullsend-prioritize-${{ fromJSON(inputs.event_payload).issue.number }}
+  cancel-in-progress: true
 
 jobs:
   prioritize:
@@ -29,12 +37,10 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ vars.FULLSEND_PRIORITIZE_CLIENT_ID }}
-          private-key: ${{ secrets.FULLSEND_PRIORITIZE_APP_PRIVATE_KEY }}
+          # TODO: create a dedicated prioritize app for the final implementation
+          client-id: ${{ vars.FULLSEND_TRIAGE_CLIENT_ID }}
+          private-key: ${{ secrets.FULLSEND_TRIAGE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-
-      - name: Pre-mask GCP credential file path
-        run: echo "::add-mask::${GITHUB_WORKSPACE}/gha-creds-"
 
       - name: Authenticate to Google Cloud (WIF)
         if: vars.FULLSEND_GCP_AUTH_MODE == 'wif'
@@ -75,15 +81,14 @@ jobs:
           PRIORITIZE_PROJECT_NUMBER: ${{ vars.FULLSEND_PROJECT_NUMBER }}
           PRIORITIZE_ANTHROPIC_VERTEX_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}
           PRIORITIZE_CLOUD_ML_REGION: ${{ vars.FULLSEND_GCP_REGION }}
-          PRIORITIZE_STALE_THRESHOLD: 7d
         run: bash .github/scripts/setup-agent-env.sh
 
-      - name: Create empty target-repo directory and pre-script output placeholder
-        run: |
-          mkdir -p target-repo
-          touch /tmp/pre-prioritize-output.env
+      - name: Create empty target-repo directory
+        run: mkdir -p target-repo
 
       - name: Run prioritize agent
         uses: ./.github/actions/fullsend
+        env:
+          GITHUB_ISSUE_URL: ${{ fromJSON(inputs.event_payload).issue.html_url }}
         with:
           agent: prioritize
