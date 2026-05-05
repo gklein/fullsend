@@ -589,6 +589,17 @@ GitLab supports [multi-project pipelines](https://docs.gitlab.com/ee/ci/pipeline
 
 **Status**: The architectural direction is established (add forge-neutral primitives that push forge-specific logic into Client implementations). Implementation should be documented in a follow-up design document or implementation PR with concrete API signatures, error semantics, and migration strategy for existing callers.
 
+### Agent Execution Environment (Sandbox/Compute Architecture)
+
+**Problem**: This document does not specify how agents execute on GitLab runners - executor types (docker, kubernetes, shell), isolation model, runner registration requirements, or OpenShell integration specifics.
+
+**Status**: **Explicitly scoped out of this document.** The agent execution environment is orthogonal to the CI/CD dispatch architecture. GitLab runner configuration, sandbox isolation, and compute architecture should be documented separately, potentially in:
+- Agent Infrastructure design doc (for compute/isolation model)
+- Implementation PR for GitLab runner setup (for executor configuration)
+- Deployment guide (for runner registration and management)
+
+**Assumption**: Agents will execute in isolated environments (containers or VMs) managed by GitLab runners, similar to the current GitHub Actions model. The dispatch pipelines (covered in this doc) trigger agent jobs; the agent execution details are implementation-specific.
+
 ## References
 
 - [ADR-0027: GitLab Support Architecture](../ADRs/0027-gitlab-support.md)
