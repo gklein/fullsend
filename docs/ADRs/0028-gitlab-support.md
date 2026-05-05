@@ -1,5 +1,5 @@
 ---
-title: "27. GitLab Support Architecture"
+title: "28. GitLab Support Architecture"
 status: Proposed
 relates_to:
   - agent-infrastructure
@@ -11,7 +11,7 @@ topics:
   - multi-platform
 ---
 
-# 27. GitLab Support Architecture
+# 28. GitLab Support Architecture
 
 Date: 2026-04-29
 

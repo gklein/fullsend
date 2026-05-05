@@ -1,6 +1,6 @@
 # GitLab Support Implementation Details
 
-This document contains implementation details for GitLab support in fullsend. For the architectural decision and rationale, see [ADR-0027](../ADRs/0027-gitlab-support.md).
+This document contains implementation details for GitLab support in fullsend. For the architectural decision and rationale, see [ADR-0028](../ADRs/0028-gitlab-support.md).
 
 ## Table of Contents
 
@@ -36,7 +36,7 @@ This document contains implementation details for GitLab support in fullsend. Fo
 2. **GitLab serverless functions**: Use GitLab's serverless integration to deploy a function that receives webhooks and translates to trigger API calls. Maintains compute-platform agnosticism (runs within GitLab infrastructure) but requires GitLab Premium/Ultimate tier.
 3. **Minimal bridge service**: Deploy a lightweight translation service (e.g., Cloud Run, Lambda) that receives webhooks and POSTs to the trigger API. This reintroduces the "hosted webhook receiver" concern from ADR-0009 but may be acceptable given GitLab's lack of a direct webhook-to-pipeline primitive.
 
-**Open question**: The webhook-to-trigger translation requirement creates an architectural tension. Options 2 and 3 both introduce additional infrastructure (serverless functions or hosted bridge), while option 1 reintroduces the security concern that webhooks were meant to solve. For GitLab Free tier deployments, option 3 (minimal bridge) is likely the only viable path. For Premium/Ultimate, option 2 (serverless) keeps compute within GitLab infrastructure. See ADR-0027 "Open Questions" for full analysis.
+**Open question**: The webhook-to-trigger translation requirement creates an architectural tension. Options 2 and 3 both introduce additional infrastructure (serverless functions or hosted bridge), while option 1 reintroduces the security concern that webhooks were meant to solve. For GitLab Free tier deployments, option 3 (minimal bridge) is likely the only viable path. For Premium/Ultimate, option 2 (serverless) keeps compute within GitLab infrastructure. See ADR-0028 "Open Questions" for full analysis.
 
 **Security requirements for webhook translation intermediary**:
 
@@ -85,6 +85,7 @@ dispatch:
       # Production implementations should use the expanded regex above and update
       # the yq query to use bracket notation for project names containing dots
       # (e.g., yq '.["repos"]["my.project"]["enabled"]').
+      # TODO(implementation): Expand regex to support dots and nested groups
       if [[ ! "$SOURCE_PROJECT" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
         echo "ERROR: Invalid source project format"
         exit 1
@@ -108,9 +109,10 @@ dispatch:
         exit 1
       fi
 
-      # SECURITY: Use constant-time comparison to prevent timing side-channel
-      # attacks that could leak the token byte-by-byte. Compare SHA256 hashes
-      # instead of raw strings to avoid timing differences.
+      # SECURITY: Use hash comparison to mitigate timing side-channel attacks
+      # that could leak the token byte-by-byte. Compare SHA256 hashes instead
+      # of raw strings. Note: The bash [ ] comparison is not constant-time, but
+      # it compares hash bytes (not token bytes), limiting information leakage.
       WEBHOOK_HASH=$(echo -n "$WEBHOOK_TOKEN" | openssl dgst -sha256 -hex | cut -d' ' -f2)
       EXPECTED_HASH=$(echo -n "$EXPECTED_TOKEN" | openssl dgst -sha256 -hex | cut -d' ' -f2)
       if [ "$WEBHOOK_HASH" != "$EXPECTED_HASH" ]; then
@@ -211,6 +213,7 @@ generate-config:
       # NOTE: This regex should be expanded during implementation to include
       # dots (.) and nested groups, which are valid in GitLab project paths
       # (e.g., my.org/my.project or group/subgroup/project)
+      # TODO(implementation): Expand regex to support dots and nested groups
       if [[ ! "$SOURCE_PROJECT" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
         echo "ERROR: Invalid source project format"
         exit 1
@@ -244,7 +247,11 @@ generate-config:
           # and ref as the parent pipeline. Since the dispatch pipeline runs on
           # .fullsend's protected main branch, the child pipeline includes stage
           # files (triage.yml, code.yml, etc.) from the same protected ref.
-          # Use envsubst for robust variable substitution
+          # Two-step substitution pattern (heredoc + envsubst):
+          # The heredoc uses single-quoted 'EOF' to prevent shell expansion,
+          # writing $pipeline_file literally into the YAML. Then envsubst
+          # performs the substitution in a controlled way. This prevents
+          # accidental variable expansion during the heredoc write step.
           # Stage files are constrained to .gitlab/ci/*.yml by the loop,
           # so $pipeline_file is safe for substitution (no shell metacharacters).
           export pipeline_file
@@ -581,7 +588,7 @@ GitLab supports [multi-project pipelines](https://docs.gitlab.com/ee/ci/pipeline
 2. **GitLab serverless functions**: Keeps compute within GitLab infrastructure, but requires GitLab Premium/Ultimate tier.
 3. **Minimal bridge service**: Works on GitLab Free tier, but reintroduces hosted webhook receiver concern from ADR-0009.
 
-**Status**: For GitLab Free tier, option 3 appears to be the only viable path. For Premium/Ultimate, option 2 keeps compute within GitLab infrastructure. This question should be resolved before production deployment. See ADR-0027 "Open Questions" section for full analysis of trade-offs.
+**Status**: For GitLab Free tier, option 3 appears to be the only viable path. For Premium/Ultimate, option 2 keeps compute within GitLab infrastructure. This question should be resolved before production deployment. See ADR-0028 "Open Questions" section for full analysis of trade-offs.
 
 ### Forge Interface Design Details
 
@@ -602,7 +609,7 @@ GitLab supports [multi-project pipelines](https://docs.gitlab.com/ee/ci/pipeline
 
 ## References
 
-- [ADR-0027: GitLab Support Architecture](../ADRs/0027-gitlab-support.md)
+- [ADR-0028: GitLab Support Architecture](../ADRs/0028-gitlab-support.md)
 - [ADR-0005: Forge abstraction layer](../ADRs/0005-forge-abstraction.md)
 - [ADR-0009: pull_request_target security model](../ADRs/0009-pull-request-target.md)
 - GitLab CI/CD documentation: https://docs.gitlab.com/ee/ci/
