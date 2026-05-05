@@ -331,14 +331,19 @@ jobs:
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_HTML_URL: ${{ github.event.issue.html_url }}
+          # For PR comments, issue.pull_request.html_url gives the /pull/N URL.
+          # For issue comments, this is empty.
+          PR_HTML_URL: ${{ github.event.issue.pull_request.html_url || '' }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
+          # Use PR URL if available (comment on a PR), otherwise issue URL.
+          ORIGINATING_URL="${PR_HTML_URL:-${ISSUE_HTML_URL}}"
           PAYLOAD=$(jq -cn \
             --arg in "${ISSUE_NUMBER}" \
-            --arg iu "${ISSUE_HTML_URL}" \
+            --arg ou "${ORIGINATING_URL}" \
             --arg cb "${COMMENT_BODY:-}" \
-            '{issue: {number: ($in | tonumber), html_url: $iu},
+            '{issue: {number: ($in | tonumber), html_url: $ou},
               comment: {body: $cb}}')
           echo "json=$PAYLOAD" >> "$GITHUB_OUTPUT"
       - name: Dispatch retro stage
