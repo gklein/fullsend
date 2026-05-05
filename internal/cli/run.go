@@ -2,8 +2,12 @@ package cli
 
 import (
 	"archive/tar"
+	"bufio"
+	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"debug/elf"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -595,8 +599,11 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string
 			targetArch := sandboxArch()
 			dir, binPath, err := resolveLinuxBinary(targetArch)
 			if err != nil {
+				if h.FailModeClosed() {
+					return fmt.Errorf("could not obtain linux/%s binary for security scan (fail_mode: closed): %w\nUse --fullsend-binary to provide a pre-built Linux binary", targetArch, err)
+				}
 				fmt.Fprintf(os.Stderr, "WARNING: could not obtain linux/%s binary: %v\n", targetArch, err)
-				fmt.Fprintf(os.Stderr, "WARNING: skipping sandbox-side security scan. Use --fullsend-binary to provide a pre-built Linux binary.\n")
+				fmt.Fprintf(os.Stderr, "WARNING: skipping sandbox-side security scan (fail_mode: open). Use --fullsend-binary to provide a pre-built Linux binary.\n")
 				localBinary = ""
 			} else {
 				tmpBinaryDir = dir
@@ -1382,17 +1389,23 @@ func isReleasedVersion(v string) bool {
 	return true
 }
 
-const releaseBaseURL = "https://github.com/fullsend-ai/fullsend/releases/download"
+var releaseBaseURL = "https://github.com/fullsend-ai/fullsend/releases/download"
 
 var httpClient = &http.Client{Timeout: 120 * time.Second}
 
 // downloadReleaseBinary downloads the fullsend binary for linux/{arch} from
-// the GitHub Release matching the given version and writes it to destPath.
+// the GitHub Release matching the given version, verifies its SHA256 checksum
+// against the release checksums.txt, and writes it to destPath.
 func downloadReleaseBinary(ver, arch, destPath string) error {
 	cleanVer := strings.TrimPrefix(ver, "v")
 	assetName := fmt.Sprintf("fullsend_%s_linux_%s.tar.gz", cleanVer, arch)
-	url := fmt.Sprintf("%s/v%s/%s", releaseBaseURL, cleanVer, assetName)
 
+	expectedHash, err := downloadChecksumForAsset(ver, assetName)
+	if err != nil {
+		return fmt.Errorf("fetching checksum for %s: %w", assetName, err)
+	}
+
+	url := fmt.Sprintf("%s/v%s/%s", releaseBaseURL, cleanVer, assetName)
 	resp, err := httpClient.Get(url) //nolint:gosec // URL is constructed from known constants
 	if err != nil {
 		return fmt.Errorf("fetching %s: %w", url, err)
@@ -1404,7 +1417,52 @@ func downloadReleaseBinary(ver, arch, destPath string) error {
 	}
 
 	const maxDownloadSize = 200 * 1024 * 1024 // 200 MB compressed
-	return extractFullsendFromTarGz(io.LimitReader(resp.Body, maxDownloadSize), destPath)
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, io.LimitReader(resp.Body, maxDownloadSize)); err != nil {
+		return fmt.Errorf("reading %s: %w", assetName, err)
+	}
+
+	h := sha256.Sum256(buf.Bytes())
+	actualHash := hex.EncodeToString(h[:])
+	if actualHash != expectedHash {
+		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", assetName, actualHash, expectedHash)
+	}
+
+	return extractFullsendFromTarGz(bytes.NewReader(buf.Bytes()), destPath)
+}
+
+// downloadChecksumForAsset fetches the checksums.txt from the GitHub Release
+// for the given version and returns the SHA256 hash for assetName.
+// GoReleaser format: "<sha256>  <filename>\n"
+func downloadChecksumForAsset(ver, assetName string) (string, error) {
+	cleanVer := strings.TrimPrefix(ver, "v")
+	url := fmt.Sprintf("%s/v%s/fullsend_%s_checksums.txt", releaseBaseURL, cleanVer, cleanVer)
+
+	resp, err := httpClient.Get(url) //nolint:gosec // URL is constructed from known constants
+	if err != nil {
+		return "", fmt.Errorf("fetching checksums: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s returned %d", url, resp.StatusCode)
+	}
+
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 64*1024))
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.Fields(line)
+		if len(parts) == 2 && parts[1] == assetName {
+			if len(parts[0]) != 64 {
+				return "", fmt.Errorf("invalid hash length for %s in checksums.txt", assetName)
+			}
+			return parts[0], nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("reading checksums: %w", err)
+	}
+	return "", fmt.Errorf("asset %s not found in checksums.txt", assetName)
 }
 
 // downloadLatestReleaseBinary resolves the latest release tag from the GitHub
