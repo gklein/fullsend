@@ -10,8 +10,8 @@ import (
 
 func TestDefaultAgentRoles(t *testing.T) {
 	roles := DefaultAgentRoles()
-	require.Len(t, roles, 4)
-	assert.Equal(t, []string{"fullsend", "triage", "coder", "review"}, roles)
+	require.Len(t, roles, 5)
+	assert.Equal(t, []string{"fullsend", "triage", "coder", "review", "fix"}, roles)
 }
 
 func TestAgentAppConfig_Fullsend(t *testing.T) {

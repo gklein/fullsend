@@ -41,17 +41,18 @@ type RepoConfig struct {
 
 // OrgConfig is the top-level configuration for a fullsend organization.
 type OrgConfig struct {
-	Version   string                `yaml:"version"`
-	Dispatch  DispatchConfig        `yaml:"dispatch"`
-	Inference InferenceConfig       `yaml:"inference,omitempty"`
-	Defaults  RepoDefaults          `yaml:"defaults"`
-	Agents    []AgentEntry          `yaml:"agents"`
-	Repos     map[string]RepoConfig `yaml:"repos"`
+	Version    string                `yaml:"version"`
+	KillSwitch bool                  `yaml:"kill_switch,omitempty"`
+	Dispatch   DispatchConfig        `yaml:"dispatch"`
+	Inference  InferenceConfig       `yaml:"inference,omitempty"`
+	Defaults   RepoDefaults          `yaml:"defaults"`
+	Agents     []AgentEntry          `yaml:"agents"`
+	Repos      map[string]RepoConfig `yaml:"repos"`
 }
 
 // ValidRoles returns the set of recognized agent roles.
 func ValidRoles() []string {
-	return []string{"fullsend", "triage", "coder", "review"}
+	return []string{"fullsend", "triage", "coder", "review", "fix"}
 }
 
 // ValidProviders returns the set of recognized inference providers.
