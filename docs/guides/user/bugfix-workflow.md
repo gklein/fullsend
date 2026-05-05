@@ -138,7 +138,7 @@ Re-review happens automatically on every push to the PR. The `ready-for-merge` l
 
 Once the PR is merged (by human, merge queue, or automation per org governance), the automated pipeline for this issue is complete.
 
-> **Planned:** The **retro agent** ([#131](https://github.com/fullsend-ai/fullsend/issues/131)) will capture lessons learned from the pipeline run — review rejections, CI failures, manual interventions — and feed them back into the agent harness configuration. This lets the system improve over time without manual prompt tuning. Feedback is scoped per-repo, with optional org-wide promotion, and maintainers can review corrections before they take effect.
+The **retro agent** ([#131](https://github.com/fullsend-ai/fullsend/issues/131)) runs automatically when a PR is closed (merged or rejected) and can also be triggered on-demand via `/retro` on any issue or PR comment. It analyzes the full workflow graph — triage, code, review, and fix agent interactions plus any human interventions — to identify improvement opportunities. Proposals are filed as GitHub issues in the appropriate repo, and a summary comment is posted on the originating PR/issue linking to all proposals.
 
 ## Intervening in the pipeline
 
