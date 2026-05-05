@@ -1,9 +1,4 @@
-import {
-  formatDocDirHash,
-  formatDocHash,
-  parseDocHash,
-  type ParsedDocHash,
-} from "./hashRoute";
+import { formatDocHash, parseDocHash, type ParsedDocHash } from "./hashRoute";
 
 const LAST_DOC_ROUTE_KEY = "fullsend-docs-last-doc-route";
 
@@ -43,10 +38,6 @@ export function navigateToRouteKey(
   } else {
     location.hash = hash;
   }
-}
-
-export function navigateToDirPath(dirPath: string): void {
-  location.hash = formatDocDirHash(dirPath);
 }
 
 export function defaultRouteKeyFromKeys(keys: string[]): string | null {

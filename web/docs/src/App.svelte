@@ -4,15 +4,15 @@
   import { manifest, loadPage } from "virtual:fullsend-docs";
   import { collectRouteKeys } from "./lib/manifestRouteKeys";
   import { collectDirPaths } from "./lib/manifestDirs";
-  import { formatDocDirHash, formatDocHash, parseDocHash } from "./lib/hashRoute";
+  import { formatDocHash, parseDocHash } from "./lib/hashRoute";
   import {
     defaultRouteKeyFromKeys,
     legacyPathnameDocRest,
     navigateToRouteKey,
     persistLastDocRouteKey,
-    readLastDocRouteKey,
   } from "./lib/routing";
-  import { persistExpandedPathInSession } from "./lib/treeSession";
+  import { bfsFirstRouteKeyUnderDir } from "./lib/manifestBfsDefault";
+  import { persistExpandedPathForRouteKey } from "./lib/treeSession";
   import { DocTreeNav } from "./lib/tree";
 
   const NAV_COLLAPSED_KEY = "fullsend-docs-nav-collapsed";
@@ -25,7 +25,8 @@
   let mainEl: HTMLElement | null = $state(null);
   let pageRouteKey = $state("");
   let slug = $state<string | undefined>(undefined);
-  let dirFocusPath = $state<string | null>(null);
+  /** Next file-branch outline sync should open the sidebar (directory URL or in-doc directory link). */
+  let directoryOutlineReveal = $state(false);
   let page = $state<DocPagePayload | null>(null);
   let loading = $state(false);
   let navCollapsed = $state(false);
@@ -65,12 +66,16 @@
     shellEl.style.setProperty("--docs-sidebar-width", `${w}px`);
   }
 
-  function focusDirectoryInOutline(dirPath: string): void {
-    persistNavCollapsed(false);
-    if (narrowViewport) {
-      mobileNavOpen = true;
+  function syncOutlineForActiveRoute(routeKey: string, revealChrome: boolean): void {
+    persistExpandedPathForRouteKey(routeKey, dirPaths);
+    outlineSessionEpoch++;
+    if (revealChrome) {
+      persistNavCollapsed(false);
+      if (narrowViewport) {
+        mobileNavOpen = true;
+      }
     }
-    const sel = `[data-doc-tree-dir="${CSS.escape(dirPath)}"]`;
+    const sel = `[data-doc-tree-route="${CSS.escape(routeKey)}"]`;
     const tryScroll = (): boolean => {
       const el = document.querySelector(sel);
       if (el) {
@@ -90,7 +95,7 @@
     );
   }
 
-  /** Directory hash links: explicit navigation + scroll (default handling is unreliable in some cases). */
+  /** Directory hash links in the article: go to BFS default page and sync outline (hash may not change). */
   function onDocMainClick(e: MouseEvent): void {
     if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
     if (e.button !== 0) return;
@@ -105,12 +110,25 @@
     if (parsed?.kind !== "dir" || !dirPaths.has(parsed.dirPath)) return;
 
     e.preventDefault();
-    const canonical = formatDocDirHash(parsed.dirPath);
-    if (window.location.hash !== canonical) {
-      window.location.hash = canonical;
-    } else {
-      focusDirectoryInOutline(parsed.dirPath);
+    const defaultKey = defaultRouteKeyFromKeys([...routeKeys]);
+    let targetKey = bfsFirstRouteKeyUnderDir(manifest, parsed.dirPath);
+    if (targetKey === null || !routeKeys.has(targetKey)) {
+      targetKey = defaultKey;
     }
+    if (targetKey === null) return;
+
+    const loc = parseDocHash(window.location.hash);
+    const already =
+      loc?.kind === "file" &&
+      loc.routeKey === targetKey &&
+      !loc.slug;
+
+    if (already) {
+      syncOutlineForActiveRoute(targetKey, true);
+      return;
+    }
+    directoryOutlineReveal = true;
+    navigateToRouteKey(targetKey);
   }
 
   function syncRouteFromLocation(): void {
@@ -129,12 +147,10 @@
     if (routeKeys.size === 0) {
       pageRouteKey = "";
       slug = undefined;
-      dirFocusPath = null;
       return;
     }
 
     if (parsed === null) {
-      dirFocusPath = null;
       if (defaultKey !== null) {
         navigateToRouteKey(defaultKey, { replace: true });
         pageRouteKey = defaultKey;
@@ -146,32 +162,31 @@
 
     if (parsed.kind === "dir") {
       if (!dirPaths.has(parsed.dirPath)) {
-        dirFocusPath = null;
         if (defaultKey !== null) {
           navigateToRouteKey(defaultKey, { replace: true });
           pageRouteKey = defaultKey;
           slug = undefined;
+          persistLastDocRouteKey(defaultKey);
         }
         return;
       }
-      dirFocusPath = parsed.dirPath;
-      persistExpandedPathInSession(parsed.dirPath);
-      outlineSessionEpoch++;
-      const last = readLastDocRouteKey();
-      const keep =
-        last !== null && routeKeys.has(last)
-          ? last
-          : defaultKey;
-      if (keep !== null) {
-        pageRouteKey = keep;
-      } else {
-        pageRouteKey = "";
+      directoryOutlineReveal = true;
+      let resolved = bfsFirstRouteKeyUnderDir(manifest, parsed.dirPath);
+      if (resolved === null || !routeKeys.has(resolved)) {
+        resolved = defaultKey;
       }
+      if (resolved === null) {
+        pageRouteKey = "";
+        slug = undefined;
+        return;
+      }
+      persistLastDocRouteKey(resolved);
+      pageRouteKey = resolved;
       slug = undefined;
+      navigateToRouteKey(resolved, { replace: true });
       return;
     }
 
-    dirFocusPath = null;
     if (!routeKeys.has(parsed.routeKey)) {
       if (defaultKey !== null) {
         navigateToRouteKey(defaultKey, { replace: true });
@@ -185,6 +200,9 @@
     pageRouteKey = parsed.routeKey;
     slug = parsed.slug;
     persistLastDocRouteKey(parsed.routeKey);
+    const reveal = directoryOutlineReveal;
+    directoryOutlineReveal = false;
+    syncOutlineForActiveRoute(parsed.routeKey, reveal);
   }
 
   async function runMermaid(): Promise<void> {
@@ -338,12 +356,6 @@
         el.scrollIntoView();
       }
     });
-  });
-
-  $effect(() => {
-    const d = dirFocusPath;
-    if (!d) return;
-    focusDirectoryInOutline(d);
   });
 
   function persistNavCollapsed(collapsed: boolean): void {
