@@ -4,7 +4,7 @@
   import { manifest, loadPage } from "virtual:fullsend-docs";
   import { collectRouteKeys } from "./lib/manifestRouteKeys";
   import { collectDirPaths } from "./lib/manifestDirs";
-  import { formatDocHash, parseDocHash } from "./lib/hashRoute";
+  import { formatDocDirHash, formatDocHash, parseDocHash } from "./lib/hashRoute";
   import {
     defaultRouteKeyFromKeys,
     legacyPathnameDocRest,
@@ -21,6 +21,7 @@
   const dirPaths = collectDirPaths(manifest);
 
   let shellEl: HTMLDivElement | null = $state(null);
+  let mainEl: HTMLElement | null = $state(null);
   let pageRouteKey = $state("");
   let slug = $state<string | undefined>(undefined);
   let dirFocusPath = $state<string | null>(null);
@@ -59,6 +60,43 @@
     if (!shellEl) return;
     const w = clampSidebarWidthPx(px);
     shellEl.style.setProperty("--docs-sidebar-width", `${w}px`);
+  }
+
+  function focusDirectoryInOutline(dirPath: string): void {
+    persistNavCollapsed(false);
+    if (narrowViewport) {
+      mobileNavOpen = true;
+    }
+    void tick().then(() =>
+      requestAnimationFrame(() => {
+        document
+          .querySelector(`[data-doc-tree-dir="${CSS.escape(dirPath)}"]`)
+          ?.scrollIntoView({ block: "nearest" });
+      }),
+    );
+  }
+
+  /** Directory hash links: explicit navigation + scroll (default handling is unreliable in some cases). */
+  function onDocMainClick(e: MouseEvent): void {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (e.button !== 0) return;
+    const el = e.target;
+    if (!(el instanceof Element)) return;
+    if (!mainEl) return;
+    const a = el.closest("a[href]");
+    if (!a || !mainEl.contains(a)) return;
+    const hrefAttr = a.getAttribute("href");
+    if (hrefAttr === null || !hrefAttr.startsWith("#/")) return;
+    const parsed = parseDocHash(hrefAttr);
+    if (parsed?.kind !== "dir" || !dirPaths.has(parsed.dirPath)) return;
+
+    e.preventDefault();
+    const canonical = formatDocDirHash(parsed.dirPath);
+    if (window.location.hash !== canonical) {
+      window.location.hash = canonical;
+    } else {
+      focusDirectoryInOutline(parsed.dirPath);
+    }
   }
 
   function syncRouteFromLocation(): void {
@@ -228,6 +266,14 @@
   });
 
   $effect(() => {
+    const m = mainEl;
+    if (!m) return;
+    const handler = (e: MouseEvent) => onDocMainClick(e);
+    m.addEventListener("click", handler);
+    return () => m.removeEventListener("click", handler);
+  });
+
+  $effect(() => {
     const key = pageRouteKey;
     if (!key || !routeKeys.has(key)) {
       page = null;
@@ -281,16 +327,7 @@
   $effect(() => {
     const d = dirFocusPath;
     if (!d) return;
-    persistNavCollapsed(false);
-    if (narrowViewport) {
-      mobileNavOpen = true;
-    }
-    void tick().then(() => {
-      const el = document.querySelector(
-        `[data-doc-tree-dir="${CSS.escape(d)}"]`,
-      );
-      el?.scrollIntoView({ block: "nearest" });
-    });
+    focusDirectoryInOutline(d);
   });
 
   function persistNavCollapsed(collapsed: boolean): void {
@@ -328,7 +365,7 @@
 >
   <div class="docs-shell-inner">
     <aside class="docs-sidebar" id="docs-sidebar" aria-label="Documentation outline">
-      <div class="docs-sidebar-header">
+      <div class="docs-chrome-row docs-sidebar-header">
         <span class="docs-sidebar-title">Outline</span>
         <button
           type="button"
@@ -374,7 +411,7 @@
     ></button>
 
     <div class="docs-content-column">
-      <header class="docs-topbar">
+      <header class="docs-chrome-row docs-topbar">
         <button
           type="button"
           class="docs-icon-btn docs-hamburger"
@@ -395,7 +432,7 @@
       </header>
 
       <div class="docs-main-wrap">
-        <main class="docs-main">
+        <main class="docs-main" bind:this={mainEl}>
           {#if pageRouteKey && page}
             <article
               class="doc-body"

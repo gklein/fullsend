@@ -89,10 +89,12 @@ function remarkRewriteMdLinks(
       const resolvedPosix = path.posix.normalize(
         path.posix.join(baseDir, pathPart),
       );
+      /** Paths are repo-relative to `docs/`; strip accidental `docs/` prefix from links. */
+      const docRel = resolvedPosix.replace(/^docs\//, "");
 
-      if (!isDocLinkPath(resolvedPosix)) return;
+      if (!isDocLinkPath(docRel)) return;
 
-      const absUnderDocs = path.join(repoRoot, "docs", resolvedPosix);
+      const absUnderDocs = path.join(repoRoot, "docs", docRel);
       let linkTargetIsDir = false;
       try {
         linkTargetIsDir =
@@ -102,12 +104,12 @@ function remarkRewriteMdLinks(
       }
 
       if (linkTargetIsDir) {
-        const dirKey = resolvedPosix.replace(/\\/g, "/");
+        const dirKey = docRel.replace(/\\/g, "/");
         node.url = formatDocDirHash(dirKey);
         return;
       }
 
-      const routeKey = resolvedPathToRouteKey(resolvedPosix);
+      const routeKey = resolvedPathToRouteKey(docRel);
       const frag = fragEncoded ?? "";
       if (!frag) {
         node.url = `#/${routeKey}`;

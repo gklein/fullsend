@@ -49,14 +49,20 @@ body {
   color: var(--docs-text);
 }
 
-.docs-topbar {
-  flex: 0 0 auto;
+/* Shared height for main title bar and outline header (aligned across columns). */
+.docs-chrome-row {
+  box-sizing: border-box;
+  flex: 0 0 var(--docs-topbar-height);
+  height: var(--docs-topbar-height);
+  min-height: var(--docs-topbar-height);
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  min-height: var(--docs-topbar-height);
   padding: 0 0.75rem;
   border-bottom: 1px solid var(--docs-border);
+}
+
+.docs-topbar {
+  gap: 0.75rem;
   background: var(--docs-surface);
 }
 
@@ -234,13 +240,8 @@ body {
 }
 
 .docs-sidebar-header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.5rem 0.65rem;
-  border-bottom: 1px solid var(--docs-border);
   font-size: 0.85rem;
   background: var(--docs-muted-bg);
 }

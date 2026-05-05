@@ -60,4 +60,10 @@ describe("markdownToHtml", () => {
     );
     expect(html).toContain('href="#/problems/"');
   });
+
+  it("strips accidental docs/ prefix so directory links resolve", async () => {
+    const md = "[x](docs/problems/applied/)";
+    const { html } = await markdownToHtml(md, "docs/vision.md", repoRoot);
+    expect(html).toContain('href="#/problems/applied/"');
+  });
 });
