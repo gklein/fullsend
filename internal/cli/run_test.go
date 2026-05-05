@@ -42,6 +42,13 @@ func TestRunCommand_RegisteredOnRoot(t *testing.T) {
 	assert.True(t, found, "run command should be registered on root")
 }
 
+func TestRunCommand_HasNoPostScriptFlag(t *testing.T) {
+	cmd := newRunCmd()
+	flag := cmd.Flags().Lookup("no-post-script")
+	require.NotNil(t, flag)
+	assert.Equal(t, "false", flag.DefValue)
+}
+
 func TestRunCommand_HasOutputDirFlag(t *testing.T) {
 	cmd := newRunCmd()
 	flag := cmd.Flags().Lookup("output-dir")

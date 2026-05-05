@@ -25,6 +25,7 @@ func newRunCmd() *cobra.Command {
 	var targetRepo string
 	var fullsendBinary string
 	var envFiles []string
+	var noPostScript bool
 
 	cmd := &cobra.Command{
 		Use:   "run <agent-name>",
@@ -34,7 +35,7 @@ func newRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentName := args[0]
 			printer := ui.New(os.Stdout)
-			return runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary, envFiles, printer)
+			return runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary, envFiles, noPostScript, printer)
 		},
 	}
 
@@ -43,13 +44,14 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&targetRepo, "target-repo", "", "path to the target repository")
 	cmd.Flags().StringVar(&fullsendBinary, "fullsend-binary", "", "path to a Linux fullsend binary to copy into the sandbox (default: current executable)")
 	cmd.Flags().StringArrayVar(&envFiles, "env-file", nil, "load environment variables from a dotenv file (repeatable)")
+	cmd.Flags().BoolVar(&noPostScript, "no-post-script", false, "skip post-script execution (agent inference still runs)")
 	_ = cmd.MarkFlagRequired("fullsend-dir")
 	_ = cmd.MarkFlagRequired("target-repo")
 
 	return cmd
 }
 
-func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary string, envFiles []string, printer *ui.Printer) (runErr error) {
+func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary string, envFiles []string, noPostScript bool, printer *ui.Printer) (runErr error) {
 	printer.Banner()
 	printer.Blank()
 	printer.Header("Running agent: " + agentName)
@@ -230,6 +232,10 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	// any output checks it needs.
 	if h.PostScript != "" {
 		defer func() {
+			if noPostScript {
+				printer.StepWarn("Skipping post-script: --no-post-script")
+				return
+			}
 			if h.ValidationLoop != nil && !validationPassed {
 				printer.StepWarn("Skipping post-script: validation did not pass")
 				return
