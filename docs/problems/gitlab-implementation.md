@@ -38,6 +38,21 @@ This document contains implementation details for GitLab support in fullsend. Fo
 
 **Open question**: The webhook-to-trigger translation requirement creates an architectural tension. Options 2 and 3 both introduce additional infrastructure (serverless functions or hosted bridge), while option 1 reintroduces the security concern that webhooks were meant to solve. For GitLab Free tier deployments, option 3 (minimal bridge) is likely the only viable path. For Premium/Ultimate, option 2 (serverless) keeps compute within GitLab infrastructure. See ADR-0027 "Open Questions" for full analysis.
 
+**Security requirements for webhook translation intermediary**:
+
+The intermediary (serverless function or bridge service) is a critical security component. It MUST:
+
+1. **Hardcode target ref**: Always call `.fullsend` trigger API with `ref=main`. MUST NOT derive ref from webhook payload fields or allow ref to be specified by the webhook sender.
+2. **Validate webhook secret**: Verify the webhook secret token matches the expected value before forwarding to trigger API.
+3. **Use least-privilege credentials**: Deploy with only the trigger token, no other `.fullsend` repository access.
+4. **Input validation**: Validate webhook payload structure before parsing to prevent injection attacks.
+
+**Rationale**: The intermediary controls which branch the `.fullsend` dispatch pipeline runs on. If compromised or misconfigured to accept attacker-controlled `ref` values, an insider with `.fullsend` write access could:
+1. Push a malicious branch to `.fullsend` that exfiltrates secrets
+2. Compromise the intermediary to trigger pipelines on that branch via `ref=malicious-branch`
+
+Defense-in-depth (protected variables, see Security Considerations section) mitigates this, but the intermediary MUST enforce ref=main as primary control.
+
 ### Webhook Payload Validation
 
 This snippet illustrates the security-critical validation logic. For the complete dispatch pipeline including stage fan-out, see [Cross-Repo Dispatch Mechanism](#cross-repo-dispatch-mechanism).
@@ -151,9 +166,15 @@ dispatch:
 - The token itself authorizes triggering pipelines only in the `.fullsend` project
 - Stored as group-level CI/CD variable `FULLSEND_DISPATCH_TOKEN` (group-level for visibility to all enrolled repos' shim workflows; the token's authorization scope is still limited to `.fullsend`)
 
-**Security consideration - dispatch token exposure**: The webhook-based architecture (chosen approach, see [Shim Pipeline Security](#shim-pipeline-security)) avoids exposing `FULLSEND_DISPATCH_TOKEN` to enrolled repos entirely. Enrolled repos send webhooks with webhook secret tokens for authentication, and the `.fullsend` dispatch pipeline uses its internal `FULLSEND_DISPATCH_TOKEN` to trigger child pipelines — enrolled repo code never sees the dispatch token. This is a key security advantage of the webhook approach over alternatives like in-repo shim workflows. 
+**Security consideration - dispatch token exposure**: The webhook-based architecture (chosen approach, see [Shim Pipeline Security](#shim-pipeline-security)) avoids exposing `FULLSEND_DISPATCH_TOKEN` to enrolled repos entirely. Enrolled repos send webhooks with webhook secret tokens for authentication, and the `.fullsend` dispatch pipeline uses its internal `FULLSEND_DISPATCH_TOKEN` to trigger child pipelines — enrolled repo code never sees the dispatch token. This is a key security advantage of the webhook approach over alternatives like in-repo shim workflows.
 
-**Alternative architecture note**: If using in-repo shim workflows (not the chosen approach), the group-level `FULLSEND_DISPATCH_TOKEN` would be visible to all enrolled repo pipelines, creating an exfiltration risk. Mitigations for that alternative would include: (1) marking `FULLSEND_DISPATCH_TOKEN` as a protected variable (only exposed to protected branch pipelines), or (2) using webhook secret tokens for authentication instead. However, the webhook-based architecture already implements (2) by design, so this exposure concern does not apply to the chosen architecture.
+**Defense-in-depth with protected variables**: All CI/CD variables containing secrets (including `FULLSEND_DISPATCH_TOKEN`) MUST be marked as "protected" in GitLab. This ensures they are only exposed to pipelines running on protected branches (main). This provides defense-in-depth even though the webhook-based architecture is designed to always trigger on `ref=main`:
+
+- **Protects against intermediary compromise**: If the webhook translation service has a bug or is compromised to call trigger API with `ref=attacker-branch`, secrets will not be exposed
+- **Protects against insider threats**: If an insider with `.fullsend` write access creates a malicious branch, they cannot exfiltrate secrets even if the dispatch pipeline somehow runs on that branch
+- **Low-cost, high-value control**: Marking variables as protected has no operational overhead and provides strong guarantees
+
+See [Protected CI/CD Variables](#protected-cicd-variables-defense-in-depth) section for detailed threat model.
 
 ### Dispatch Workflow
 
@@ -486,6 +507,36 @@ Modified packages (minimized via forge.Client abstraction):
 - CLI validates via GitLab API: `GET /projects/:id/protected_branches/:branch`
 - Error if `main` is not protected
 
+### Protected CI/CD Variables (Defense-in-Depth)
+
+**All secrets stored in `.fullsend` project MUST be marked as "protected" variables.** This is a critical defense-in-depth control.
+
+**Required protected variables**:
+- `FULLSEND_DISPATCH_TOKEN` (trigger token for child pipelines)
+- `FULLSEND_TRIAGE_TOKEN`, `FULLSEND_CODE_TOKEN`, `FULLSEND_REVIEW_TOKEN`, `FULLSEND_FIX_TOKEN` (per-role credentials)
+- `WEBHOOK_TOKEN_<sha256(project_path)>` (webhook validation tokens for each enrolled repo)
+- Any GCP/Anthropic/cloud provider credentials used by agents
+
+**How protected variables work**: GitLab restricts protected variables to pipelines running on protected branches only. Pipelines triggered on unprotected branches cannot access these variables, regardless of how the pipeline was triggered (webhook, trigger API, manual, etc.).
+
+**Threat model**: This defends against:
+
+1. **Webhook intermediary compromise**: If the translation service is compromised or contains a bug that allows triggering `.fullsend` pipelines on attacker-controlled refs (e.g., `ref=evil-branch` instead of `ref=main`), the secrets will not be exposed because the branch is not protected.
+
+2. **Insider threat with .fullsend write access**: An insider who can push branches to `.fullsend` (but cannot bypass protected branch rules on `main`) could create a malicious branch that exfiltrates secrets. If the dispatch pipeline somehow runs on that branch, protected variables prevent secret exposure.
+
+3. **Misconfiguration**: If the trigger API call is misconfigured to use a variable ref instead of hardcoded `ref=main`, protected variables limit the blast radius.
+
+**GitLab API documentation confirms**: The `/api/v4/projects/:id/trigger/pipeline` endpoint accepts a required `ref` parameter that specifies which branch/tag to run the pipeline on. Anyone with a trigger token can specify any ref with no documented restrictions. Protected variables are the primary control preventing secret exposure on non-protected branches.
+
+**Implementation**:
+1. Navigate to `.fullsend` project > Settings > CI/CD > Variables
+2. For each secret variable, click Edit
+3. Check "Protect variable" checkbox
+4. Save changes
+
+**Verification**: `fullsend admin install` should validate that all required variables are marked as protected before completing enrollment.
+
 ### Token Scoping
 
 - Project Access Tokens scoped to specific projects, not group-wide
@@ -503,6 +554,21 @@ Modified packages (minimized via forge.Client abstraction):
 - Webhook-based architecture eliminates MR code execution risk
 - Dispatch pipeline runs on `.fullsend` protected branch, not enrolled repo
 - MR metadata passed via webhook payload, constructed by GitLab (not MR author)
+
+### Multi-Project Pipelines
+
+GitLab supports [multi-project pipelines](https://docs.gitlab.com/ee/ci/pipelines/downstream_pipelines.html) that trigger pipelines across project boundaries. This feature is **not suitable** for fullsend's architecture:
+
+**Why not multi-project pipelines**:
+- Would require triggering FROM `.fullsend` TO enrolled repos, running MR code with potential access to secrets
+- GitLab explicitly warns: "Do not use this method to pass masked variables to a multi-project pipeline. The CI/CD masking configuration is not passed to the downstream pipeline."
+- Violates the security principle that untrusted MR code never executes in a context with access to fullsend secrets
+
+**Chosen approach**: Parent-child pipelines within `.fullsend` project
+- Dispatch pipeline → child pipeline (triage/code/review/fix)
+- All run in same project, same protected `main` ref
+- Child pipelines inherit protected branch status and can access protected variables
+- MR code runs in separate sandboxed environments created by agents, not in CI/CD pipelines with secret access
 
 ## Open questions
 
