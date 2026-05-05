@@ -6,11 +6,18 @@
   interface Props {
     nodes: ManifestNode[];
     activeRouteKey: string;
+    /** When set (directory hash), expand ancestors to reveal this path. */
+    expandFocusPath?: string | null;
     /** POSIX path segments for this level’s parent (e.g. `guides/admin`). */
     parentDirPath?: string;
   }
 
-  let { nodes, activeRouteKey, parentDirPath = "" }: Props = $props();
+  let {
+    nodes,
+    activeRouteKey,
+    expandFocusPath = null,
+    parentDirPath = "",
+  }: Props = $props();
 
   /** Bumps when a folder is toggled so `isExpanded` re-reads sessionStorage. */
   let treeEpoch = $state(0);
@@ -26,7 +33,11 @@
     const raw = sessionStorage.getItem(key);
     if (raw === "1") return true;
     if (raw === "0") return false;
-    return descendantMatchesActive(dirPath, activeRouteKey);
+    const focus = expandFocusPath ?? "";
+    return (
+      descendantMatchesActive(dirPath, activeRouteKey) ||
+      descendantMatchesActive(dirPath, focus)
+    );
   }
 
   function toggleDir(dirPath: string): void {
@@ -48,7 +59,7 @@
         {@const dirPath = parentDirPath ? `${parentDirPath}/${node.name}` : node.name}
         {@const expanded = isExpanded(dirPath)}
         {@const subId = childListId(dirPath)}
-        <div class="doc-tree-folder">
+        <div class="doc-tree-folder" data-doc-tree-dir={dirPath}>
           <button
             type="button"
             class="doc-tree-folder-toggle"
@@ -93,7 +104,12 @@
           </button>
           {#if expanded}
             <div id={subId} class="doc-tree-folder-children">
-              <DocTreeNav nodes={node.children} {activeRouteKey} parentDirPath={dirPath} />
+              <DocTreeNav
+                nodes={node.children}
+                {activeRouteKey}
+                {expandFocusPath}
+                parentDirPath={dirPath}
+              />
             </div>
           {/if}
         </div>
@@ -104,6 +120,7 @@
           class:doc-tree-link--active={node.routeKey === activeRouteKey}
           onclick={() => navigateToRouteKey(node.routeKey)}
         >
+          <span class="doc-tree-chevron-slot" aria-hidden="true"></span>
           <span class="doc-tree-doc-glyph" aria-hidden="true">
             <svg width="14" height="14" viewBox="0 0 16 16" focusable="false">
               <path
