@@ -1453,10 +1453,14 @@ func downloadChecksumForAsset(ver, assetName string) (string, error) {
 		line := scanner.Text()
 		parts := strings.Fields(line)
 		if len(parts) == 2 && parts[1] == assetName {
-			if len(parts[0]) != 64 {
+			hash := strings.ToLower(parts[0])
+			if len(hash) != 64 {
 				return "", fmt.Errorf("invalid hash length for %s in checksums.txt", assetName)
 			}
-			return parts[0], nil
+			if _, err := hex.DecodeString(hash); err != nil {
+				return "", fmt.Errorf("invalid hex hash for %s in checksums.txt: %w", assetName, err)
+			}
+			return hash, nil
 		}
 	}
 	if err := scanner.Err(); err != nil {
