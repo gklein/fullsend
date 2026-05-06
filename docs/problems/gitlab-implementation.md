@@ -32,7 +32,7 @@ This document contains implementation details for GitLab support in fullsend. Fo
 **Webhook-to-trigger API incompatibility**: GitLab webhooks send JSON event payloads (merge request objects, issue events), while the pipeline trigger API (`/api/v4/projects/:id/trigger/pipeline`) expects form-encoded parameters (`token`, `ref`, `variables[KEY]=value`). These are not wire-compatible — pointing a webhook URL directly at the trigger endpoint results in a malformed request. This means an intermediary is required to translate webhook payloads to trigger API calls.
 
 **Options for webhook translation**:
-1. **GitLab CI/CD webhook integration**: Use a lightweight `.gitlab-ci.yml` job in the enrolled repo that runs on webhook events (via GitLab's `CI_PIPELINE_SOURCE == "webhook"` trigger) and calls the `.fullsend` trigger API. This keeps everything within GitLab CI/CD but **does not solve the security model** — enforcing protected-branch-only execution via `workflow:rules` prevents the pipeline from reacting to merge request events (which occur on unprotected branches), defeating the purpose. Without protected-branch enforcement, MR code can modify the webhook job.
+1. **GitLab CI/CD webhook integration**: Use a lightweight `.gitlab-ci.yml` job in the enrolled repo (there is no native GitLab mechanism to trigger a pipeline directly from a webhook event; the enrolled repo would need a pipeline triggered by another mechanism that then calls the trigger API) and calls the `.fullsend` trigger API. This keeps everything within GitLab CI/CD but **does not solve the security model** — enforcing protected-branch-only execution via `workflow:rules` prevents the pipeline from reacting to merge request events (which occur on unprotected branches), defeating the purpose. Without protected-branch enforcement, MR code can modify the webhook job.
 2. **GitLab serverless functions**: Use GitLab's serverless integration to deploy a function that receives webhooks and translates to trigger API calls. Maintains compute-platform agnosticism (runs within GitLab infrastructure) but requires GitLab Premium/Ultimate tier.
 3. **Minimal bridge service**: Deploy a lightweight translation service (e.g., Cloud Run, Lambda) that receives webhooks and POSTs to the trigger API. This reintroduces the "hosted webhook receiver" concern from ADR-0009 but may be acceptable given GitLab's lack of a direct webhook-to-pipeline primitive.
 
@@ -166,7 +166,7 @@ dispatch:
 
 - Created via GitLab API: `POST /projects/:id/triggers` for the `.fullsend` project
 - The token itself authorizes triggering pipelines only in the `.fullsend` project
-- Stored as group-level CI/CD variable `FULLSEND_DISPATCH_TOKEN` (group-level for visibility to all enrolled repos' shim workflows; the token's authorization scope is still limited to `.fullsend`)
+- Stored as project-level CI/CD variable `FULLSEND_DISPATCH_TOKEN` in the `.fullsend` project (scoped to `.fullsend` only; enrolled repos never see this token)
 
 **Security consideration - dispatch token exposure**: The webhook-based architecture (chosen approach, see [Shim Pipeline Security](#shim-pipeline-security)) avoids exposing `FULLSEND_DISPATCH_TOKEN` to enrolled repos entirely. Enrolled repos send webhooks with webhook secret tokens for authentication, and the `.fullsend` dispatch pipeline uses its internal `FULLSEND_DISPATCH_TOKEN` to trigger child pipelines — enrolled repo code never sees the dispatch token. This is a key security advantage of the webhook approach over alternatives like in-repo shim workflows.
 
@@ -319,18 +319,18 @@ This keeps the dispatch scanning logic identical across GitHub and GitLab.
 | issues.labeled | issue (labels changed) | Webhook → .fullsend dispatch pipeline |
 | issue_comment.created | note (on issue) | Webhook → .fullsend dispatch pipeline |
 | pull_request_target | merge_request_event | Webhook → .fullsend dispatch pipeline |
-| pull_request_review.submitted | Merge request approval | Webhook → .fullsend dispatch pipeline |
+| pull_request_review.submitted | Merge request approval + Note events (review comments) | Webhook → .fullsend dispatch pipeline (requires multiple GitLab event types to replicate full GitHub review behavior: approvals via MR approval API, review comments via Notes) |
 
 **GitLab webhook limitations**:
 - No direct equivalent to GitHub's granular event types
-- Must filter events in pipeline logic (e.g., check `$CI_MERGE_REQUEST_EVENT_TYPE`)
+- Must filter events in dispatch pipeline by inspecting webhook payload (`EVENT_PAYLOAD_B64`), not via CI predefined variables (dispatch pipelines triggered via trigger API have `CI_PIPELINE_SOURCE == "trigger"`, so MR-specific variables like `CI_MERGE_REQUEST_EVENT_TYPE` are not available)
 - Issue webhooks don't include label details in all cases (may need API call)
 
 ## State Machine Primitives
 
 **Labels**: GitLab labels work nearly identically to GitHub
 - Same label names: `ready-to-code`, `ready-for-review`, `ready-for-merge`, `needs-info`
-- Applied via GitLab API: `PUT /projects/:id/merge_requests/:iid/labels`
+- Applied via GitLab API: `PUT /projects/:id/merge_requests/:iid` with `labels`, `add_labels`, or `remove_labels` parameters
 - Scoped to projects (not group-level by default)
 
 **Approval rules**: GitLab has native approval mechanisms:
@@ -616,8 +616,8 @@ GitLab supports [multi-project pipelines](https://docs.gitlab.com/ee/ci/pipeline
 ## References
 
 - [ADR-0028: GitLab Support Architecture](../ADRs/0028-gitlab-support.md)
-- [ADR-0005: Forge abstraction layer](../ADRs/0005-forge-abstraction.md)
-- [ADR-0009: pull_request_target security model](../ADRs/0009-pull-request-target.md)
+- [ADR-0005: Forge abstraction layer](../ADRs/0005-forge-abstraction-layer.md)
+- [ADR-0009: pull_request_target security model](../ADRs/0009-pull-request-target-in-shim-workflows.md)
 - GitLab CI/CD documentation: https://docs.gitlab.com/ee/ci/
 - GitLab Project Access Tokens: https://docs.gitlab.com/ee/user/project/settings/project_access_tokens.html
 - GitLab Pipeline Triggers: https://docs.gitlab.com/ee/ci/triggers/
