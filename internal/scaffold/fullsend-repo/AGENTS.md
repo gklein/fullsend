@@ -1,8 +1,5 @@
 # AGENTS.md
 
-Check if there are CLAUDE.md or AI.md in the root of this repository and if
-there are stop reading this file. Otherwise proceed and use this file.
-
 ## 1. Think before acting
 
 State your assumptions explicitly before writing code. When the issue
