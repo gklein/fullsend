@@ -127,12 +127,14 @@ GitLab doesn't have an exact GitHub Apps equivalent, but Project Access Tokens (
 | fix     | Developer | Read/write target repos, push to MR branches |
 
 **Storage**: Project Access Token values stored as CI/CD variables:
-- Group-level masked variable: `FULLSEND_DISPATCH_TOKEN` (visible to all enrolled projects)
-- Project-level masked variables in `.fullsend`:
+- Group-level **masked and protected** variable: `FULLSEND_DISPATCH_TOKEN` (visible to all enrolled projects)
+- Project-level **masked and protected** variables in `.fullsend`:
   - `FULLSEND_TRIAGE_TOKEN`
   - `FULLSEND_CODE_TOKEN`
   - `FULLSEND_REVIEW_TOKEN`
   - `FULLSEND_FIX_TOKEN`
+
+**CRITICAL SECURITY REQUIREMENT**: All variables containing secrets MUST be marked as "protected" in GitLab (in addition to "masked"). Protected variables are only exposed to pipelines running on protected branches. This is the primary defense-in-depth control ensuring that if a pipeline is somehow triggered on a non-protected branch (via misconfiguration, intermediary compromise, or insider attack), secrets cannot be exfiltrated. Without "protected" status, an attacker with write access to `.fullsend` could create a malicious branch and exfiltrate all secrets.
 
 **Limitations vs GitHub Apps**:
 - No installation flow (tokens created via API, no OAuth redirect)
@@ -141,6 +143,67 @@ GitLab doesn't have an exact GitHub Apps equivalent, but Project Access Tokens (
 - No per-permission scoping within a role (e.g., Developer can push and approve, can't separate)
 
 **Alternative considered**: OAuth Applications. Rejected because they're user-scoped (not project-scoped) and require user interaction, similar to GitHub App manifest flow but less suitable for automation.
+
+### 4. Event Handling and Webhook Architecture
+
+**GitHub**: GitHub Actions natively supports event-driven workflows triggered by issue events, issue comments, pull request reviews, etc. The `pull_request_target` event provides both secure event handling (runs base branch code) and native event dispatch.
+
+**GitLab**: GitLab CI/CD pipelines do not have native support for issue events, issue comment events, or merge request comment events as pipeline triggers. The `CI_PIPELINE_SOURCE` variable supports 15 values (`push`, `web`, `trigger`, `schedule`, etc.), but **none cover issue events, notes (comments), or MR review events**.
+
+This creates an architectural gap: GitLab webhooks can fire on these events (issues, notes, merge_requests), but there is no native way to trigger a GitLab CI/CD pipeline in response. GitLab webhooks deliver JSON event payloads, while the pipeline trigger API (`/api/v4/projects/:id/trigger/pipeline`) expects form-encoded parameters. **These are not wire-compatible** — pointing a webhook URL directly at the trigger endpoint results in a malformed request.
+
+**Solution**: An intermediary webhook-to-trigger translation layer is required. This intermediary:
+1. Receives GitLab webhook payloads (JSON)
+2. Validates webhook secret tokens
+3. Translates event payloads to trigger API parameters
+4. Calls the `.fullsend` trigger API with `ref=main` (hardcoded, never from payload)
+
+**Architectural Options**:
+1. **GitLab CI/CD webhook job** (in enrolled repo): Reintroduces security concerns — cannot enforce protected-branch-only execution without blocking MR event reactions entirely
+2. **GitLab serverless functions**: Maintains compute-platform agnosticism but requires GitLab Premium/Ultimate tier
+3. **Minimal external bridge service**: Works on GitLab Free tier but introduces hosted webhook receiver (conflicts with compute-platform agnosticism goal from ADR-0009)
+
+**Decision**: This architectural constraint is documented in the Open Questions section below. For production deployment, either option 2 (GitLab Premium/Ultimate tier) or option 3 (external bridge with documented trade-offs) must be chosen. The webhook translation requirement is a fundamental difference from GitHub's native event-to-workflow dispatch model.
+
+**Key security property**: The intermediary MUST hardcode `ref=main` when calling the trigger API. It MUST NOT derive the ref from webhook payload fields, as this would allow an attacker to trigger arbitrary branches in `.fullsend`. Protected CI/CD variables (see Authentication Model above) provide defense-in-depth if this control fails.
+
+### 5. Agent Execution Environment (Out of Scope)
+
+**Explicitly scoped out**: This ADR does not specify how fullsend agents (OpenShell, etc.) execute on GitLab runners. Topics including runner executor types (docker, kubernetes, shell), isolation models, runner registration requirements, and OpenShell integration specifics are **orthogonal to the CI/CD dispatch architecture** and will be addressed in a future ADR or agent infrastructure design document.
+
+**Assumption**: Agents will execute in isolated environments (containers or VMs) managed by GitLab runners, similar to the current GitHub Actions model. The dispatch pipelines (covered in this ADR) trigger agent jobs; the agent sandbox and compute architecture are implementation-specific and follow the same principles regardless of forge.
+
+**Rationale for scoping out**: The webhook dispatch architecture, authentication model, and event handling decisions can be made independently of the agent execution environment. Combining both topics would create an overly broad ADR that conflates pipeline orchestration with compute isolation.
+
+### 6. Forge Abstraction Compliance
+
+**ADR-0005 Promise**: "Adding a new forge requires implementing `forge.Client` — no changes to layers, CLI, or app setup code."
+
+**Challenge**: The current `forge.Client` interface contains GitHub-specific methods (`ListOrgInstallations`, `GetAppClientID`, `DispatchWorkflow`) that do not map to GitLab. Implementing GitLab support without extending the interface would violate ADR-0005's abstraction boundary.
+
+**Solution**: Extend `forge.Client` with **forge-neutral** methods that abstract over GitHub and GitLab primitives:
+
+```go
+// Credential management (abstracts GitHub Apps and GitLab Project Access Tokens)
+CreateRoleCredential(ctx context.Context, role, owner, repo string, permissions []string) (credentialID string, err error)
+RevokeRoleCredential(ctx context.Context, owner, repo, credentialID string) error
+
+// Pipeline triggering (abstracts workflow_dispatch and trigger API)
+TriggerPipeline(ctx context.Context, owner, repo, stage string, variables map[string]string) error
+
+// Webhook management (GitLab-specific but exposed as optional interface method)
+CreateWebhook(ctx context.Context, owner, repo, targetURL, secretToken string, events []string) error
+```
+
+**Minimizing Changes to Layers/CLI/Appsetup**:
+- `appsetup`: Calls `forge.CreateRoleCredential()` instead of GitHub App-specific code
+- `layers/workflows`: Calls `forge.GetTemplateDirectory()` to retrieve `.github/` or `.gitlab/` path (pushes forge-specific logic into Client implementation)
+- `layers/enrollment`: Calls `forge.GetEnrollmentSnippet()` for shim workflow syntax (pushes forge-specific logic into Client implementation)
+- `CLI`: Calls `forge.DetectForge(repoURL)` (detection logic moved to `internal/forge/detect.go` per ADR-0005 boundary rule)
+
+**Compliance Result**: Changes to layers/CLI/appsetup are limited to **calling new forge-neutral interface methods**. The bulk of GitLab-specific logic lives in `internal/forge/gitlab/gitlab.go`, preserving ADR-0005's abstraction boundary.
+
+See [Forge Interface Evolution](../problems/gitlab-implementation.md#forge-interface-evolution) in the implementation document for detailed method signatures and migration strategy.
 
 ## Implementation Details
 
