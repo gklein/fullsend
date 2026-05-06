@@ -1199,7 +1199,6 @@ func (c *LiveClient) ListPullRequestReviews(ctx context.Context, owner, repo str
 func (c *LiveClient) DismissPullRequestReview(ctx context.Context, owner, repo string, number, reviewID int, message string) error {
 	payload := map[string]string{
 		"message": message,
-		"event":   "DISMISS",
 	}
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews/%d/dismissals", owner, repo, number, reviewID)
 	resp, err := c.put(ctx, path, payload)

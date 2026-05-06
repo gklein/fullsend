@@ -228,7 +228,7 @@ func TestSubmitFormalReview_DismissesStaleRequestChanges(t *testing.T) {
 	}
 
 	printer := ui.New(io.Discard)
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", false, printer)
 	require.NoError(t, err)
 
 	require.Len(t, fc.DismissedReviews, 1)
@@ -256,43 +256,34 @@ func TestSubmitFormalReview_UnknownAction(t *testing.T) {
 
 func TestMinimizeStaleReviews_MinimizesAll(t *testing.T) {
 	fc := forge.NewFakeClient()
-	fc.AuthenticatedUser = "fullsend-bot"
-	fc.PRReviews = map[string][]forge.PullRequestReview{
-		"acme/repo/1": {
-			{ID: 100, NodeID: "PRR_100", User: "fullsend-bot", State: "APPROVED", Body: "only review"},
-		},
+	reviews := []forge.PullRequestReview{
+		{ID: 100, NodeID: "PRR_100", User: "fullsend-bot", State: "APPROVED", Body: "only review"},
 	}
 
 	printer := ui.New(io.Discard)
-	err := minimizeStaleReviews(context.Background(), fc, "acme", "repo", 1, printer)
-	require.NoError(t, err)
+	minimizeStaleReviews(context.Background(), fc, "fullsend-bot", reviews, printer)
 	require.Len(t, fc.MinimizedComments, 1)
 	assert.Equal(t, "PRR_100", fc.MinimizedComments[0].NodeID)
 }
 
 func TestMinimizeStaleReviews_ErrorTolerance(t *testing.T) {
 	fc := forge.NewFakeClient()
-	fc.AuthenticatedUser = "fullsend-bot"
-	fc.PRReviews = map[string][]forge.PullRequestReview{
-		"acme/repo/1": {
-			{ID: 100, NodeID: "PRR_100", User: "fullsend-bot", State: "COMMENTED", Body: "review 1"},
-			{ID: 200, NodeID: "PRR_200", User: "fullsend-bot", State: "APPROVED", Body: "review 2"},
-		},
-	}
 	fc.Errors["MinimizeComment"] = fmt.Errorf("GraphQL error")
+	reviews := []forge.PullRequestReview{
+		{ID: 100, NodeID: "PRR_100", User: "fullsend-bot", State: "COMMENTED", Body: "review 1"},
+		{ID: 200, NodeID: "PRR_200", User: "fullsend-bot", State: "APPROVED", Body: "review 2"},
+	}
 
 	printer := ui.New(io.Discard)
-	err := minimizeStaleReviews(context.Background(), fc, "acme", "repo", 1, printer)
-	require.NoError(t, err, "minimizeStaleReviews should not return error when MinimizeComment fails")
+	minimizeStaleReviews(context.Background(), fc, "fullsend-bot", reviews, printer)
+	// soft-fail: no panic despite MinimizeComment errors
 }
 
 func TestMinimizeStaleReviews_NoReviews(t *testing.T) {
 	fc := forge.NewFakeClient()
-	fc.AuthenticatedUser = "fullsend-bot"
 
 	printer := ui.New(io.Discard)
-	err := minimizeStaleReviews(context.Background(), fc, "acme", "repo", 1, printer)
-	require.NoError(t, err)
+	minimizeStaleReviews(context.Background(), fc, "fullsend-bot", nil, printer)
 	assert.Empty(t, fc.MinimizedComments)
 }
 
@@ -413,13 +404,13 @@ func TestSubmitFormalReview_CommentSkipped(t *testing.T) {
 
 func TestDismissStaleRequestChanges(t *testing.T) {
 	tests := []struct {
-		name           string
-		user           string
-		reviews        []forge.PullRequestReview
-		newEvent       string
-		errors         map[string]error
-		wantDismissed  int
-		wantReviewID   int
+		name          string
+		user          string
+		reviews       []forge.PullRequestReview
+		newEvent      string
+		dismissErr    error
+		wantDismissed int
+		wantReviewID  int
 	}{
 		{
 			name:     "softening from request-changes to comment",
@@ -485,11 +476,11 @@ func TestDismissStaleRequestChanges(t *testing.T) {
 			wantDismissed: 0,
 		},
 		{
-			name:     "multiple bot reviews dismisses most recent CR only",
+			name:     "multiple CR reviews dismisses most recent only",
 			user:     "bot",
 			newEvent: "COMMENT",
 			reviews: []forge.PullRequestReview{
-				{ID: 100, User: "bot", State: "COMMENTED"},
+				{ID: 100, User: "bot", State: "CHANGES_REQUESTED"},
 				{ID: 200, User: "bot", State: "CHANGES_REQUESTED"},
 			},
 			wantDismissed: 1,
@@ -502,21 +493,7 @@ func TestDismissStaleRequestChanges(t *testing.T) {
 			reviews: []forge.PullRequestReview{
 				{ID: 100, User: "bot", State: "CHANGES_REQUESTED"},
 			},
-			errors:        map[string]error{"DismissPullRequestReview": fmt.Errorf("API error")},
-			wantDismissed: 0,
-		},
-		{
-			name:          "auth error skips dismissal",
-			user:          "bot",
-			newEvent:      "COMMENT",
-			errors:        map[string]error{"GetAuthenticatedUser": fmt.Errorf("auth error")},
-			wantDismissed: 0,
-		},
-		{
-			name:          "list error skips dismissal",
-			user:          "bot",
-			newEvent:      "COMMENT",
-			errors:        map[string]error{"ListPullRequestReviews": fmt.Errorf("list error")},
+			dismissErr:    fmt.Errorf("API error"),
 			wantDismissed: 0,
 		},
 	}
@@ -524,19 +501,12 @@ func TestDismissStaleRequestChanges(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fc := forge.NewFakeClient()
-			fc.AuthenticatedUser = tt.user
-			if tt.reviews != nil {
-				fc.PRReviews = map[string][]forge.PullRequestReview{
-					"acme/repo/1": tt.reviews,
-				}
-			}
-			for k, v := range tt.errors {
-				fc.Errors[k] = v
+			if tt.dismissErr != nil {
+				fc.Errors["DismissPullRequestReview"] = tt.dismissErr
 			}
 
 			printer := ui.New(io.Discard)
-			err := dismissStaleRequestChanges(context.Background(), fc, "acme", "repo", 1, tt.newEvent, printer)
-			require.NoError(t, err)
+			dismissStaleRequestChanges(context.Background(), fc, "acme", "repo", 1, tt.newEvent, tt.user, tt.reviews, printer)
 
 			assert.Len(t, fc.DismissedReviews, tt.wantDismissed)
 			if tt.wantDismissed > 0 {
@@ -544,4 +514,29 @@ func TestDismissStaleRequestChanges(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSubmitFormalReview_AuthErrorSkipsCleanup(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.Errors["GetAuthenticatedUser"] = fmt.Errorf("auth error")
+	printer := ui.New(io.Discard)
+
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", false, printer)
+	require.NoError(t, err)
+	assert.Empty(t, fc.DismissedReviews)
+	assert.Empty(t, fc.MinimizedComments)
+	require.Len(t, fc.CreatedReviews, 1, "review should still be created despite auth error")
+}
+
+func TestSubmitFormalReview_ListErrorSkipsCleanup(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "bot"
+	fc.Errors["ListPullRequestReviews"] = fmt.Errorf("list error")
+	printer := ui.New(io.Discard)
+
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", false, printer)
+	require.NoError(t, err)
+	assert.Empty(t, fc.DismissedReviews)
+	assert.Empty(t, fc.MinimizedComments)
+	require.Len(t, fc.CreatedReviews, 1, "review should still be created despite list error")
 }

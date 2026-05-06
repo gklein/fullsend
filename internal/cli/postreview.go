@@ -258,12 +258,14 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 		return nil
 	}
 
-	if err := dismissStaleRequestChanges(ctx, client, owner, repo, pr, event, printer); err != nil {
-		return err
-	}
-
-	if err := minimizeStaleReviews(ctx, client, owner, repo, pr, printer); err != nil {
-		return err
+	user, err := client.GetAuthenticatedUser(ctx)
+	if err != nil {
+		printer.StepInfo("Could not determine authenticated user, skipping stale review cleanup")
+	} else if reviews, err := client.ListPullRequestReviews(ctx, owner, repo, pr); err != nil {
+		printer.StepInfo("Could not list reviews, skipping stale review cleanup")
+	} else {
+		dismissStaleRequestChanges(ctx, client, owner, repo, pr, event, user, reviews, printer)
+		minimizeStaleReviews(ctx, client, user, reviews, printer)
 	}
 
 	var reviewBody string
@@ -284,21 +286,9 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 
 // dismissStaleRequestChanges dismisses the most recent CHANGES_REQUESTED
 // review by the authenticated user when the new verdict is softer.
-func dismissStaleRequestChanges(ctx context.Context, client forge.Client, owner, repo string, pr int, newEvent string, printer *ui.Printer) error {
+func dismissStaleRequestChanges(ctx context.Context, client forge.Client, owner, repo string, pr int, newEvent, user string, reviews []forge.PullRequestReview, printer *ui.Printer) {
 	if newEvent == "REQUEST_CHANGES" {
-		return nil
-	}
-
-	user, err := client.GetAuthenticatedUser(ctx)
-	if err != nil {
-		printer.StepInfo("Could not determine authenticated user, skipping review dismissal")
-		return nil
-	}
-
-	reviews, err := client.ListPullRequestReviews(ctx, owner, repo, pr)
-	if err != nil {
-		printer.StepInfo("Could not list reviews, skipping review dismissal")
-		return nil
+		return
 	}
 
 	for i := len(reviews) - 1; i >= 0; i-- {
@@ -314,26 +304,12 @@ func dismissStaleRequestChanges(ctx context.Context, client forge.Client, owner,
 		}
 		break
 	}
-
-	return nil
 }
 
-// minimizeStaleReviews lists all reviews on the PR, finds previous reviews
-// by the authenticated user, and minimizes them. Called before creating a
-// new review, so all existing reviews by this user are stale.
-func minimizeStaleReviews(ctx context.Context, client forge.Client, owner, repo string, pr int, printer *ui.Printer) error {
-	user, err := client.GetAuthenticatedUser(ctx)
-	if err != nil {
-		printer.StepInfo("Could not determine authenticated user, skipping stale review cleanup")
-		return nil
-	}
-
-	reviews, err := client.ListPullRequestReviews(ctx, owner, repo, pr)
-	if err != nil {
-		printer.StepInfo("Could not list reviews, skipping stale review cleanup")
-		return nil
-	}
-
+// minimizeStaleReviews finds previous reviews by the given user and
+// minimizes them. Called before creating a new review, so all existing
+// reviews by this user are stale.
+func minimizeStaleReviews(ctx context.Context, client forge.Client, user string, reviews []forge.PullRequestReview, printer *ui.Printer) {
 	var stale []forge.PullRequestReview
 	for _, r := range reviews {
 		if r.User == user {
@@ -342,7 +318,7 @@ func minimizeStaleReviews(ctx context.Context, client forge.Client, owner, repo 
 	}
 
 	if len(stale) == 0 {
-		return nil
+		return
 	}
 
 	printer.StepStart(fmt.Sprintf("Minimizing %d stale review(s)", len(stale)))
@@ -352,8 +328,6 @@ func minimizeStaleReviews(ctx context.Context, client forge.Client, owner, repo 
 		}
 	}
 	printer.StepDone("Stale reviews minimized")
-
-	return nil
 }
 
 // parseReviewResult attempts to parse the body as a JSON ReviewResult.
