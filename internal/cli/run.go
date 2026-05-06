@@ -1,11 +1,21 @@
 package cli
 
 import (
+	"archive/tar"
+	"bufio"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"debug/elf"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -593,20 +603,45 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string
 	// The pre-agent security scan runs inside the sandbox and needs the
 	// fullsend CLI to scan context files.
 	localBinary := fullsendBinary
+	var tmpBinaryDir string
 	if localBinary == "" {
-		var err error
-		localBinary, err = os.Executable()
-		if err != nil {
-			return fmt.Errorf("finding fullsend executable: %w", err)
+		if needsCrossCompilation() {
+			targetArch := sandboxArch()
+			dir, binPath, err := resolveLinuxBinary(targetArch)
+			if err != nil {
+				if h.FailModeClosed() {
+					return fmt.Errorf("could not obtain linux/%s binary for security scan (fail_mode: closed): %w\nUse --fullsend-binary to provide a pre-built Linux binary", targetArch, err)
+				}
+				fmt.Fprintf(os.Stderr, "WARNING: could not obtain linux/%s binary: %v\n", targetArch, err)
+				fmt.Fprintf(os.Stderr, "WARNING: skipping sandbox-side security scan (fail_mode: open). Use --fullsend-binary to provide a pre-built Linux binary.\n")
+				localBinary = ""
+			} else {
+				tmpBinaryDir = dir
+				localBinary = binPath
+			}
+		} else {
+			var err error
+			localBinary, err = os.Executable()
+			if err != nil {
+				return fmt.Errorf("finding fullsend executable: %w", err)
+			}
 		}
 	}
-	remoteBinary := fmt.Sprintf("%s/bin/fullsend", sandbox.SandboxWorkspace)
-	if err := sandbox.SCP(sshConfigPath, sandboxName, localBinary, remoteBinary); err != nil {
-		return fmt.Errorf("copying fullsend binary to sandbox: %w", err)
+	if tmpBinaryDir != "" {
+		defer os.RemoveAll(tmpBinaryDir)
 	}
-	chmodCmd := fmt.Sprintf("chmod +x %s", remoteBinary)
-	if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, chmodCmd, 10*time.Second); err != nil {
-		return fmt.Errorf("chmod fullsend binary: %w", err)
+	if localBinary != "" {
+		if err := validateLinuxBinary(localBinary); err != nil {
+			return fmt.Errorf("fullsend binary %q is not valid for the sandbox: %w", localBinary, err)
+		}
+		remoteBinary := fmt.Sprintf("%s/bin/fullsend", sandbox.SandboxWorkspace)
+		if err := sandbox.SCP(sshConfigPath, sandboxName, localBinary, remoteBinary); err != nil {
+			return fmt.Errorf("copying fullsend binary to sandbox: %w", err)
+		}
+		chmodCmd := fmt.Sprintf("chmod +x %s", remoteBinary)
+		if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, chmodCmd, 10*time.Second); err != nil {
+			return fmt.Errorf("chmod fullsend binary: %w", err)
+		}
 	}
 
 	// Host-side scan (Path A): check agent definition and skills for injection
@@ -1251,4 +1286,307 @@ func applySandboxImageOverride(image string) (string, bool) {
 		return override, true
 	}
 	return image, false
+}
+
+// needsCrossCompilation reports whether the host binary cannot run inside the
+// sandbox (Linux). True when running on macOS or any non-Linux OS.
+func needsCrossCompilation() bool {
+	return runtime.GOOS != "linux"
+}
+
+// validateLinuxBinary checks that the file at path is a Linux ELF executable
+// for the expected sandbox architecture. Returns a descriptive error if the
+// file is missing, not ELF, not Linux, or the wrong architecture.
+func validateLinuxBinary(path string) error {
+	f, err := elf.Open(path)
+	if err != nil {
+		return fmt.Errorf("not a valid ELF binary (is this a macOS Mach-O?): %w", err)
+	}
+	defer f.Close()
+
+	if f.OSABI != elf.ELFOSABI_NONE && f.OSABI != elf.ELFOSABI_LINUX {
+		return fmt.Errorf("ELF OS/ABI is %s, expected Linux or NONE", f.OSABI)
+	}
+
+	arch := sandboxArch()
+	archToMachine := map[string]elf.Machine{
+		"amd64": elf.EM_X86_64,
+		"arm64": elf.EM_AARCH64,
+	}
+	if expected, ok := archToMachine[arch]; ok && f.Machine != expected {
+		return fmt.Errorf("ELF machine is %s, expected %s for %s (set FULLSEND_SANDBOX_ARCH to override)", f.Machine, expected, arch)
+	}
+	return nil
+}
+
+var validArchs = map[string]bool{"amd64": true, "arm64": true}
+
+// sandboxArch returns the target architecture for the sandbox binary.
+// Defaults to the host arch (correct when sandbox image matches host, e.g.
+// arm64 Mac → arm64 sandbox image). Override with FULLSEND_SANDBOX_ARCH
+// when the sandbox image uses a different architecture (e.g. amd64 image
+// on an arm64 host via emulation). Only amd64 and arm64 are supported.
+func sandboxArch() string {
+	if arch := os.Getenv("FULLSEND_SANDBOX_ARCH"); arch != "" {
+		if !validArchs[arch] {
+			fmt.Fprintf(os.Stderr, "WARNING: FULLSEND_SANDBOX_ARCH=%q is not a supported architecture (amd64, arm64), using host arch %s\n", arch, runtime.GOARCH)
+			return runtime.GOARCH
+		}
+		return arch
+	}
+	return runtime.GOARCH
+}
+
+// resolveLinuxBinary obtains a Linux fullsend binary for the given arch.
+// Strategy: download from GitHub Release first (fast, no toolchain needed),
+// fall back to cross-compilation if the download fails or version is "dev".
+// Returns the temp directory (caller must clean up), the binary path, and any error.
+func resolveLinuxBinary(arch string) (tmpDir string, binaryPath string, err error) {
+	tmpDir, err = os.MkdirTemp("", "fullsend-linux-*")
+	if err != nil {
+		return "", "", fmt.Errorf("creating temp dir: %w", err)
+	}
+	binaryPath = filepath.Join(tmpDir, "fullsend")
+
+	// 1. Released version → download matching release asset.
+	if isReleasedVersion(version) {
+		fmt.Fprintf(os.Stderr, "Downloading fullsend %s for linux/%s from GitHub Release...\n", version, arch)
+		if dlErr := downloadReleaseBinary(version, arch, binaryPath); dlErr == nil {
+			fmt.Fprintf(os.Stderr, "Downloaded fullsend for linux/%s\n", arch)
+			return tmpDir, binaryPath, nil
+		} else {
+			fmt.Fprintf(os.Stderr, "WARNING: release download failed: %v\n", dlErr)
+		}
+	}
+
+	// 2. Dev build → try cross-compilation (requires Go toolchain + module in CWD).
+	fmt.Fprintf(os.Stderr, "Cross-compiling fullsend for linux/%s...\n", arch)
+	if ccErr := crossCompileFullsend(arch, binaryPath); ccErr == nil {
+		fmt.Fprintf(os.Stderr, "Cross-compiled fullsend for linux/%s\n", arch)
+		return tmpDir, binaryPath, nil
+	} else {
+		fmt.Fprintf(os.Stderr, "WARNING: cross-compilation failed: %v\n", ccErr)
+	}
+
+	// 3. Last resort → download latest release (version won't match exactly,
+	//    but the scan context command interface is stable across patch versions).
+	fmt.Fprintf(os.Stderr, "Downloading latest fullsend release for linux/%s...\n", arch)
+	if dlErr := downloadLatestReleaseBinary(arch, binaryPath); dlErr == nil {
+		fmt.Fprintf(os.Stderr, "Downloaded latest fullsend for linux/%s\n", arch)
+		return tmpDir, binaryPath, nil
+	} else {
+		fmt.Fprintf(os.Stderr, "WARNING: latest release download failed: %v\n", dlErr)
+	}
+
+	os.RemoveAll(tmpDir)
+	return "", "", fmt.Errorf("all strategies failed for linux/%s: provide --fullsend-binary or install Go toolchain", arch)
+}
+
+// isReleasedVersion returns true if version looks like a release tag
+// (e.g. "0.4.0", "v0.4.0") rather than a dev build (e.g. "dev",
+// "0.4.0-3-gabcdef", "0.4.0-vendored").
+func isReleasedVersion(v string) bool {
+	v = strings.TrimPrefix(v, "v")
+	if v == "" || v == "dev" {
+		return false
+	}
+	// A released version is purely digits and dots (e.g. "0.4.0").
+	for _, c := range v {
+		if c != '.' && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+var releaseBaseURL = "https://github.com/fullsend-ai/fullsend/releases/download"
+
+var httpClient = &http.Client{Timeout: 120 * time.Second}
+
+// downloadReleaseBinary downloads the fullsend binary for linux/{arch} from
+// the GitHub Release matching the given version, verifies its SHA256 checksum
+// against the release checksums.txt, and writes it to destPath.
+func downloadReleaseBinary(ver, arch, destPath string) error {
+	cleanVer := strings.TrimPrefix(ver, "v")
+	assetName := fmt.Sprintf("fullsend_%s_linux_%s.tar.gz", cleanVer, arch)
+
+	expectedHash, err := downloadChecksumForAsset(ver, assetName)
+	if err != nil {
+		return fmt.Errorf("fetching checksum for %s: %w", assetName, err)
+	}
+
+	url := fmt.Sprintf("%s/v%s/%s", releaseBaseURL, cleanVer, assetName)
+	resp, err := httpClient.Get(url) //nolint:gosec // URL is constructed from known constants
+	if err != nil {
+		return fmt.Errorf("fetching %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s returned %d", url, resp.StatusCode)
+	}
+
+	const maxDownloadSize = 200 * 1024 * 1024 // 200 MB compressed
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, io.LimitReader(resp.Body, maxDownloadSize)); err != nil {
+		return fmt.Errorf("reading %s: %w", assetName, err)
+	}
+
+	h := sha256.Sum256(buf.Bytes())
+	actualHash := hex.EncodeToString(h[:])
+	if actualHash != expectedHash {
+		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", assetName, actualHash, expectedHash)
+	}
+
+	return extractFullsendFromTarGz(bytes.NewReader(buf.Bytes()), destPath)
+}
+
+// downloadChecksumForAsset fetches the checksums.txt from the GitHub Release
+// for the given version and returns the SHA256 hash for assetName.
+// GoReleaser format: "<sha256>  <filename>\n"
+func downloadChecksumForAsset(ver, assetName string) (string, error) {
+	cleanVer := strings.TrimPrefix(ver, "v")
+	url := fmt.Sprintf("%s/v%s/fullsend_%s_checksums.txt", releaseBaseURL, cleanVer, cleanVer)
+
+	resp, err := httpClient.Get(url) //nolint:gosec // URL is constructed from known constants
+	if err != nil {
+		return "", fmt.Errorf("fetching checksums: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s returned %d", url, resp.StatusCode)
+	}
+
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 64*1024))
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.Fields(line)
+		if len(parts) == 2 && parts[1] == assetName {
+			hash := strings.ToLower(parts[0])
+			if len(hash) != 64 {
+				return "", fmt.Errorf("invalid hash length for %s in checksums.txt", assetName)
+			}
+			if _, err := hex.DecodeString(hash); err != nil {
+				return "", fmt.Errorf("invalid hex hash for %s in checksums.txt: %w", assetName, err)
+			}
+			return hash, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("reading checksums: %w", err)
+	}
+	return "", fmt.Errorf("asset %s not found in checksums.txt", assetName)
+}
+
+// downloadLatestReleaseBinary resolves the latest release tag from the GitHub
+// API and downloads the Linux binary for the given arch.
+func downloadLatestReleaseBinary(arch, destPath string) error {
+	tag, err := resolveLatestReleaseTag()
+	if err != nil {
+		return err
+	}
+	return downloadReleaseBinary(tag, arch, destPath)
+}
+
+func resolveLatestReleaseTag() (string, error) {
+	resp, err := httpClient.Get("https://api.github.com/repos/fullsend-ai/fullsend/releases/latest") //nolint:gosec
+	if err != nil {
+		return "", fmt.Errorf("fetching latest release: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&release); err != nil {
+		return "", fmt.Errorf("parsing release JSON: %w", err)
+	}
+	if release.TagName == "" {
+		return "", fmt.Errorf("empty tag_name in latest release")
+	}
+	return release.TagName, nil
+}
+
+const maxBinarySize = 500 * 1024 * 1024 // 500 MB — reasonable upper bound for a Go binary
+
+// extractFullsendFromTarGz reads a tar.gz stream and extracts the "fullsend"
+// binary to destPath.
+func extractFullsendFromTarGz(r io.Reader, destPath string) error {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return fmt.Errorf("fullsend binary not found in archive")
+		}
+		if err != nil {
+			return fmt.Errorf("reading tar: %w", err)
+		}
+		clean := filepath.Clean(hdr.Name)
+		if strings.Contains(clean, "..") || filepath.IsAbs(clean) {
+			continue
+		}
+		if filepath.Base(clean) == "fullsend" && hdr.Typeflag == tar.TypeReg {
+			f, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+			if err != nil {
+				return fmt.Errorf("creating %s: %w", destPath, err)
+			}
+			n, copyErr := io.Copy(f, io.LimitReader(tr, maxBinarySize+1))
+			if copyErr != nil {
+				f.Close()
+				return fmt.Errorf("extracting fullsend: %w", copyErr)
+			}
+			if n > maxBinarySize {
+				f.Close()
+				os.Remove(destPath)
+				return fmt.Errorf("binary exceeds maximum size (%d bytes)", maxBinarySize)
+			}
+			return f.Close()
+		}
+	}
+}
+
+// crossCompileFullsend builds a Linux fullsend binary for the given arch
+// and writes it to destPath. Requires the Go toolchain.
+func crossCompileFullsend(arch, destPath string) error {
+	goPath, lookErr := exec.LookPath("go")
+	if lookErr != nil {
+		return fmt.Errorf("Go toolchain not found — install Go or use a released version of fullsend: %w", lookErr)
+	}
+
+	// Find the module root so `go build ./cmd/fullsend/` resolves correctly
+	// regardless of the caller's working directory.
+	modRootCmd := exec.Command(goPath, "env", "GOMOD")
+	modOutput, err := modRootCmd.Output()
+	if err != nil {
+		return fmt.Errorf("finding module root: %w", err)
+	}
+	modPath := strings.TrimSpace(string(modOutput))
+	if modPath == "" || modPath == os.DevNull {
+		return fmt.Errorf("not in a Go module — run from the fullsend source tree or use a released version")
+	}
+	modRoot := filepath.Dir(modPath)
+
+	buildCmd := exec.Command(goPath, "build",
+		"-ldflags", fmt.Sprintf("-X github.com/fullsend-ai/fullsend/internal/cli.version=%s-crosscompiled", version),
+		"-o", destPath,
+		"./cmd/fullsend/",
+	)
+	buildCmd.Dir = modRoot
+	buildCmd.Env = append(os.Environ(), "GOTOOLCHAIN=auto", "GOOS=linux", "GOARCH="+arch, "CGO_ENABLED=0")
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		return fmt.Errorf("cross-compiling for linux/%s: %w", arch, err)
+	}
+	return nil
 }
