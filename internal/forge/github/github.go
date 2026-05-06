@@ -1195,6 +1195,21 @@ func (c *LiveClient) ListPullRequestReviews(ctx context.Context, owner, repo str
 	return result, nil
 }
 
+// DismissPullRequestReview dismisses a review, changing its state to DISMISSED.
+func (c *LiveClient) DismissPullRequestReview(ctx context.Context, owner, repo string, number, reviewID int, message string) error {
+	payload := map[string]string{
+		"message": message,
+		"event":   "DISMISS",
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews/%d/dismissals", owner, repo, number, reviewID)
+	resp, err := c.put(ctx, path, payload)
+	if err != nil {
+		return fmt.Errorf("dismiss review %d on #%d: %w", reviewID, number, err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // MergeChangeProposal squash-merges a pull request by number.
 func (c *LiveClient) MergeChangeProposal(ctx context.Context, owner, repo string, number int) error {
 	resp, err := c.put(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/merge", owner, repo, number), map[string]string{"merge_method": "squash"})

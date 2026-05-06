@@ -63,6 +63,14 @@ type ReviewRecord struct {
 	CommitSHA   string
 }
 
+// DismissedReviewRecord records a review dismissal call.
+type DismissedReviewRecord struct {
+	Owner, Repo string
+	Number      int
+	ReviewID    int
+	Message     string
+}
+
 // FakeClient is a thread-safe test double for forge.Client.
 // Pre-populate its fields to control return values, and inspect
 // recorder slices after the test to verify which calls were made.
@@ -113,6 +121,7 @@ type FakeClient struct {
 	UpdatedComments   []UpdatedCommentRecord
 	MinimizedComments []MinimizedCommentRecord
 	CreatedReviews    []ReviewRecord
+	DismissedReviews  []DismissedReviewRecord
 
 	// internal counters
 	proposalCounter int
@@ -681,6 +690,31 @@ func (f *FakeClient) ListPullRequestReviews(_ context.Context, owner, repo strin
 		}
 	}
 	return nil, nil
+}
+
+func (f *FakeClient) DismissPullRequestReview(_ context.Context, owner, repo string, number, reviewID int, message string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e := f.err("DismissPullRequestReview"); e != nil {
+		return e
+	}
+	f.DismissedReviews = append(f.DismissedReviews, DismissedReviewRecord{
+		Owner:    owner,
+		Repo:     repo,
+		Number:   number,
+		ReviewID: reviewID,
+		Message:  message,
+	})
+	key := fmt.Sprintf("%s/%s/%d", owner, repo, number)
+	if f.PRReviews != nil {
+		for i, r := range f.PRReviews[key] {
+			if r.ID == reviewID {
+				f.PRReviews[key][i].State = "DISMISSED"
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func (f *FakeClient) MergeChangeProposal(_ context.Context, _, _ string, _ int) error {

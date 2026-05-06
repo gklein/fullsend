@@ -258,6 +258,10 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 		return nil
 	}
 
+	if err := dismissStaleRequestChanges(ctx, client, owner, repo, pr, event, printer); err != nil {
+		return err
+	}
+
 	if err := minimizeStaleReviews(ctx, client, owner, repo, pr, printer); err != nil {
 		return err
 	}
@@ -275,6 +279,42 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 		return fmt.Errorf("submitting review: %w", err)
 	}
 	printer.StepDone("Review submitted")
+	return nil
+}
+
+// dismissStaleRequestChanges dismisses the most recent CHANGES_REQUESTED
+// review by the authenticated user when the new verdict is softer.
+func dismissStaleRequestChanges(ctx context.Context, client forge.Client, owner, repo string, pr int, newEvent string, printer *ui.Printer) error {
+	if newEvent == "REQUEST_CHANGES" {
+		return nil
+	}
+
+	user, err := client.GetAuthenticatedUser(ctx)
+	if err != nil {
+		printer.StepInfo("Could not determine authenticated user, skipping review dismissal")
+		return nil
+	}
+
+	reviews, err := client.ListPullRequestReviews(ctx, owner, repo, pr)
+	if err != nil {
+		printer.StepInfo("Could not list reviews, skipping review dismissal")
+		return nil
+	}
+
+	for i := len(reviews) - 1; i >= 0; i-- {
+		r := reviews[i]
+		if r.User != user || r.State != "CHANGES_REQUESTED" {
+			continue
+		}
+		printer.StepStart(fmt.Sprintf("Dismissing stale CHANGES_REQUESTED review %d", r.ID))
+		if err := client.DismissPullRequestReview(ctx, owner, repo, pr, r.ID, "Superseded by updated review"); err != nil {
+			printer.StepInfo(fmt.Sprintf("Warning: could not dismiss review %d: %v", r.ID, err))
+		} else {
+			printer.StepDone("Stale review dismissed")
+		}
+		break
+	}
+
 	return nil
 }
 

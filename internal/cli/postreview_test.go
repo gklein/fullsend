@@ -213,6 +213,27 @@ func TestSubmitFormalReview_CreatesAndMinimizesStale(t *testing.T) {
 	assert.Equal(t, "OUTDATED", fc.MinimizedComments[0].Reason)
 	assert.Equal(t, "PRR_300", fc.MinimizedComments[1].NodeID)
 	assert.Equal(t, "OUTDATED", fc.MinimizedComments[1].Reason)
+
+	assert.Empty(t, fc.DismissedReviews, "no CHANGES_REQUESTED reviews to dismiss")
+}
+
+func TestSubmitFormalReview_DismissesStaleRequestChanges(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	fc.PRReviews = map[string][]forge.PullRequestReview{
+		"acme/repo/1": {
+			{ID: 100, NodeID: "PRR_100", User: "fullsend-bot", State: "COMMENTED", Body: "old"},
+			{ID: 200, NodeID: "PRR_200", User: "fullsend-bot", State: "CHANGES_REQUESTED", Body: "fix this"},
+		},
+	}
+
+	printer := ui.New(io.Discard)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "", "", false, printer)
+	require.NoError(t, err)
+
+	require.Len(t, fc.DismissedReviews, 1)
+	assert.Equal(t, 200, fc.DismissedReviews[0].ReviewID)
+	assert.Equal(t, "Superseded by updated review", fc.DismissedReviews[0].Message)
 }
 
 func TestSubmitFormalReview_DryRun(t *testing.T) {
@@ -388,4 +409,139 @@ func TestSubmitFormalReview_CommentSkipped(t *testing.T) {
 	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "", "", false, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.CreatedReviews, "COMMENT events should skip formal review")
+}
+
+func TestDismissStaleRequestChanges(t *testing.T) {
+	tests := []struct {
+		name           string
+		user           string
+		reviews        []forge.PullRequestReview
+		newEvent       string
+		errors         map[string]error
+		wantDismissed  int
+		wantReviewID   int
+	}{
+		{
+			name:     "softening from request-changes to comment",
+			user:     "bot",
+			newEvent: "COMMENT",
+			reviews: []forge.PullRequestReview{
+				{ID: 100, User: "bot", State: "CHANGES_REQUESTED"},
+			},
+			wantDismissed: 1,
+			wantReviewID:  100,
+		},
+		{
+			name:     "softening from request-changes to approve",
+			user:     "bot",
+			newEvent: "APPROVE",
+			reviews: []forge.PullRequestReview{
+				{ID: 100, User: "bot", State: "CHANGES_REQUESTED"},
+			},
+			wantDismissed: 1,
+			wantReviewID:  100,
+		},
+		{
+			name:     "same severity skips dismiss",
+			user:     "bot",
+			newEvent: "REQUEST_CHANGES",
+			reviews: []forge.PullRequestReview{
+				{ID: 100, User: "bot", State: "CHANGES_REQUESTED"},
+			},
+			wantDismissed: 0,
+		},
+		{
+			name:          "no prior reviews",
+			user:          "bot",
+			newEvent:      "COMMENT",
+			reviews:       nil,
+			wantDismissed: 0,
+		},
+		{
+			name:     "prior is commented not changes-requested",
+			user:     "bot",
+			newEvent: "COMMENT",
+			reviews: []forge.PullRequestReview{
+				{ID: 100, User: "bot", State: "COMMENTED"},
+			},
+			wantDismissed: 0,
+		},
+		{
+			name:     "prior is approved and new is request-changes",
+			user:     "bot",
+			newEvent: "REQUEST_CHANGES",
+			reviews: []forge.PullRequestReview{
+				{ID: 100, User: "bot", State: "APPROVED"},
+			},
+			wantDismissed: 0,
+		},
+		{
+			name:     "different user review ignored",
+			user:     "bot",
+			newEvent: "COMMENT",
+			reviews: []forge.PullRequestReview{
+				{ID: 100, User: "someone-else", State: "CHANGES_REQUESTED"},
+			},
+			wantDismissed: 0,
+		},
+		{
+			name:     "multiple bot reviews dismisses most recent CR only",
+			user:     "bot",
+			newEvent: "COMMENT",
+			reviews: []forge.PullRequestReview{
+				{ID: 100, User: "bot", State: "COMMENTED"},
+				{ID: 200, User: "bot", State: "CHANGES_REQUESTED"},
+			},
+			wantDismissed: 1,
+			wantReviewID:  200,
+		},
+		{
+			name:     "dismiss API error is non-fatal",
+			user:     "bot",
+			newEvent: "COMMENT",
+			reviews: []forge.PullRequestReview{
+				{ID: 100, User: "bot", State: "CHANGES_REQUESTED"},
+			},
+			errors:        map[string]error{"DismissPullRequestReview": fmt.Errorf("API error")},
+			wantDismissed: 0,
+		},
+		{
+			name:          "auth error skips dismissal",
+			user:          "bot",
+			newEvent:      "COMMENT",
+			errors:        map[string]error{"GetAuthenticatedUser": fmt.Errorf("auth error")},
+			wantDismissed: 0,
+		},
+		{
+			name:          "list error skips dismissal",
+			user:          "bot",
+			newEvent:      "COMMENT",
+			errors:        map[string]error{"ListPullRequestReviews": fmt.Errorf("list error")},
+			wantDismissed: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fc := forge.NewFakeClient()
+			fc.AuthenticatedUser = tt.user
+			if tt.reviews != nil {
+				fc.PRReviews = map[string][]forge.PullRequestReview{
+					"acme/repo/1": tt.reviews,
+				}
+			}
+			for k, v := range tt.errors {
+				fc.Errors[k] = v
+			}
+
+			printer := ui.New(io.Discard)
+			err := dismissStaleRequestChanges(context.Background(), fc, "acme", "repo", 1, tt.newEvent, printer)
+			require.NoError(t, err)
+
+			assert.Len(t, fc.DismissedReviews, tt.wantDismissed)
+			if tt.wantDismissed > 0 {
+				assert.Equal(t, tt.wantReviewID, fc.DismissedReviews[0].ReviewID)
+			}
+		})
+	}
 }
