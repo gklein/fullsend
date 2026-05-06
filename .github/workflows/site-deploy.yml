@@ -144,6 +144,10 @@ jobs:
           TURNSTILE_SITE_KEY: ${{ vars.FULLSEND_TURNSTILE_SITE_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.FULLSEND_TURNSTILE_SECRET_KEY }}
 
+      # PR previews: wrangler-action runs script-level `wrangler secret bulk` *before* the main command.
+      # That conflicts with `versions upload` (API 10214: latest version isn't deployed). Apply secrets
+      # with `wrangler versions secret bulk` in preCommands instead (cloudflare/wrangler-action#374).
+      # Plain `vars` are only auto-injected for deploy/publish, so pass `--var` on `versions upload`.
       - name: Upload preview version (Workers + static assets)
         id: cf-preview
         if: github.event.workflow_run.event == 'pull_request'
@@ -153,20 +157,24 @@ jobs:
           workingDirectory: cloudflare_site
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          preCommands: |
+            set -euo pipefail
+            secrets_file="$(mktemp)"
+            printf '%s\n' \
+              "GITHUB_APP_CLIENT_SECRET=${GITHUB_APP_CLIENT_SECRET}" \
+              "TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY}" \
+              >"$secrets_file"
+            npx wrangler@4.36.0 versions secret bulk "$secrets_file" \
+              --message "PR preview secrets (workflow-run ${{ github.event.workflow_run.id }})"
+            rm -f "$secrets_file"
           command: >-
             versions upload
             --name="${{ vars.CLOUDFLARE_PROJECT_NAME }}"
             --preview-alias ${{ steps.preview-context.outputs.preview_alias }}
-          vars: |
-            GITHUB_APP_CLIENT_ID
-            TURNSTILE_SITE_KEY
-          secrets: |
-            GITHUB_APP_CLIENT_SECRET
-            TURNSTILE_SECRET_KEY
+            --var GITHUB_APP_CLIENT_ID:${{ vars.FULLSEND_GITHUB_APP_CLIENT_ID }}
+            --var TURNSTILE_SITE_KEY:${{ vars.FULLSEND_TURNSTILE_SITE_KEY }}
         env:
-          GITHUB_APP_CLIENT_ID: ${{ vars.FULLSEND_GITHUB_APP_CLIENT_ID }}
           GITHUB_APP_CLIENT_SECRET: ${{ secrets.FULLSEND_GITHUB_APP_CLIENT_SECRET }}
-          TURNSTILE_SITE_KEY: ${{ vars.FULLSEND_TURNSTILE_SITE_KEY }}
           TURNSTILE_SECRET_KEY: ${{ secrets.FULLSEND_TURNSTILE_SECRET_KEY }}
 
       - name: Resolve deployment URL
