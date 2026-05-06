@@ -10,7 +10,7 @@ This guide walks through running fullsend agents locally on macOS and Linux. PR 
 | OpenShell | 0.0.37-dev+ (Podman support) | 0.0.37-dev+ |
 | GCP credentials | Service account key (`Vertex AI User` role) | Same |
 | GitHub PAT | `repo` scope for the target org | Same |
-| Go toolchain | For building the CLI from source | Same |
+| Go toolchain | Optional — only needed when building the CLI from source | Same |
 
 > **arm64 note**: Apple Silicon Macs and arm64 Linux hosts must use the `:dev` multi-arch sandbox images. The default `:latest` tag is amd64-only until multi-arch merges to main. See step 3 below.
 
@@ -79,12 +79,47 @@ This switches from the default `:latest` tag (amd64-only) to the `:dev` multi-ar
 
 The `--env-file` flag loads environment variables before the harness is parsed, so variables are available for harness YAML expansion. The flag is repeatable — later files override earlier ones.
 
+## Security scanning and cross-platform binary
+
+The pre-agent security scan runs `fullsend scan context` inside the Linux sandbox to check for prompt injection before the agent starts. This requires a Linux fullsend binary in the sandbox.
+
+On macOS, the host binary is a Mach-O executable that cannot run inside the Linux sandbox. The CLI detects the OS mismatch and automatically obtains a Linux binary — no manual steps needed. The architecture (arm64/amd64) typically matches between the host and the Podman VM, so only the OS differs.
+
+### How the Linux binary is resolved
+
+| Priority | Strategy | When it applies |
+|----------|----------|-----------------|
+| 1 | `--fullsend-binary <path>` | Always used if provided — skips all auto-resolution |
+| 2 | Download from GitHub Release | CLI version matches a release (e.g. `0.4.0`) |
+| 3 | Cross-compile from source | Go toolchain available and run from the module root |
+| 4 | Download latest release | Fallback when cross-compilation fails |
+
+On Linux hosts, the CLI copies its own executable directly — no download or compilation needed.
+
+### Providing an explicit binary
+
+To skip auto-resolution (e.g. testing a dev build), cross-compile a Linux binary and pass it via `--fullsend-binary`:
+
+```bash
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/fullsend-linux ./cmd/fullsend/
+./bin/fullsend run review \
+  --fullsend-dir /tmp/fullsend-dot \
+  --target-repo /path/to/repo \
+  --env-file /tmp/fullsend.env \
+  --fullsend-binary /tmp/fullsend-linux
+```
+
+The CLI validates that the provided file is a Linux ELF binary before copying it into the sandbox. Passing a macOS Mach-O binary produces a clear error instead of a cryptic failure inside the sandbox.
+
+> **Note:** if your sandbox image uses a different CPU architecture than the host (e.g. amd64 image on an arm64 Mac via QEMU emulation), set `FULLSEND_SANDBOX_ARCH=amd64` so the CLI downloads or cross-compiles for the correct architecture. This is not needed in the typical setup where the Podman VM matches the host arch.
+
 ## Known issues
 
 ### macOS (Apple Silicon)
 
 - **Podman entrypoint**: the container entrypoint `/bin/bash` may fail with "cannot execute binary file". OpenShell handles this internally, but standalone `podman run` needs `--entrypoint ""` with `/usr/bin/env sh -c`.
 - **Podman machine**: ensure the Podman machine is running (`podman machine start`) before invoking fullsend. The CLI does not start it automatically.
+- **Podman host-gateway**: if sandbox creation fails with `unable to replace "host-gateway"`, set `host_containers_internal_ip = "192.168.127.254"` under `[containers]` in `~/.config/containers/containers.conf` and restart the Podman machine.
 
 ### Linux
 

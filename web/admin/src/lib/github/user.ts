@@ -1,7 +1,21 @@
 export type GitHubUser = {
   login: string;
   name: string | null;
+  /** Profile image URL from GitHub `avatar_url`, or null if absent. */
+  avatarUrl: string | null;
 };
+
+/** Only allow https avatars in `<img src>` (reject javascript:, data:, etc.). */
+export function normalizeGithubAvatarUrl(raw: string | null): string | null {
+  if (raw == null || raw.length === 0) return null;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:") return null;
+    return u.href;
+  } catch {
+    return null;
+  }
+}
 
 export class GitHubUserRequestError extends Error {
   readonly status: number;
@@ -37,5 +51,10 @@ export async function fetchGitHubUser(
     throw new Error("GitHub /user: missing login");
   }
   const name = typeof data.name === "string" ? data.name : null;
-  return { login, name };
+  const rawAvatar =
+    typeof data.avatar_url === "string" && data.avatar_url.length > 0
+      ? data.avatar_url
+      : null;
+  const avatarUrl = normalizeGithubAvatarUrl(rawAvatar);
+  return { login, name, avatarUrl };
 }

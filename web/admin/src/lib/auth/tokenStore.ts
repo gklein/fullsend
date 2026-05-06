@@ -1,3 +1,6 @@
+import { clearOAuthScopeHeaderCache } from "../layers/preflight";
+import { clearInstallReadinessProbeCache } from "../orgs/installReadinessProbes";
+
 export type StoredToken = {
   accessToken: string;
   tokenType: string;
@@ -6,6 +9,26 @@ export type StoredToken = {
 };
 
 const KEY = "fullsend_admin_github_token";
+const GITHUB_APP_SLUG_KEY = "fullsend_admin_github_app_slug";
+
+/**
+ * Persists the GitHub App slug from Worker-expanded OAuth `state` after a successful token
+ * exchange. Clears stored slug when `slug` is missing or blank (e.g. older Workers).
+ */
+export function persistGithubAppSlugFromOAuth(slug: string | undefined): void {
+  const s = typeof slug === "string" ? slug.trim() : "";
+  if (!s) {
+    localStorage.removeItem(GITHUB_APP_SLUG_KEY);
+    return;
+  }
+  localStorage.setItem(GITHUB_APP_SLUG_KEY, s);
+}
+
+/** Slug for the admin OAuth GitHub App (install URL), or null if not provided at last sign-in. */
+export function loadGithubAppSlug(): string | null {
+  const s = localStorage.getItem(GITHUB_APP_SLUG_KEY)?.trim() ?? "";
+  return s.length > 0 ? s : null;
+}
 
 export function saveToken(t: StoredToken): void {
   localStorage.setItem(KEY, JSON.stringify(t));
@@ -52,4 +75,7 @@ export function loadToken(): StoredToken | null {
 
 export function clearSession(): void {
   localStorage.removeItem(KEY);
+  localStorage.removeItem(GITHUB_APP_SLUG_KEY);
+  clearOAuthScopeHeaderCache();
+  clearInstallReadinessProbeCache();
 }

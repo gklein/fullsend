@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GITHUB_USER_UNAUTHORIZED_EVENT } from "../auth/githubUnauthorized";
 import { createUserOctokit } from "./client";
 
 describe("createUserOctokit", () => {
@@ -6,7 +7,7 @@ describe("createUserOctokit", () => {
     vi.unstubAllGlobals();
   });
 
-  it("dispatches fullsend:github-unauthorized when GitHub returns 401", async () => {
+  it("dispatches GITHUB_USER_UNAUTHORIZED_EVENT when GitHub returns 401", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() =>
@@ -19,10 +20,10 @@ describe("createUserOctokit", () => {
       ),
     );
     const listener = vi.fn();
-    window.addEventListener("fullsend:github-unauthorized", listener);
+    window.addEventListener(GITHUB_USER_UNAUTHORIZED_EVENT, listener);
     const o = createUserOctokit("tok");
     await expect(o.request("GET /user")).rejects.toThrow();
     expect(listener).toHaveBeenCalledOnce();
-    window.removeEventListener("fullsend:github-unauthorized", listener);
+    window.removeEventListener(GITHUB_USER_UNAUTHORIZED_EVENT, listener);
   });
 });

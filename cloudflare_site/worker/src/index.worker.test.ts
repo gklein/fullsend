@@ -92,6 +92,33 @@ describe("site worker admin API", () => {
     expect(body.error).toBe("forbidden_origin");
   });
 
+  it("returns 413 payload_too_large when OAuth token JSON body exceeds 4 KiB", async () => {
+    const site = "https://worker.test";
+    const redirect = "http://localhost:5173/admin/";
+    const url = new URL(`${site}/api/oauth/token`);
+    const big = "x".repeat(5000);
+    const req = new IncomingRequest(url, {
+      method: "POST",
+      headers: {
+        Origin: new URL(redirect).origin,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        code: "a",
+        redirect_uri: redirect,
+        code_verifier: "verifierverifierverifierverifier01",
+        turnstile_token: "dummy",
+        pad: big,
+      }),
+    });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(req, env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toBe("payload_too_large");
+  });
+
   it("returns 503 missing_turnstile_keys when Turnstile vars are empty", async () => {
     const site = "https://worker.test";
     const url = new URL(`${site}/api/oauth/token`);
@@ -437,6 +464,59 @@ describe("site worker admin API", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error?: string };
     expect(body.error).toBe("param_too_long");
+  });
+
+  it("redirects authorize to GitHub with state JSON including g when GITHUB_APP_SLUG is set", async () => {
+    const redirect = "http://localhost:5173/admin/";
+    const url = authorizeUrl(redirect);
+    const req = new IncomingRequest(url, {
+      method: "GET",
+      headers: { Origin: new URL(redirect).origin },
+    });
+    const ctx = createExecutionContext();
+    const envWithSlug = { ...env, GITHUB_APP_SLUG: "test-fullsend-app" };
+    const res = await worker.fetch(req, envWithSlug, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(302);
+    const loc = res.headers.get("Location");
+    expect(loc).toBeTruthy();
+    const gh = new URL(loc!);
+    expect(gh.hostname).toBe("github.com");
+    const state = gh.searchParams.get("state");
+    expect(state).toBeTruthy();
+    const pad = state!.length % 4 === 0 ? "" : "=".repeat(4 - (state!.length % 4));
+    const json = atob(state!.replace(/-/g, "+").replace(/_/g, "/") + pad);
+    const o = JSON.parse(json) as Record<string, unknown>;
+    expect(o.v).toBe(1);
+    expect(o.n).toBe("12345678");
+    expect(typeof o.k).toBe("string");
+    expect(o.g).toBe("test-fullsend-app");
+  });
+
+  it("omits g from authorize state when GITHUB_APP_SLUG is not a valid slug", async () => {
+    const redirect = "http://localhost:5173/admin/";
+    const url = authorizeUrl(redirect);
+    const req = new IncomingRequest(url, {
+      method: "GET",
+      headers: { Origin: new URL(redirect).origin },
+    });
+    const ctx = createExecutionContext();
+    const envWithBadSlug = { ...env, GITHUB_APP_SLUG: "bad/slug" };
+    const res = await worker.fetch(req, envWithBadSlug, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(302);
+    const loc = res.headers.get("Location");
+    expect(loc).toBeTruthy();
+    const gh = new URL(loc!);
+    const state = gh.searchParams.get("state");
+    expect(state).toBeTruthy();
+    const pad = state!.length % 4 === 0 ? "" : "=".repeat(4 - (state!.length % 4));
+    const json = atob(state!.replace(/-/g, "+").replace(/_/g, "/") + pad);
+    const o = JSON.parse(json) as Record<string, unknown>;
+    expect(o.v).toBe(1);
+    expect(o.n).toBe("12345678");
+    expect(typeof o.k).toBe("string");
+    expect("g" in o).toBe(false);
   });
 
   it("returns 400 missing_or_invalid_oauth_params on authorize when code_challenge_method is not S256", async () => {

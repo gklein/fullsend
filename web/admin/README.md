@@ -18,7 +18,7 @@ You can use any Node 22 + npm install without mise; put credentials in the envir
 
 ## GitHub App (OAuth)
 
-Create a **GitHub App** used for **user** sign-in to the admin UI (not the same as Fullsend agent apps):
+Create a **GitHub App** (“**Fullsend Admin**”) used for **user** sign-in to the admin UI (not the same as per-org Fullsend agent apps from deployment):
 
 1. GitHub → **Settings** → **Developer settings** → **GitHub Apps** → **New GitHub App** (or your org’s equivalent).
 2. **Homepage URL:** e.g. `http://localhost:5173` (or match your dev origin).
@@ -41,7 +41,16 @@ The SPA **does not** embed the GitHub App OAuth **client id** at build time. Sig
 
 **Turnstile (required):** the Worker always folds the site key into GitHub’s `state` at authorize time; the SPA decodes it after redirect and runs an invisible Turnstile challenge before **`POST /api/oauth/token`**. Do **not** put Turnstile keys in the Vite build (`define` / `VITE_*`).
 
+**GitHub App slug (optional):** the org list uses **`GET /user/installations`** and prefers the **app slug** from that response for the “install app on GitHub” link. If the API does not include a slug, set optional **`GITHUB_APP_SLUG`** in the Worker environment (same shell as other Worker vars); the Worker adds it to OAuth **`state`** next to the Turnstile site key so the SPA can persist it after sign-in — still **no** `VITE_*` slug in the static bundle.
+
 The committed **`sample.env.local`** at the repository root lists **official Cloudflare dummy Turnstile keys** for local dev plus the GitHub App checklist; copy it to **`.env.local`** (and align **`.dev.vars`** if you store the secret there only).
+
+## Global auth errors (401)
+
+[UX spec — global banners](../../docs/superpowers/specs/2026-04-21-fullsend-admin-spa-ux-design.md): when GitHub returns **401** for a request using the signed-in user’s token, the shell must show **Re-authenticate**, not a local “Retry only” banner.
+
+- **`createUserOctokit`** (`web/admin/src/lib/github/client.ts`) dispatches **`notifyGitHubUserUnauthorized()`** from its request hook (see `web/admin/src/lib/auth/githubUnauthorized.ts`).
+- Any **other** browser call with the user token that can return **401** must call **`notifyGitHubUserUnauthorized()`** as well (or use that Octokit factory) so **`App.svelte`** runs **`signOut({ suggestReauth: true })`** consistently.
 
 ## Production and CI (Cloudflare Workers)
 
