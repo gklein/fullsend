@@ -20,6 +20,7 @@
 #
 # Command matching: exact, space-delimited args, or newline-delimited body.
 # fromJSON('"\n"') produces a literal newline (GHA strings lack escape support).
+# Assumes LF line endings; GitHub's web UI normalizes to LF (CRLF only via API).
 name: fullsend
 
 permissions:
