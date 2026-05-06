@@ -33,21 +33,17 @@ export function clearSigningInBrowserState(): void {
 const DEFAULT_ADMIN_BASE = "/admin/";
 
 /**
- * Vite injects `import.meta.env.BASE` from root `vite.config.ts` `base`. If it is missing
- * (mis-transformed bundle, odd tooling), `new URL(undefined, origin)` becomes the path
- * literal `"undefined"` — avoid that and match `base: "/admin/"`.
+ * Public URL path where the admin SPA is served (`/admin/`), independent of Vite
+ * `base` (shared build uses `base: '/'`). Do not use `import.meta.env.BASE` for OAuth
+ * `redirect_uri` — it would be wrong when `base` is `/`.
  */
 function adminAppBasePath(): string {
-  const b = import.meta.env.BASE;
-  if (typeof b !== "string" || b.length === 0) {
-    return DEFAULT_ADMIN_BASE;
-  }
-  return b.endsWith("/") ? b : `${b}/`;
+  return DEFAULT_ADMIN_BASE;
 }
 
 /**
- * Canonical SPA entry (Vite `base: '/admin/'`). GitHub redirects here with
- * `?code=&state=`; the app strips query via `history.replaceState` after stashing.
+ * Canonical SPA OAuth callback URL. GitHub redirects here with `?code=&state=`; the app
+ * strips query via `history.replaceState` after stashing.
  */
 export function getOAuthRedirectUri(): string {
   return new URL(adminAppBasePath(), window.location.origin).href;
