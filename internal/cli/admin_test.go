@@ -54,10 +54,6 @@ func TestInstallCmd_Flags(t *testing.T) {
 
 	wifSAEmailFlag := cmd.Flags().Lookup("gcp-wif-sa-email")
 	require.NotNil(t, wifSAEmailFlag, "expected --gcp-wif-sa-email flag")
-
-	// --repo flag should not exist (issue #495)
-	repoFlag := cmd.Flags().Lookup("repo")
-	assert.Nil(t, repoFlag, "--repo flag should have been removed")
 }
 
 func TestUninstallCmd_RequiresOrg(t *testing.T) {
@@ -215,10 +211,10 @@ func TestReposCommand_HasSubcommands(t *testing.T) {
 	cmd := newReposCmd()
 	names := make(map[string]bool)
 	for _, sub := range cmd.Commands() {
-		names[sub.Use] = true
+		names[sub.Name()] = true
 	}
-	assert.True(t, names["enable <org> [repo...]"], "expected enable subcommand")
-	assert.True(t, names["disable <org> [repo...]"], "expected disable subcommand")
+	assert.True(t, names["enable"], "expected enable subcommand")
+	assert.True(t, names["disable"], "expected disable subcommand")
 }
 
 func TestReposEnableCmd_RequiresOrg(t *testing.T) {
@@ -271,22 +267,46 @@ func TestReposDisableCmd_HasAllFlag(t *testing.T) {
 	assert.Equal(t, "false", allFlag.DefValue)
 }
 
-func TestReposEnableCmd_RejectsAllWithRepoNames(t *testing.T) {
-	cmd := newRootCmd()
-	t.Setenv("GH_TOKEN", "test-token")
-	cmd.SetArgs([]string{"admin", "repos", "enable", "testorg", "repo1", "--all"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot specify both --all and repository names")
+func TestReposEnableCmd_AllIgnoresPositionalArgs(t *testing.T) {
+	// When --all is set, positional repo arguments are ignored
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": false,
+		"api":     false,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app", "api"})
+	printer := ui.New(&discardWriter{})
+
+	// Pass "web-app" as a positional arg, but --all should ignore it and enable both repos
+	err := runReposEnable(context.Background(), client, printer, "testorg", []string{"web-app"}, true)
+	require.NoError(t, err)
+
+	// Verify both repos were enabled (--all behavior), not just web-app
+	require.Len(t, client.CreatedFiles, 1)
+	updatedCfg, err := config.ParseOrgConfig(client.CreatedFiles[0].Content)
+	require.NoError(t, err)
+	assert.True(t, updatedCfg.Repos["web-app"].Enabled)
+	assert.True(t, updatedCfg.Repos["api"].Enabled)
 }
 
-func TestReposDisableCmd_RejectsAllWithRepoNames(t *testing.T) {
-	cmd := newRootCmd()
-	t.Setenv("GH_TOKEN", "test-token")
-	cmd.SetArgs([]string{"admin", "repos", "disable", "testorg", "repo1", "--all"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot specify both --all and repository names")
+func TestReposDisableCmd_AllIgnoresPositionalArgs(t *testing.T) {
+	// When --all is set, positional repo arguments are ignored
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": true,
+		"api":     true,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app", "api"})
+	printer := ui.New(&discardWriter{})
+
+	// Pass "web-app" as a positional arg, but --all should ignore it and disable both repos
+	err := runReposDisable(context.Background(), client, printer, "testorg", []string{"web-app"}, true)
+	require.NoError(t, err)
+
+	// Verify both repos were disabled (--all behavior), not just web-app
+	require.Len(t, client.CreatedFiles, 1)
+	updatedCfg, err := config.ParseOrgConfig(client.CreatedFiles[0].Content)
+	require.NoError(t, err)
+	assert.False(t, updatedCfg.Repos["web-app"].Enabled)
+	assert.False(t, updatedCfg.Repos["api"].Enabled)
 }
 
 // Test helpers

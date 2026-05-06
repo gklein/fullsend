@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -1018,13 +1019,17 @@ func newReposCmd() *cobra.Command {
 	return cmd
 }
 
-func newReposEnableCmd() *cobra.Command {
+// reposRunFunc is the signature for repo enable/disable operations.
+type reposRunFunc func(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool) error
+
+// newReposSubcommand creates a repos enable or disable subcommand with shared setup logic.
+func newReposSubcommand(use, short, long, allFlagHelp string, runFn reposRunFunc) *cobra.Command {
 	var all bool
 
 	cmd := &cobra.Command{
-		Use:   "enable <org> [repo...]",
-		Short: "Enable repositories for fullsend enrollment",
-		Long:  "Enables the specified repositories for fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to enable all repositories (excluding .fullsend).",
+		Use:   use,
+		Short: short,
+		Long:  long,
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			org := args[0]
@@ -1032,17 +1037,17 @@ func newReposEnableCmd() *cobra.Command {
 				return err
 			}
 
-			// Validate that --all and repo names are mutually exclusive.
-			hasRepos := len(args) > 1
-			if all && hasRepos {
-				return fmt.Errorf("cannot specify both --all and repository names")
-			}
-			if !all && !hasRepos {
-				return fmt.Errorf("must specify repository names or use --all flag")
-			}
-
+			// When --all is set, ignore positional repo arguments.
+			// Otherwise, require at least one repo name.
 			var repos []string
-			if !all {
+			if all {
+				// Ignore positional args; repos will be discovered from org
+				repos = nil
+			} else {
+				hasRepos := len(args) > 1
+				if !hasRepos {
+					return fmt.Errorf("must specify repository names or use --all flag")
+				}
 				repos = args[1:]
 			}
 
@@ -1055,59 +1060,33 @@ func newReposEnableCmd() *cobra.Command {
 			printer := ui.New(os.Stdout)
 			ctx := cmd.Context()
 
-			return runReposEnable(ctx, client, printer, org, repos, all)
+			return runFn(ctx, client, printer, org, repos, all)
 		},
 	}
 
-	cmd.Flags().BoolVar(&all, "all", false, "enable all repositories (excluding .fullsend)")
+	cmd.Flags().BoolVar(&all, "all", false, allFlagHelp)
 
 	return cmd
 }
 
+func newReposEnableCmd() *cobra.Command {
+	return newReposSubcommand(
+		"enable <org> [repo...]",
+		"Enable repositories for fullsend enrollment",
+		"Enables the specified repositories for fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to enable all repositories (excluding .fullsend).",
+		"enable all repositories (excluding .fullsend)",
+		runReposEnable,
+	)
+}
+
 func newReposDisableCmd() *cobra.Command {
-	var all bool
-
-	cmd := &cobra.Command{
-		Use:   "disable <org> [repo...]",
-		Short: "Disable repositories from fullsend enrollment",
-		Long:  "Disables the specified repositories from fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to disable all repositories.",
-		Args:  cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			org := args[0]
-			if err := validateOrgName(org); err != nil {
-				return err
-			}
-
-			// Validate that --all and repo names are mutually exclusive.
-			hasRepos := len(args) > 1
-			if all && hasRepos {
-				return fmt.Errorf("cannot specify both --all and repository names")
-			}
-			if !all && !hasRepos {
-				return fmt.Errorf("must specify repository names or use --all flag")
-			}
-
-			var repos []string
-			if !all {
-				repos = args[1:]
-			}
-
-			token, err := resolveToken()
-			if err != nil {
-				return err
-			}
-
-			client := gh.New(token)
-			printer := ui.New(os.Stdout)
-			ctx := cmd.Context()
-
-			return runReposDisable(ctx, client, printer, org, repos, all)
-		},
-	}
-
-	cmd.Flags().BoolVar(&all, "all", false, "disable all repositories")
-
-	return cmd
+	return newReposSubcommand(
+		"disable <org> [repo...]",
+		"Disable repositories from fullsend enrollment",
+		"Disables the specified repositories from fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to disable all repositories.",
+		"disable all repositories",
+		runReposDisable,
+	)
 }
 
 // runReposEnable enables the specified repositories for fullsend enrollment.
@@ -1138,6 +1117,7 @@ func runReposEnable(ctx context.Context, client forge.Client, printer *ui.Printe
 				reposToEnable = append(reposToEnable, r.Name)
 			}
 		}
+		sort.Strings(reposToEnable)
 		printer.StepDone(fmt.Sprintf("Found %d repositories to enable", len(reposToEnable)))
 	} else {
 		// Validate provided repo names.
@@ -1227,6 +1207,7 @@ func runReposDisable(ctx context.Context, client forge.Client, printer *ui.Print
 		for repo := range cfg.Repos {
 			reposToDisable = append(reposToDisable, repo)
 		}
+		sort.Strings(reposToDisable)
 		printer.StepDone(fmt.Sprintf("Found %d repositories to disable", len(reposToDisable)))
 	} else {
 		// Validate provided repo names.
