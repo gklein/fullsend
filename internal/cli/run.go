@@ -329,6 +329,27 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	}
 	printer.StepDone(fmt.Sprintf("Project code copied to %s/ (%.1fs)", repoName, time.Since(copyStart).Seconds()))
 
+	// 8a. Inject org-level AGENTS.md if the target repo does not have one.
+	// The scaffold ships a default AGENTS.md with baseline behavioral
+	// guidelines. Skills already instruct agents to read AGENTS.md from
+	// the project root — this ensures there is something to read even
+	// when the target repo has not authored its own.
+	if !hasAgentsMD(repoSrc) {
+		orgAgentsMD := filepath.Join(absFullsendDir, "AGENTS.md")
+		if _, err := os.Stat(orgAgentsMD); err == nil {
+			if err := sandbox.SCP(sshConfigPath, sandboxName, orgAgentsMD, repoDir+"/AGENTS.md"); err != nil {
+				printer.StepWarn("Could not inject org AGENTS.md: " + err.Error())
+			} else {
+				// Hide the injected file from git status so agents don't stage it.
+				excludeCmd := fmt.Sprintf("echo 'AGENTS.md' >> %s/.git/info/exclude", repoDir)
+				if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, excludeCmd, 5*time.Second); err != nil {
+					printer.StepWarn("Could not add AGENTS.md to git exclude: " + err.Error())
+				}
+				printer.StepDone("Injected org-level AGENTS.md (target repo has none)")
+			}
+		}
+	}
+
 	// 8b. Copy agent-input files (if configured).
 	if h.AgentInput != "" {
 		inputStart := time.Now()
@@ -986,6 +1007,17 @@ func relOrAbs(base, path string) string {
 		return path
 	}
 	return rel
+}
+
+// hasAgentsMD checks whether the repo directory contains an AGENTS.md file
+// in any common casing.
+func hasAgentsMD(repoDir string) bool {
+	for _, name := range []string{"AGENTS.md", "agents.md", "Agents.md"} {
+		if _, err := os.Stat(filepath.Join(repoDir, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // scanRepoContextFiles walks the target repo directory for known context

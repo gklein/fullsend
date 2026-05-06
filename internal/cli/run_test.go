@@ -147,6 +147,36 @@ func TestApplySandboxImageOverride_NotSet(t *testing.T) {
 	assert.Equal(t, "ghcr.io/fullsend-ai/fullsend-sandbox:latest", resolved)
 }
 
+func TestHasAgentsMD_UpperCase(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# agents"), 0o644))
+	assert.True(t, hasAgentsMD(dir))
+}
+
+func TestHasAgentsMD_LowerCase(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "agents.md"), []byte("# agents"), 0o644))
+	assert.True(t, hasAgentsMD(dir))
+}
+
+func TestHasAgentsMD_TitleCase(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Agents.md"), []byte("# agents"), 0o644))
+	assert.True(t, hasAgentsMD(dir))
+}
+
+func TestHasAgentsMD_Missing(t *testing.T) {
+	dir := t.TempDir()
+	assert.False(t, hasAgentsMD(dir))
+}
+
+func TestHasAgentsMD_OtherFiles(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# claude"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# readme"), 0o644))
+	assert.False(t, hasAgentsMD(dir))
+}
+
 func TestEnvToList_Sorted(t *testing.T) {
 	env := map[string]string{
 		"Z_VAR": "z",
