@@ -10,7 +10,7 @@ import {
 } from "./oauthCors";
 
 /**
- * Site Worker: static assets via `[assets]` plus OAuth BFF + `/user` proxy for the admin SPA.
+ * Site Worker: static assets via `[assets]` plus OAuth BFF + `GET /api/github/user` proxy for the admin SPA.
  * `GET /api/oauth/authorize` adds `client_id` and redirects to GitHub (SPA has no build-time client id).
  */
 export interface Env {
@@ -26,6 +26,11 @@ export interface Env {
    */
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
+  /**
+   * Optional. When set (non-empty), folded into OAuth `state` with the Turnstile site key so the
+   * SPA can build GitHub App install links after sign-in (not a Vite `define`).
+   */
+  GITHUB_APP_SLUG?: string;
   OAUTH_TOKEN_RATE_LIMITER: RateLimit;
   GITHUB_USER_RATE_LIMITER: RateLimit;
 }
@@ -41,6 +46,17 @@ const MAX_CLIENT_OAUTH_STATE_LEN = 128;
 const MAX_PKCE_CHALLENGE_LEN = 256;
 /** Max `state` sent to GitHub (expanded JSON + base64url including Turnstile site key). */
 const MAX_GITHUB_STATE_LEN = 4096;
+/** Reject oversized `POST /api/oauth/token` bodies before JSON parse (defense in depth). */
+const MAX_OAUTH_TOKEN_EXCHANGE_JSON_BYTES = 4096;
+
+/** Same rule as SPA `installationOrgRows.normalizeSlug` — invalid values must not be put in `state`. */
+const GITHUB_APP_SLUG_IN_STATE_RE = /^[a-zA-Z0-9-]{1,99}$/;
+
+function normalizedGithubAppSlugForState(raw: string): string | null {
+  const s = raw.trim();
+  if (!s || !GITHUB_APP_SLUG_IN_STATE_RE.test(s)) return null;
+  return s;
+}
 
 function isAdminApiPath(pathname: string): boolean {
   return (
@@ -87,7 +103,14 @@ function base64UrlEncodeJson(obj: unknown): string {
 
 function buildGithubState(env: Env, clientNonce: string): string | null {
   const siteKey = (env.TURNSTILE_SITE_KEY ?? "").trim();
-  const payload = { v: 1 as const, n: clientNonce, k: siteKey };
+  const appSlugRaw = (env.GITHUB_APP_SLUG ?? "").trim();
+  const appSlug = appSlugRaw ? normalizedGithubAppSlugForState(appSlugRaw) : null;
+  const payload: { v: 1; n: string; k: string; g?: string } = {
+    v: 1,
+    n: clientNonce,
+    k: siteKey,
+  };
+  if (appSlug) payload.g = appSlug;
   const combined = base64UrlEncodeJson(payload);
   if (combined.length > MAX_GITHUB_STATE_LEN) return null;
   return combined;
@@ -248,7 +271,15 @@ async function handleOAuthToken(
 
   let body: ExchangeBody;
   try {
-    body = (await request.json()) as ExchangeBody;
+    const raw = await request.arrayBuffer();
+    if (raw.byteLength > MAX_OAUTH_TOKEN_EXCHANGE_JSON_BYTES) {
+      return new Response(JSON.stringify({ error: "payload_too_large" }), {
+        status: 413,
+        headers: { "content-type": "application/json", ...cors },
+      });
+    }
+    const text = new TextDecoder().decode(raw);
+    body = JSON.parse(text) as ExchangeBody;
   } catch {
     return new Response(JSON.stringify({ error: "invalid_json" }), {
       status: 400,
