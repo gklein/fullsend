@@ -278,14 +278,44 @@ func TestValidateEnrollmentActionContent(t *testing.T) {
 	content, err := FullsendRepoFile(".github/actions/validate-enrollment/action.yml")
 	require.NoError(t, err)
 	s := string(content)
+	// Verify inputs declarations
+	assert.Contains(t, s, "inputs:")
+	assert.Contains(t, s, "source_repo:")
+	assert.Contains(t, s, "required: true")
 	// Verify outputs contract
 	assert.Contains(t, s, "outputs:")
 	assert.Contains(t, s, "name:")
 	assert.Contains(t, s, "steps.extract.outputs.name")
 	// Verify step ID matches output reference
 	assert.Contains(t, s, "id: extract")
+	// Verify SOURCE_REPO env var wiring
+	assert.Contains(t, s, "SOURCE_REPO: ${{ inputs.source_repo }}")
 	// Verify enrollment validation script
 	assert.Contains(t, s, "validate-source-repo.sh")
+}
+
+func TestValidateSourceRepoContent(t *testing.T) {
+	content, err := FullsendRepoFile("scripts/validate-source-repo.sh")
+	require.NoError(t, err)
+	s := string(content)
+	// Verify security-critical format regex
+	assert.Contains(t, s, "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$")
+	assert.Contains(t, s, "Invalid source_repo format")
+	// Verify owner check
+	assert.Contains(t, s, "REPO_OWNER=\"${SOURCE_REPO%%/*}\"")
+	assert.Contains(t, s, "source_repo owner does not match org")
+	// Verify allowlist check
+	assert.Contains(t, s, "REPO_NAME=\"${SOURCE_REPO#*/}\"")
+	assert.Contains(t, s, "repo is not enabled in config.yaml")
+	// Verify required environment variables
+	assert.Contains(t, s, "${SOURCE_REPO:?SOURCE_REPO is required}")
+	assert.Contains(t, s, "${GITHUB_REPOSITORY_OWNER:?GITHUB_REPOSITORY_OWNER is required}")
+	// Verify error messages use ::error:: format
+	assert.Contains(t, s, "::error::")
+	// Verify config.yaml existence check (not masked by 2>/dev/null)
+	assert.Contains(t, s, "config.yaml not found")
+	// Verify yq availability check
+	assert.Contains(t, s, "yq command not found")
 }
 
 func TestCodeHarnessContent(t *testing.T) {

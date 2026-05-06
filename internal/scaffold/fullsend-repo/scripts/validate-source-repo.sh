@@ -33,7 +33,19 @@ fi
 
 # Allowlist check — repo must be enabled in config.yaml
 REPO_NAME="${SOURCE_REPO#*/}"
-ENABLED=$(yq ".repos.\"$REPO_NAME\".enabled" config.yaml 2>/dev/null)
+
+# Check if config.yaml exists and yq is available
+if [[ ! -f config.yaml ]]; then
+  echo "::error::config.yaml not found"
+  exit 1
+fi
+
+if ! command -v yq &> /dev/null; then
+  echo "::error::yq command not found"
+  exit 1
+fi
+
+ENABLED=$(yq ".repos.\"$REPO_NAME\".enabled" config.yaml)
 if [[ "$ENABLED" != "true" ]]; then
   echo "::error::repo is not enabled in config.yaml"
   exit 1
