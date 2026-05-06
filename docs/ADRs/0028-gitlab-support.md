@@ -127,7 +127,7 @@ GitLab doesn't have an exact GitHub Apps equivalent, but Project Access Tokens (
 | fix     | Developer | Read/write target repos, push to MR branches |
 
 **Storage**: Project Access Token values stored as CI/CD variables:
-- Group-level **masked and protected** variable: `FULLSEND_DISPATCH_TOKEN` (visible to all enrolled projects)
+- Project-level **masked and protected** variable in `.fullsend`: `FULLSEND_DISPATCH_TOKEN` (used to trigger child pipelines; never exposed to enrolled repos)
 - Project-level **masked and protected** variables in `.fullsend`:
   - `FULLSEND_TRIAGE_TOKEN`
   - `FULLSEND_CODE_TOKEN`
