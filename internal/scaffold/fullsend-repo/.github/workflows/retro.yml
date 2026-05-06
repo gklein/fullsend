@@ -84,6 +84,14 @@ jobs:
           repositories: ${{ steps.repo-parts.outputs.name }},.fullsend
           permission-issues: write
 
+      - name: Checkout target repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.source_repo }}
+          token: ${{ steps.sandbox-token.outputs.token }}
+          path: target-repo
+          fetch-depth: 1
+
       - name: Pre-mask GCP credential file path
         run: echo "::add-mask::${GITHUB_WORKSPACE}/gha-creds-"
 
