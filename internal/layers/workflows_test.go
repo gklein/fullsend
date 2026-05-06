@@ -19,7 +19,7 @@ func newWorkflowsLayer(t *testing.T, client *forge.FakeClient) (*WorkflowsLayer,
 	t.Helper()
 	var buf bytes.Buffer
 	printer := ui.New(&buf)
-	layer := NewWorkflowsLayer("test-org", client, printer, "admin-user")
+	layer := NewWorkflowsLayer("test-org", client, printer, "admin-user", "v0.2.0")
 	return layer, &buf
 }
 
@@ -106,7 +106,7 @@ func TestWorkflowsLayer_Install_CODEOWNERSOptional(t *testing.T) {
 	client := &codeownersErrorClient{FakeClient: &forge.FakeClient{}}
 	var buf bytes.Buffer
 	printer := ui.New(&buf)
-	layer := NewWorkflowsLayer("test-org", client, printer, "admin-user")
+	layer := NewWorkflowsLayer("test-org", client, printer, "admin-user", "v0.2.0")
 
 	err := layer.Install(context.Background())
 	// Install should succeed even though CODEOWNERS write failed
@@ -115,6 +115,100 @@ func TestWorkflowsLayer_Install_CODEOWNERSOptional(t *testing.T) {
 	// All scaffold files should have been created (CODEOWNERS excluded since it failed).
 	// Count = managedFiles - 1 (CODEOWNERS).
 	assert.Len(t, client.created, len(managedFiles)-1)
+}
+
+func TestWorkflowsLayer_Install_PinsCliVersion(t *testing.T) {
+	client := &forge.FakeClient{}
+	layer, _ := newWorkflowsLayer(t, client)
+
+	err := layer.Install(context.Background())
+	require.NoError(t, err)
+
+	var actionContent string
+	for _, f := range client.CreatedFiles {
+		if f.Path == actionYMLPath {
+			actionContent = string(f.Content)
+			break
+		}
+	}
+	require.NotEmpty(t, actionContent, "action.yml should have been written")
+	assert.Contains(t, actionContent, "default: v0.2.0",
+		"action.yml should pin CLI version")
+	assert.NotContains(t, actionContent, "default: latest",
+		"action.yml should not contain latest")
+}
+
+func TestWorkflowsLayer_Install_DevVersionFallsBackToLatest(t *testing.T) {
+	client := &forge.FakeClient{}
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	layer := NewWorkflowsLayer("test-org", client, printer, "admin-user", "dev")
+
+	err := layer.Install(context.Background())
+	require.NoError(t, err)
+
+	var actionContent string
+	for _, f := range client.CreatedFiles {
+		if f.Path == actionYMLPath {
+			actionContent = string(f.Content)
+			break
+		}
+	}
+	require.NotEmpty(t, actionContent, "action.yml should have been written")
+	assert.Contains(t, actionContent, "default: latest",
+		"dev version should fall back to latest")
+	assert.Contains(t, buf.String(), "unpinned",
+		"should warn about unpinned version")
+}
+
+func TestWorkflowsLayer_Install_EmptyVersionKeepsLatest(t *testing.T) {
+	client := &forge.FakeClient{}
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	layer := NewWorkflowsLayer("test-org", client, printer, "admin-user", "")
+
+	err := layer.Install(context.Background())
+	require.NoError(t, err)
+
+	var actionContent string
+	for _, f := range client.CreatedFiles {
+		if f.Path == actionYMLPath {
+			actionContent = string(f.Content)
+			break
+		}
+	}
+	require.NotEmpty(t, actionContent, "action.yml should have been written")
+	assert.Contains(t, actionContent, "default: latest",
+		"empty version should keep latest")
+}
+
+func TestWorkflowsLayer_Install_ReinstallUpdatesVersion(t *testing.T) {
+	// First install with v0.1.0
+	client := &forge.FakeClient{}
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	layer := NewWorkflowsLayer("test-org", client, printer, "admin-user", "v0.1.0")
+
+	err := layer.Install(context.Background())
+	require.NoError(t, err)
+
+	// Second install with v0.2.0 — simulate re-install
+	client2 := &forge.FakeClient{}
+	layer2 := NewWorkflowsLayer("test-org", client2, printer, "admin-user", "v0.2.0")
+
+	err = layer2.Install(context.Background())
+	require.NoError(t, err)
+
+	var actionContent string
+	for _, f := range client2.CreatedFiles {
+		if f.Path == actionYMLPath {
+			actionContent = string(f.Content)
+			break
+		}
+	}
+	require.NotEmpty(t, actionContent, "action.yml should have been written")
+	assert.Contains(t, actionContent, "default: v0.2.0",
+		"re-install should update pinned version")
 }
 
 func TestWorkflowsLayer_Install_Error(t *testing.T) {

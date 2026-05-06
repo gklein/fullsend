@@ -215,14 +215,14 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 		t.Logf("Setting up app for role: %s", role)
 
 		var appCreds *appsetup.AppCredentials
-		// Retry the manifest flow once per role to handle transient callback
-		// timeouts (see #287). On failure, delete any partially-created app
-		// before retrying so the second attempt starts clean.
-		const maxAttempts = 2
+		// Retry the manifest flow to handle transient callback timeouts
+		// (see #287). On failure, delete any partially-created app and
+		// wait before retrying so the next attempt starts clean.
+		const maxAttempts = 3
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			// Use a per-role timeout so a failed manifest flow doesn't hang
-			// until the Go test timeout (which produces an unhelpful panic).
-			roleCtx, roleCancel := context.WithTimeout(ctx, 2*time.Minute)
+			// Per-attempt timeout: generous to handle slow manifest flows
+			// (90s callback wait + page navigation overhead).
+			roleCtx, roleCancel := context.WithTimeout(ctx, 6*time.Minute)
 			var runErr error
 			appCreds, runErr = setup.Run(roleCtx, testOrg, role)
 			roleCancel()
@@ -233,12 +233,13 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 
 			t.Logf("Attempt %d/%d for role %s failed: %v", attempt, maxAttempts, role, runErr)
 			if attempt < maxAttempts {
-				// Clean up any partially-created app before retrying.
 				slug := appsetup.ExpectedAppSlug(testOrg, role)
 				t.Logf("Cleaning up potentially stale app %s before retry", slug)
 				if delErr := deleteAppViaPlaywright(env.page, slug, t.Logf, env.screenshotDir); delErr != nil {
 					t.Logf("Warning: cleanup of %s failed (may not exist): %v", slug, delErr)
 				}
+				t.Logf("Waiting 10s before retry to let GitHub settle...")
+				time.Sleep(10 * time.Second)
 				continue
 			}
 			require.NoError(t, runErr, "setting up app for role %s", role)
@@ -316,7 +317,7 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 	require.NoError(t, err, "pre-installing config-repo layer")
 	registerRepoCleanup(t, env.client, testOrg, forge.ConfigRepoName)
 
-	workflowsLayer := layers.NewWorkflowsLayer(testOrg, env.client, env.printer, user)
+	workflowsLayer := layers.NewWorkflowsLayer(testOrg, env.client, env.printer, user, "")
 	err = workflowsLayer.Install(ctx)
 	require.NoError(t, err, "pre-installing workflows layer")
 
@@ -348,7 +349,7 @@ func runUninstall(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewDispatchTokenLayer(testOrg, env.client, "", nil, env.printer, nil),
@@ -365,7 +366,7 @@ func runUninstallAllowNotFound(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewDispatchTokenLayer(testOrg, env.client, "", nil, env.printer, nil),
@@ -521,7 +522,7 @@ func verifyNotInstalled(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewDispatchTokenLayer(testOrg, env.client, "", nil, env.printer, nil),
@@ -752,13 +753,13 @@ Files over 64KB save fine if they contain only ASCII characters.`
 
 	hasTriageLabel := false
 	for _, name := range labelNames {
-		if name == "needs-info" || name == "ready-to-code" || name == "duplicate" {
+		if name == "needs-info" || name == "ready-to-code" || name == "duplicate" || name == "blocked" {
 			hasTriageLabel = true
 			break
 		}
 	}
 	assert.True(t, hasTriageLabel,
-		"issue should have a triage label (needs-info, ready-to-code, or duplicate), got: %v", labelNames)
+		"issue should have a triage label (needs-info, ready-to-code, duplicate, or blocked), got: %v", labelNames)
 }
 
 // runUnenrollmentTest disables test-repo in config.yaml, runs install to
@@ -840,7 +841,7 @@ func buildTestLayerStack(
 ) *layers.Stack {
 	return layers.NewStack(
 		layers.NewConfigRepoLayer(org, client, cfg, printer, hasPrivate),
-		layers.NewWorkflowsLayer(org, client, printer, user),
+		layers.NewWorkflowsLayer(org, client, printer, user, ""),
 		layers.NewSecretsLayer(org, client, agentCreds, printer),
 		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
 		layers.NewDispatchTokenLayer(org, client, dispatchToken, enrolledRepoIDs, printer, nil),

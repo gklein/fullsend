@@ -13,13 +13,15 @@ import { refreshSession } from "./session";
 import { challengeS256 } from "./pkce";
 import {
   completeGithubOAuthFromHandoff,
+  consumeIntendedHashAfterGithubOAuth,
   consumeOAuthParamsFromDocumentUrl,
   getOAuthRedirectUri,
+  isSafeSimpleHashRoute,
   SIGNING_IN_CANCELLED_MESSAGE,
   startGithubSignIn,
   tryParseWorkerExpandedOauthState,
 } from "./oauth";
-import { loadToken } from "./tokenStore";
+import { loadGithubAppSlug, loadToken } from "./tokenStore";
 
 const originalWindowLocation = window.location;
 
@@ -44,9 +46,15 @@ function restoreWindowLocation() {
 const OAUTH_DOC_HANDOFF_KEY = "fullsend_admin_oauth_doc_handoff";
 const OAUTH_STATE_KEY = "fullsend_admin_oauth_state";
 const PKCE_VERIFIER_KEY = "fullsend_admin_pkce_verifier";
+const INTENDED_HASH_KEY = "fullsend_admin_intended_hash";
 
-function workerExpandedStateB64(n: string, k = "0x4AAA_sitekey"): string {
-  const payload = { v: 1, n, k };
+function workerExpandedStateB64(
+  n: string,
+  k = "0x4AAA_sitekey",
+  g?: string,
+): string {
+  const payload: { v: number; n: string; k: string; g?: string } = { v: 1, n, k };
+  if (g !== undefined) payload.g = g;
   const bytes = new TextEncoder().encode(JSON.stringify(payload));
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
@@ -71,6 +79,25 @@ describe("tryParseWorkerExpandedOauthState", () => {
       k: "0x4AAA_sitekey",
     });
   });
+
+  it("parses optional g when it is a valid app slug", () => {
+    const b64 = workerExpandedStateB64("n1", "k1", "my-app");
+    expect(tryParseWorkerExpandedOauthState(b64)).toEqual({
+      v: 1,
+      n: "n1",
+      k: "k1",
+      g: "my-app",
+    });
+  });
+
+  it("omits g when present but not a valid slug (sign-in still works)", () => {
+    const b64 = workerExpandedStateB64("n1", "k1", "bad slug");
+    expect(tryParseWorkerExpandedOauthState(b64)).toEqual({
+      v: 1,
+      n: "n1",
+      k: "k1",
+    });
+  });
 });
 
 describe("startGithubSignIn", () => {
@@ -85,7 +112,8 @@ describe("startGithubSignIn", () => {
     installLocationStub({
       origin: "https://oauth-start.test",
       search: "",
-      href: "https://oauth-start.test/admin/",
+      hash: "#/orgs",
+      href: "https://oauth-start.test/admin/#/orgs",
       assign,
     });
   });
@@ -116,6 +144,8 @@ describe("startGithubSignIn", () => {
     expect(await challengeS256(verifier!)).toBe(
       u.searchParams.get("code_challenge"),
     );
+
+    expect(sessionStorage.getItem(INTENDED_HASH_KEY)).toBe("#/orgs");
   });
 });
 
@@ -308,6 +338,22 @@ describe("completeGithubOAuthFromHandoff", () => {
     expect(typeof body.redirect_uri).toBe("string");
   });
 
+  it("persists GitHub App slug from expanded state on success", async () => {
+    const nonce = "55555555-5555-5555-5555-555555555555";
+    const expanded = workerExpandedStateB64(nonce, "site-key-1", "slug-from-state");
+    sessionStorage.setItem(
+      OAUTH_DOC_HANDOFF_KEY,
+      JSON.stringify({ code: "exchange-code", state: expanded }),
+    );
+    sessionStorage.setItem(OAUTH_STATE_KEY, nonce);
+    sessionStorage.setItem(PKCE_VERIFIER_KEY, "pkce-verifier-value");
+
+    const r = await completeGithubOAuthFromHandoff();
+
+    expect(r).toEqual({ ok: true });
+    expect(loadGithubAppSlug()).toBe("slug-from-state");
+  });
+
   it("persists null expiresAt when token response omits expires_in", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response(
@@ -371,5 +417,40 @@ describe("completeGithubOAuthFromHandoff", () => {
     });
     expect(loadToken()).toBeNull();
     expect(sessionStorage.getItem(OAUTH_STATE_KEY)).toBeNull();
+  });
+});
+
+describe("isSafeSimpleHashRoute", () => {
+  it("accepts #/, #/orgs, and multi-segment paths", () => {
+    expect(isSafeSimpleHashRoute("#/")).toBe(true);
+    expect(isSafeSimpleHashRoute("#/orgs")).toBe(true);
+    expect(isSafeSimpleHashRoute("#/foo/bar_baz.qux-1")).toBe(true);
+  });
+
+  it("rejects schemes, queries, slashes, and long fragments", () => {
+    expect(isSafeSimpleHashRoute("#javascript:evil")).toBe(false);
+    expect(isSafeSimpleHashRoute("#/orgs?x=1")).toBe(false);
+    expect(isSafeSimpleHashRoute("#//evil")).toBe(false);
+    expect(isSafeSimpleHashRoute("#/orgs/../x")).toBe(false);
+    expect(isSafeSimpleHashRoute("#" + "/a".repeat(200))).toBe(false);
+  });
+});
+
+describe("consumeIntendedHashAfterGithubOAuth", () => {
+  afterEach(() => {
+    sessionStorage.removeItem(INTENDED_HASH_KEY);
+  });
+
+  it("returns null when stash is missing or unsafe", () => {
+    expect(consumeIntendedHashAfterGithubOAuth()).toBeNull();
+    sessionStorage.setItem(INTENDED_HASH_KEY, "#/orgs?bad=1");
+    expect(consumeIntendedHashAfterGithubOAuth()).toBeNull();
+    expect(sessionStorage.getItem(INTENDED_HASH_KEY)).toBeNull();
+  });
+
+  it("returns normalized safe hash and clears stash", () => {
+    sessionStorage.setItem(INTENDED_HASH_KEY, "#/orgs");
+    expect(consumeIntendedHashAfterGithubOAuth()).toBe("#/orgs");
+    expect(sessionStorage.getItem(INTENDED_HASH_KEY)).toBeNull();
   });
 });

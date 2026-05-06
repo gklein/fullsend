@@ -7,18 +7,25 @@ vi.mock("../github/user", async (importOriginal) => {
 });
 
 import { fetchGitHubUser, GitHubUserRequestError } from "../github/user";
-import { githubLogin, githubUser, refreshSession, signOut } from "./session";
+import {
+  githubLogin,
+  githubUser,
+  reauthenticateSuggested,
+  refreshSession,
+  signOut,
+} from "./session";
 import { saveToken } from "./tokenStore";
 
 beforeEach(() => {
   localStorage.clear();
   vi.mocked(fetchGitHubUser).mockReset();
   githubUser.set(null);
+  reauthenticateSuggested.set(false);
 });
 
 describe("refreshSession", () => {
   it("clears githubUser when there is no stored token", async () => {
-    githubUser.set({ login: "ghost", name: null });
+    githubUser.set({ login: "ghost", name: null, avatarUrl: null });
     await refreshSession();
     expect(get(githubUser)).toBeNull();
     expect(get(githubLogin)).toBeNull();
@@ -34,6 +41,7 @@ describe("refreshSession", () => {
     vi.mocked(fetchGitHubUser).mockResolvedValue({
       login: "alice",
       name: "Alice L",
+      avatarUrl: "https://avatars.githubusercontent.com/u/1?v=4",
     });
 
     await refreshSession();
@@ -42,8 +50,28 @@ describe("refreshSession", () => {
     expect(get(githubUser)).toEqual({
       login: "alice",
       name: "Alice L",
+      avatarUrl: "https://avatars.githubusercontent.com/u/1?v=4",
     });
     expect(get(githubLogin)).toBe("alice");
+    expect(get(reauthenticateSuggested)).toBe(false);
+  });
+
+  it("clears reauthenticateSuggested after successful refresh", async () => {
+    saveToken({
+      accessToken: "tok",
+      tokenType: "bearer",
+      expiresAt: Date.now() + 60_000,
+    });
+    reauthenticateSuggested.set(true);
+    vi.mocked(fetchGitHubUser).mockResolvedValue({
+      login: "alice",
+      name: null,
+      avatarUrl: null,
+    });
+
+    await refreshSession();
+
+    expect(get(reauthenticateSuggested)).toBe(false);
   });
 
   it("clears githubUser but keeps stored token when fetchGitHubUser throws generically", async () => {
@@ -52,7 +80,7 @@ describe("refreshSession", () => {
       tokenType: "bearer",
       expiresAt: Date.now() + 60_000,
     });
-    githubUser.set({ login: "stale", name: null });
+    githubUser.set({ login: "stale", name: null, avatarUrl: null });
     vi.mocked(fetchGitHubUser).mockRejectedValue(new Error("network"));
 
     await refreshSession();
@@ -68,7 +96,7 @@ describe("refreshSession", () => {
       tokenType: "bearer",
       expiresAt: Date.now() + 60_000,
     });
-    githubUser.set({ login: "stale", name: null });
+    githubUser.set({ login: "stale", name: null, avatarUrl: null });
     vi.mocked(fetchGitHubUser).mockRejectedValue(
       new GitHubUserRequestError(401, "GitHub /user failed: 401 "),
     );
@@ -78,6 +106,7 @@ describe("refreshSession", () => {
     expect(localStorage.getItem("fullsend_admin_github_token")).toBeNull();
     expect(get(githubUser)).toBeNull();
     expect(get(githubLogin)).toBeNull();
+    expect(get(reauthenticateSuggested)).toBe(true);
   });
 
   it("does not call fetchGitHubUser when stored token is already expired", async () => {
@@ -86,7 +115,7 @@ describe("refreshSession", () => {
       tokenType: "bearer",
       expiresAt: Date.now() - 1,
     });
-    githubUser.set({ login: "stale", name: null });
+    githubUser.set({ login: "stale", name: null, avatarUrl: null });
 
     await refreshSession();
 
@@ -104,12 +133,14 @@ describe("signOut", () => {
       tokenType: "bearer",
       expiresAt: Date.now() + 60_000,
     });
-    githubUser.set({ login: "bob", name: null });
+    reauthenticateSuggested.set(true);
+    githubUser.set({ login: "bob", name: null, avatarUrl: null });
 
     signOut();
 
     expect(localStorage.getItem("fullsend_admin_github_token")).toBeNull();
     expect(get(githubUser)).toBeNull();
     expect(get(githubLogin)).toBeNull();
+    expect(get(reauthenticateSuggested)).toBe(false);
   });
 });

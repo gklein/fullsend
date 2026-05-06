@@ -170,25 +170,35 @@ func (b *PlaywrightBrowserOpener) handleCreateAppPage() error {
 		saveDebugScreenshot(b.page, b.screenshotDir, "browser-create-btn-failed", b.logf)
 		return fmt.Errorf("waiting for 'Create GitHub App' button: %w", err)
 	}
+
 	if err := btn.First().Click(playwright.LocatorClickOptions{
 		Timeout: playwright.Float(5000),
 	}); err != nil {
-		saveDebugScreenshot(b.page, b.screenshotDir, "browser-create-btn-failed", b.logf)
+		saveDebugScreenshot(b.page, b.screenshotDir, "browser-create-btn-click-failed", b.logf)
 		return fmt.Errorf("clicking 'Create GitHub App': %w", err)
 	}
 
-	// Wait for redirect back to our callback URL.
-	// GitHub's manifest flow can be slow (app creation, key generation),
-	// so use a generous timeout.
+	// WaitForURL checks the current URL first (no race if redirect already
+	// completed), then listens for future navigations. GitHub's manifest
+	// flow can be slow (app creation, key generation), so use a 90-second
+	// timeout (increased from 30s per #287).
+	b.logf("[browser] Clicked 'Create GitHub App', waiting up to 90s for callback redirect...")
 	if err := b.page.WaitForURL("**/callback**", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(30000),
+		Timeout: playwright.Float(90000),
 	}); err != nil {
 		pageURL := b.page.URL()
-		if strings.Contains(pageURL, "/callback") || strings.Contains(pageURL, "127.0.0.1") {
+		// Strip query params before logging — the callback URL contains a
+		// temporary authorization code that should not appear in CI logs.
+		safeURL := pageURL
+		if idx := strings.Index(safeURL, "?"); idx != -1 {
+			safeURL = safeURL[:idx]
+		}
+		b.logf("[browser] Timeout waiting for callback, current URL: %s", safeURL)
+		if strings.Contains(pageURL, "/callback") {
 			return nil
 		}
 		saveDebugScreenshot(b.page, b.screenshotDir, "browser-callback-failed", b.logf)
-		return fmt.Errorf("waiting for callback: %w", err)
+		return fmt.Errorf("waiting for callback timed out (current URL: %s)", safeURL)
 	}
 
 	return nil

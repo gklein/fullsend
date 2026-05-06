@@ -36,7 +36,7 @@ type AppConfig struct {
 
 // DefaultAgentRoles returns the standard set of agent roles.
 func DefaultAgentRoles() []string {
-	return []string{"fullsend", "triage", "coder", "review"}
+	return []string{"fullsend", "triage", "coder", "review", "fix"}
 }
 
 // AgentAppConfig returns the GitHub App configuration for a given agent role.

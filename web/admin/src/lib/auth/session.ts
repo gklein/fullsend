@@ -1,5 +1,6 @@
 import { derived, writable } from "svelte/store";
-import { clearSession, loadToken } from "./tokenStore";
+import { clearAllAdminSessionCaches } from "./adminSessionCaches";
+import { loadToken } from "./tokenStore";
 import {
   fetchGitHubUser,
   GitHubUserRequestError,
@@ -15,6 +16,14 @@ export const githubLogin = derived(githubUser, ($u) => $u?.login ?? null);
 /** True until initial auth boot (OAuth handoff or `refreshSession`) finishes. */
 export const authBootPending = writable(true);
 
+/** Set after 401 so the shell can show Re-authenticate (admin SPA UX spec: global banners). */
+export const reauthenticateSuggested = writable(false);
+
+export type SignOutOptions = {
+  /** When true, show re-auth banner after clearing session (invalid/expired token). */
+  suggestReauth?: boolean;
+};
+
 export async function refreshSession(): Promise<void> {
   const t = loadToken();
   if (!t?.accessToken) {
@@ -24,16 +33,20 @@ export async function refreshSession(): Promise<void> {
   try {
     const u = await fetchGitHubUser(t.accessToken);
     githubUser.set(u);
+    reauthenticateSuggested.set(false);
   } catch (e) {
     if (e instanceof GitHubUserRequestError && e.status === 401) {
-      signOut();
+      signOut({ suggestReauth: true });
       return;
     }
     githubUser.set(null);
   }
 }
 
-export function signOut(): void {
-  clearSession();
+export function signOut(options?: SignOutOptions): void {
+  // Token, slug, OAuth scope + install-readiness caches, org list memory + analysis
+  // (see `adminSessionCaches.ts` — extend there when adding user-scoped admin caches).
+  clearAllAdminSessionCaches();
   githubUser.set(null);
+  reauthenticateSuggested.set(Boolean(options?.suggestReauth));
 }
