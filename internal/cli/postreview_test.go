@@ -236,6 +236,24 @@ func TestSubmitFormalReview_DismissesStaleRequestChanges(t *testing.T) {
 	assert.Equal(t, "Superseded by updated review", fc.DismissedReviews[0].Message)
 }
 
+func TestSubmitFormalReview_DismissesOnCommentVerdict(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	fc.PRReviews = map[string][]forge.PullRequestReview{
+		"acme/repo/1": {
+			{ID: 100, NodeID: "PRR_100", User: "fullsend-bot", State: "CHANGES_REQUESTED", Body: "fix this"},
+		},
+	}
+
+	printer := ui.New(io.Discard)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "", "", false, printer)
+	require.NoError(t, err)
+
+	require.Len(t, fc.DismissedReviews, 1, "COMMENT verdict must still dismiss stale CHANGES_REQUESTED")
+	assert.Equal(t, 100, fc.DismissedReviews[0].ReviewID)
+	assert.Empty(t, fc.CreatedReviews, "COMMENT events skip formal review submission")
+}
+
 func TestSubmitFormalReview_DryRun(t *testing.T) {
 	fc := forge.NewFakeClient()
 	printer := ui.New(io.Discard)

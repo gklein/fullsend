@@ -248,11 +248,6 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 		return nil
 	}
 
-	if event == "COMMENT" {
-		printer.StepInfo("Skipping formal COMMENT review (sticky comment already updated)")
-		return nil
-	}
-
 	if dryRun {
 		printer.StepInfo(fmt.Sprintf("Dry run — would submit %s review", event))
 		return nil
@@ -266,6 +261,11 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 	} else {
 		dismissStaleRequestChanges(ctx, client, owner, repo, pr, event, user, reviews, printer)
 		minimizeStaleReviews(ctx, client, user, reviews, printer)
+	}
+
+	if event == "COMMENT" {
+		printer.StepInfo("Skipping formal COMMENT review (sticky comment already updated)")
+		return nil
 	}
 
 	var reviewBody string
