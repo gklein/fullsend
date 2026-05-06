@@ -21,6 +21,8 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		".github/workflows/fix.yml",
 		".github/workflows/repo-maintenance.yml",
 		".github/actions/fullsend/action.yml",
+		".github/actions/setup-gcp/action.yml",
+		".github/actions/validate-enrollment/action.yml",
 		".github/scripts/setup-agent-env.sh",
 		"agents/triage.md",
 		"agents/code.md",
@@ -40,6 +42,7 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		"scripts/post-code.sh",
 		"scripts/reconcile-repos.sh",
 		"scripts/validate-output-schema.sh",
+		"scripts/validate-source-repo.sh",
 		"skills/code-implementation/SKILL.md",
 		"templates/shim-workflow.yaml",
 	}
@@ -151,6 +154,8 @@ func TestTriageWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "event_payload")
 	assert.Contains(t, s, "setup-agent-env.sh")
 	assert.Contains(t, s, "fullsend")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs for same issue
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-triage-")
@@ -186,6 +191,8 @@ func TestCodeWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "sandbox-token")
 	assert.Contains(t, s, "push-token")
 	assert.Contains(t, s, "permission-contents: read")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs for same issue
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-code-")
@@ -204,6 +211,8 @@ func TestReviewWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "FULLSEND_REVIEW_CLIENT_ID")
 	assert.Contains(t, s, "sandbox-token")
 	assert.Contains(t, s, "review-token")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-review-")
@@ -223,11 +232,90 @@ func TestFixWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "FULLSEND_CODER_CLIENT_ID")
 	assert.Contains(t, s, "sandbox-token")
 	assert.Contains(t, s, "push-token")
-	assert.Contains(t, s, "RUNNER_TEMP/empty-oidc-token")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-fix-")
 	assert.Contains(t, s, "cancel-in-progress: true")
+}
+
+func TestSetupGcpActionContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/actions/setup-gcp/action.yml")
+	require.NoError(t, err)
+	s := string(content)
+	// Verify inputs (composite actions cannot access vars/secrets directly)
+	assert.Contains(t, s, "inputs:")
+	assert.Contains(t, s, "gcp_auth_mode:")
+	assert.Contains(t, s, "gcp_wif_provider:")
+	assert.Contains(t, s, "gcp_wif_sa_email:")
+	assert.Contains(t, s, "gcp_sa_key_json:")
+	// Verify pre-mask step
+	assert.Contains(t, s, "Pre-mask GCP credential file path")
+	assert.Contains(t, s, "GITHUB_WORKSPACE}/gha-creds-")
+	// Verify WIF authentication path
+	assert.Contains(t, s, "if: inputs.gcp_auth_mode == 'wif'")
+	assert.Contains(t, s, "google-github-actions/auth@v3")
+	assert.Contains(t, s, "workload_identity_provider:")
+	assert.Contains(t, s, "service_account:")
+	// Verify SA key authentication path
+	assert.Contains(t, s, "if: inputs.gcp_auth_mode != 'wif'")
+	assert.Contains(t, s, "credentials_json:")
+	// Verify OIDC token workaround for non-WIF
+	assert.Contains(t, s, "RUNNER_TEMP/empty-oidc-token")
+	assert.Contains(t, s, "GCP_OIDC_TOKEN_FILE")
+	// Verify credential masking
+	assert.Contains(t, s, "Mask GCP credential file paths")
+	assert.Contains(t, s, "::add-mask::")
+	assert.Contains(t, s, "GOOGLE_GHA_CREDS_PATH")
+	assert.Contains(t, s, "GOOGLE_APPLICATION_CREDENTIALS")
+	assert.Contains(t, s, "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE")
+	// Verify sandbox preparation
+	assert.Contains(t, s, "prepare-sandbox-credentials.sh")
+}
+
+func TestValidateEnrollmentActionContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/actions/validate-enrollment/action.yml")
+	require.NoError(t, err)
+	s := string(content)
+	// Verify inputs declarations
+	assert.Contains(t, s, "inputs:")
+	assert.Contains(t, s, "source_repo:")
+	assert.Contains(t, s, "required: true")
+	// Verify outputs contract
+	assert.Contains(t, s, "outputs:")
+	assert.Contains(t, s, "name:")
+	assert.Contains(t, s, "steps.extract.outputs.name")
+	// Verify step ID matches output reference
+	assert.Contains(t, s, "id: extract")
+	// Verify SOURCE_REPO env var wiring
+	assert.Contains(t, s, "SOURCE_REPO: ${{ inputs.source_repo }}")
+	// Verify enrollment validation script
+	assert.Contains(t, s, "validate-source-repo.sh")
+}
+
+func TestValidateSourceRepoContent(t *testing.T) {
+	content, err := FullsendRepoFile("scripts/validate-source-repo.sh")
+	require.NoError(t, err)
+	s := string(content)
+	// Verify security-critical format regex
+	assert.Contains(t, s, "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$")
+	assert.Contains(t, s, "Invalid source_repo format")
+	// Verify owner check
+	assert.Contains(t, s, "REPO_OWNER=\"${SOURCE_REPO%%/*}\"")
+	assert.Contains(t, s, "source_repo owner does not match org")
+	// Verify allowlist check
+	assert.Contains(t, s, "REPO_NAME=\"${SOURCE_REPO#*/}\"")
+	assert.Contains(t, s, "repo is not enabled in config.yaml")
+	// Verify required environment variables
+	assert.Contains(t, s, "${SOURCE_REPO:?SOURCE_REPO is required}")
+	assert.Contains(t, s, "${GITHUB_REPOSITORY_OWNER:?GITHUB_REPOSITORY_OWNER is required}")
+	// Verify error messages use ::error:: format
+	assert.Contains(t, s, "::error::")
+	// Verify config.yaml existence check (not masked by 2>/dev/null)
+	assert.Contains(t, s, "config.yaml not found")
+	// Verify yq availability check
+	assert.Contains(t, s, "yq command not found")
 }
 
 func TestCodeHarnessContent(t *testing.T) {
