@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
@@ -21,7 +22,6 @@ func TestAdminCommand_HasSubcommands(t *testing.T) {
 	assert.True(t, names["install <org>"], "expected install subcommand")
 	assert.True(t, names["uninstall <org>"], "expected uninstall subcommand")
 	assert.True(t, names["analyze <org>"], "expected analyze subcommand")
-	assert.True(t, names["repos"], "expected repos subcommand")
 }
 
 func TestInstallCmd_RequiresOrg(t *testing.T) {
@@ -34,9 +34,6 @@ func TestInstallCmd_RequiresOrg(t *testing.T) {
 
 func TestInstallCmd_Flags(t *testing.T) {
 	cmd := newInstallCmd()
-
-	repoFlag := cmd.Flags().Lookup("repo")
-	require.NotNil(t, repoFlag, "expected --repo flag")
 
 	agentsFlag := cmd.Flags().Lookup("agents")
 	require.NotNil(t, agentsFlag, "expected --agents flag")
@@ -57,6 +54,10 @@ func TestInstallCmd_Flags(t *testing.T) {
 
 	wifSAEmailFlag := cmd.Flags().Lookup("gcp-wif-sa-email")
 	require.NotNil(t, wifSAEmailFlag, "expected --gcp-wif-sa-email flag")
+
+	// --repo flag should not exist (issue #495)
+	repoFlag := cmd.Flags().Lookup("repo")
+	assert.Nil(t, repoFlag, "--repo flag should have been removed")
 }
 
 func TestUninstallCmd_RequiresOrg(t *testing.T) {
@@ -286,4 +287,304 @@ func TestReposDisableCmd_RejectsAllWithRepoNames(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot specify both --all and repository names")
+}
+
+// Test helpers
+
+func setupTestConfig(repos map[string]bool) *config.OrgConfig {
+	repoNames := make([]string, 0, len(repos))
+	enabledRepos := make([]string, 0)
+	for name, enabled := range repos {
+		repoNames = append(repoNames, name)
+		if enabled {
+			enabledRepos = append(enabledRepos, name)
+		}
+	}
+	return config.NewOrgConfig(repoNames, enabledRepos, []string{"triage"}, nil, "")
+}
+
+func setupTestClient(org string, cfg *config.OrgConfig, orgRepos []string) *forge.FakeClient {
+	client := forge.NewFakeClient()
+	client.Repos = []forge.Repository{
+		{Name: ".fullsend", FullName: org + "/.fullsend"},
+	}
+	for _, name := range orgRepos {
+		client.Repos = append(client.Repos, forge.Repository{
+			Name:     name,
+			FullName: org + "/" + name,
+		})
+	}
+	if cfg != nil {
+		cfgData, _ := cfg.Marshal()
+		client.FileContents[org+"/.fullsend/config.yaml"] = cfgData
+	}
+	return client
+}
+
+// Business logic tests for runReposEnable
+
+func TestRunReposEnable_EnableSingleRepo(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": false,
+		"api":     false,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app", "api"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposEnable(context.Background(), client, printer, "testorg", []string{"web-app"}, false)
+	require.NoError(t, err)
+
+	// Verify config was updated.
+	require.Len(t, client.CreatedFiles, 1)
+	updatedCfg, err := config.ParseOrgConfig(client.CreatedFiles[0].Content)
+	require.NoError(t, err)
+	assert.True(t, updatedCfg.Repos["web-app"].Enabled)
+	assert.False(t, updatedCfg.Repos["api"].Enabled)
+}
+
+func TestRunReposEnable_EnableMultipleRepos(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": false,
+		"api":     false,
+		"docs":    false,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app", "api", "docs"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposEnable(context.Background(), client, printer, "testorg", []string{"web-app", "docs"}, false)
+	require.NoError(t, err)
+
+	// Verify config was updated.
+	require.Len(t, client.CreatedFiles, 1)
+	updatedCfg, err := config.ParseOrgConfig(client.CreatedFiles[0].Content)
+	require.NoError(t, err)
+	assert.True(t, updatedCfg.Repos["web-app"].Enabled)
+	assert.True(t, updatedCfg.Repos["docs"].Enabled)
+	assert.False(t, updatedCfg.Repos["api"].Enabled)
+}
+
+func TestRunReposEnable_EnableAllRepos(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": false,
+		"api":     false,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app", "api", "new-repo"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposEnable(context.Background(), client, printer, "testorg", nil, true)
+	require.NoError(t, err)
+
+	// Verify all repos were enabled (excluding .fullsend).
+	require.Len(t, client.CreatedFiles, 1)
+	updatedCfg, err := config.ParseOrgConfig(client.CreatedFiles[0].Content)
+	require.NoError(t, err)
+	assert.True(t, updatedCfg.Repos["web-app"].Enabled)
+	assert.True(t, updatedCfg.Repos["api"].Enabled)
+	assert.True(t, updatedCfg.Repos["new-repo"].Enabled)
+	// .fullsend should not be in repos map.
+	_, hasFullsend := updatedCfg.Repos[".fullsend"]
+	assert.False(t, hasFullsend)
+}
+
+func TestRunReposEnable_NoOpWhenAlreadyEnabled(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": true,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposEnable(context.Background(), client, printer, "testorg", []string{"web-app"}, false)
+	require.NoError(t, err)
+
+	// Verify no file was created (no changes).
+	assert.Empty(t, client.CreatedFiles)
+}
+
+func TestRunReposEnable_ErrorWhenFullsendRepoMissing(t *testing.T) {
+	client := forge.NewFakeClient()
+	printer := ui.New(&discardWriter{})
+
+	err := runReposEnable(context.Background(), client, printer, "testorg", []string{"web-app"}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), ".fullsend repository not found")
+}
+
+func TestRunReposEnable_ErrorWhenConfigMissing(t *testing.T) {
+	client := setupTestClient("testorg", nil, []string{"web-app"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposEnable(context.Background(), client, printer, "testorg", []string{"web-app"}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading config.yaml")
+}
+
+func TestRunReposEnable_ErrorWhenEnablingFullsend(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": false,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposEnable(context.Background(), client, printer, "testorg", []string{".fullsend"}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot enable .fullsend repository")
+}
+
+func TestRunReposEnable_ErrorWhenRepoNotFound(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": false,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposEnable(context.Background(), client, printer, "testorg", []string{"nonexistent"}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repository nonexistent not found")
+}
+
+func TestRunReposEnable_CommitMessageFormat(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": false,
+		"api":     false,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app", "api"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposEnable(context.Background(), client, printer, "testorg", []string{"web-app", "api"}, false)
+	require.NoError(t, err)
+
+	require.Len(t, client.CreatedFiles, 1)
+	assert.Contains(t, client.CreatedFiles[0].Message, "chore: enable 2 repositories")
+}
+
+// Business logic tests for runReposDisable
+
+func TestRunReposDisable_DisableSingleRepo(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": true,
+		"api":     true,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app", "api"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposDisable(context.Background(), client, printer, "testorg", []string{"web-app"}, false)
+	require.NoError(t, err)
+
+	// Verify config was updated.
+	require.Len(t, client.CreatedFiles, 1)
+	updatedCfg, err := config.ParseOrgConfig(client.CreatedFiles[0].Content)
+	require.NoError(t, err)
+	assert.False(t, updatedCfg.Repos["web-app"].Enabled)
+	assert.True(t, updatedCfg.Repos["api"].Enabled)
+}
+
+func TestRunReposDisable_DisableMultipleRepos(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": true,
+		"api":     true,
+		"docs":    true,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app", "api", "docs"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposDisable(context.Background(), client, printer, "testorg", []string{"web-app", "docs"}, false)
+	require.NoError(t, err)
+
+	// Verify config was updated.
+	require.Len(t, client.CreatedFiles, 1)
+	updatedCfg, err := config.ParseOrgConfig(client.CreatedFiles[0].Content)
+	require.NoError(t, err)
+	assert.False(t, updatedCfg.Repos["web-app"].Enabled)
+	assert.False(t, updatedCfg.Repos["docs"].Enabled)
+	assert.True(t, updatedCfg.Repos["api"].Enabled)
+}
+
+func TestRunReposDisable_DisableAllRepos(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": true,
+		"api":     true,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app", "api"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposDisable(context.Background(), client, printer, "testorg", nil, true)
+	require.NoError(t, err)
+
+	// Verify all repos were disabled.
+	require.Len(t, client.CreatedFiles, 1)
+	updatedCfg, err := config.ParseOrgConfig(client.CreatedFiles[0].Content)
+	require.NoError(t, err)
+	assert.False(t, updatedCfg.Repos["web-app"].Enabled)
+	assert.False(t, updatedCfg.Repos["api"].Enabled)
+}
+
+func TestRunReposDisable_NoOpWhenAlreadyDisabled(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": false,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposDisable(context.Background(), client, printer, "testorg", []string{"web-app"}, false)
+	require.NoError(t, err)
+
+	// Verify no file was created (no changes).
+	assert.Empty(t, client.CreatedFiles)
+}
+
+func TestRunReposDisable_ErrorWhenFullsendRepoMissing(t *testing.T) {
+	client := forge.NewFakeClient()
+	printer := ui.New(&discardWriter{})
+
+	err := runReposDisable(context.Background(), client, printer, "testorg", []string{"web-app"}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), ".fullsend repository not found")
+}
+
+func TestRunReposDisable_ErrorWhenConfigMissing(t *testing.T) {
+	client := setupTestClient("testorg", nil, []string{"web-app"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposDisable(context.Background(), client, printer, "testorg", []string{"web-app"}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading config.yaml")
+}
+
+func TestRunReposDisable_ErrorWhenDisablingFullsend(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": true,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposDisable(context.Background(), client, printer, "testorg", []string{".fullsend"}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot disable .fullsend repository")
+}
+
+func TestRunReposDisable_ErrorWhenRepoNotFound(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": true,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposDisable(context.Background(), client, printer, "testorg", []string{"nonexistent"}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repository nonexistent not found")
+}
+
+func TestRunReposDisable_CommitMessageFormat(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": true,
+		"api":     true,
+	})
+	client := setupTestClient("testorg", cfg, []string{"web-app", "api"})
+	printer := ui.New(&discardWriter{})
+
+	err := runReposDisable(context.Background(), client, printer, "testorg", []string{"web-app", "api"}, false)
+	require.NoError(t, err)
+
+	require.Len(t, client.CreatedFiles, 1)
+	assert.Contains(t, client.CreatedFiles[0].Message, "chore: disable 2 repositories")
 }

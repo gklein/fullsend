@@ -1117,33 +1117,11 @@ func runReposEnable(ctx context.Context, client forge.Client, printer *ui.Printe
 	printer.Header("Enabling repositories for " + org)
 	printer.Blank()
 
-	// Verify .fullsend repository exists.
-	printer.StepStart("Checking .fullsend repository")
-	_, err := client.GetRepo(ctx, org, forge.ConfigRepoName)
+	// Load current config.
+	cfg, err := loadRepoConfig(ctx, client, printer, org)
 	if err != nil {
-		if forge.IsNotFound(err) {
-			printer.StepFail(".fullsend repository not found")
-			return fmt.Errorf(".fullsend repository not found: run 'fullsend admin install %s' first", org)
-		}
-		printer.StepFail("Failed to check .fullsend repository")
-		return fmt.Errorf("checking .fullsend repository: %w", err)
+		return err
 	}
-	printer.StepDone(".fullsend repository exists")
-
-	// Get current config.yaml.
-	printer.StepStart("Reading config.yaml")
-	configData, err := client.GetFileContent(ctx, org, forge.ConfigRepoName, "config.yaml")
-	if err != nil {
-		printer.StepFail("Failed to read config.yaml")
-		return fmt.Errorf("reading config.yaml: %w", err)
-	}
-
-	cfg, err := config.ParseOrgConfig(configData)
-	if err != nil {
-		printer.StepFail("Failed to parse config.yaml")
-		return fmt.Errorf("parsing config.yaml: %w", err)
-	}
-	printer.StepDone("Read config.yaml")
 
 	// Determine which repos to enable.
 	var reposToEnable []string
@@ -1210,31 +1188,12 @@ func runReposEnable(ctx context.Context, client forge.Client, printer *ui.Printe
 		printer.StepInfo("All specified repositories are already enabled")
 		return nil
 	}
-
-	// Marshal updated config.
-	updatedConfigData, err := cfg.Marshal()
-	if err != nil {
-		printer.StepFail("Failed to marshal config.yaml")
-		return fmt.Errorf("marshaling config.yaml: %w", err)
-	}
 	printer.StepDone(fmt.Sprintf("Updated %d repositories in config.yaml", changed))
 
-	// Commit and push changes.
-	printer.StepStart("Committing changes to .fullsend")
+	// Save updated config.
 	commitMsg := fmt.Sprintf("chore: enable %d repositories for fullsend enrollment", changed)
-	if err := client.CreateOrUpdateFile(ctx, org, forge.ConfigRepoName, "config.yaml", commitMsg, updatedConfigData); err != nil {
-		printer.StepFail("Failed to commit changes")
-		return fmt.Errorf("committing config.yaml: %w", err)
-	}
-	printer.StepDone("Changes committed to .fullsend")
-
-	// Trigger repo-maintenance workflow.
-	printer.StepStart("Triggering repo-maintenance workflow")
-	if err := client.DispatchWorkflow(ctx, org, forge.ConfigRepoName, "repo-maintenance.yml", "main", nil); err != nil {
-		printer.StepWarn(fmt.Sprintf("Failed to trigger repo-maintenance: %v", err))
-		printer.StepInfo("Changes committed successfully, but you may need to manually trigger the workflow")
-	} else {
-		printer.StepDone("Triggered repo-maintenance workflow")
+	if err := saveRepoConfig(ctx, client, printer, org, cfg, commitMsg); err != nil {
+		return err
 	}
 
 	printer.Blank()
@@ -1254,33 +1213,11 @@ func runReposDisable(ctx context.Context, client forge.Client, printer *ui.Print
 	printer.Header("Disabling repositories for " + org)
 	printer.Blank()
 
-	// Verify .fullsend repository exists.
-	printer.StepStart("Checking .fullsend repository")
-	_, err := client.GetRepo(ctx, org, forge.ConfigRepoName)
+	// Load current config.
+	cfg, err := loadRepoConfig(ctx, client, printer, org)
 	if err != nil {
-		if forge.IsNotFound(err) {
-			printer.StepFail(".fullsend repository not found")
-			return fmt.Errorf(".fullsend repository not found: run 'fullsend admin install %s' first", org)
-		}
-		printer.StepFail("Failed to check .fullsend repository")
-		return fmt.Errorf("checking .fullsend repository: %w", err)
+		return err
 	}
-	printer.StepDone(".fullsend repository exists")
-
-	// Get current config.yaml.
-	printer.StepStart("Reading config.yaml")
-	configData, err := client.GetFileContent(ctx, org, forge.ConfigRepoName, "config.yaml")
-	if err != nil {
-		printer.StepFail("Failed to read config.yaml")
-		return fmt.Errorf("reading config.yaml: %w", err)
-	}
-
-	cfg, err := config.ParseOrgConfig(configData)
-	if err != nil {
-		printer.StepFail("Failed to parse config.yaml")
-		return fmt.Errorf("parsing config.yaml: %w", err)
-	}
-	printer.StepDone("Read config.yaml")
 
 	// Determine which repos to disable.
 	var reposToDisable []string
@@ -1292,11 +1229,22 @@ func runReposDisable(ctx context.Context, client forge.Client, printer *ui.Print
 		}
 		printer.StepDone(fmt.Sprintf("Found %d repositories to disable", len(reposToDisable)))
 	} else {
-		// Validate provided repo names exist in config.
+		// Validate provided repo names.
 		printer.StepStart("Validating repository names")
 		for _, repo := range repos {
-			if _, exists := cfg.Repos[repo]; !exists {
-				printer.StepWarn(fmt.Sprintf("Repository %s is not configured in config.yaml", repo))
+			if repo == forge.ConfigRepoName {
+				printer.StepFail("Cannot disable .fullsend repository")
+				return fmt.Errorf("cannot disable .fullsend repository itself")
+			}
+			// Check if repo exists in org.
+			_, err := client.GetRepo(ctx, org, repo)
+			if err != nil {
+				if forge.IsNotFound(err) {
+					printer.StepFail(fmt.Sprintf("Repository %s not found", repo))
+					return fmt.Errorf("repository %s not found in %s", repo, org)
+				}
+				printer.StepFail(fmt.Sprintf("Failed to check repository %s", repo))
+				return fmt.Errorf("checking repository %s: %w", repo, err)
 			}
 		}
 		reposToDisable = repos
@@ -1325,18 +1273,68 @@ func runReposDisable(ctx context.Context, client forge.Client, printer *ui.Print
 		printer.StepInfo("All specified repositories are already disabled")
 		return nil
 	}
+	printer.StepDone(fmt.Sprintf("Updated %d repositories in config.yaml", changed))
 
+	// Save updated config.
+	commitMsg := fmt.Sprintf("chore: disable %d repositories from fullsend enrollment", changed)
+	if err := saveRepoConfig(ctx, client, printer, org, cfg, commitMsg); err != nil {
+		return err
+	}
+
+	printer.Blank()
+	printer.Summary("Repositories disabled", []string{
+		fmt.Sprintf("Organization: %s", org),
+		fmt.Sprintf("Disabled: %d repositories", changed),
+		"The repo-maintenance workflow will create unenrollment PRs",
+	})
+
+	return nil
+}
+
+// loadRepoConfig verifies the .fullsend repository exists and loads config.yaml.
+func loadRepoConfig(ctx context.Context, client forge.Client, printer *ui.Printer, org string) (*config.OrgConfig, error) {
+	// Verify .fullsend repository exists.
+	printer.StepStart("Checking .fullsend repository")
+	_, err := client.GetRepo(ctx, org, forge.ConfigRepoName)
+	if err != nil {
+		if forge.IsNotFound(err) {
+			printer.StepFail(".fullsend repository not found")
+			return nil, fmt.Errorf(".fullsend repository not found: run 'fullsend admin install %s' first", org)
+		}
+		printer.StepFail("Failed to check .fullsend repository")
+		return nil, fmt.Errorf("checking .fullsend repository: %w", err)
+	}
+	printer.StepDone(".fullsend repository exists")
+
+	// Get current config.yaml.
+	printer.StepStart("Reading config.yaml")
+	configData, err := client.GetFileContent(ctx, org, forge.ConfigRepoName, "config.yaml")
+	if err != nil {
+		printer.StepFail("Failed to read config.yaml")
+		return nil, fmt.Errorf("reading config.yaml: %w", err)
+	}
+
+	cfg, err := config.ParseOrgConfig(configData)
+	if err != nil {
+		printer.StepFail("Failed to parse config.yaml")
+		return nil, fmt.Errorf("parsing config.yaml: %w", err)
+	}
+	printer.StepDone("Read config.yaml")
+
+	return cfg, nil
+}
+
+// saveRepoConfig marshals and commits the updated config, then triggers the repo-maintenance workflow.
+func saveRepoConfig(ctx context.Context, client forge.Client, printer *ui.Printer, org string, cfg *config.OrgConfig, commitMsg string) error {
 	// Marshal updated config.
 	updatedConfigData, err := cfg.Marshal()
 	if err != nil {
 		printer.StepFail("Failed to marshal config.yaml")
 		return fmt.Errorf("marshaling config.yaml: %w", err)
 	}
-	printer.StepDone(fmt.Sprintf("Updated %d repositories in config.yaml", changed))
 
 	// Commit and push changes.
 	printer.StepStart("Committing changes to .fullsend")
-	commitMsg := fmt.Sprintf("chore: disable %d repositories from fullsend enrollment", changed)
 	if err := client.CreateOrUpdateFile(ctx, org, forge.ConfigRepoName, "config.yaml", commitMsg, updatedConfigData); err != nil {
 		printer.StepFail("Failed to commit changes")
 		return fmt.Errorf("committing config.yaml: %w", err)
@@ -1351,13 +1349,6 @@ func runReposDisable(ctx context.Context, client forge.Client, printer *ui.Print
 	} else {
 		printer.StepDone("Triggered repo-maintenance workflow")
 	}
-
-	printer.Blank()
-	printer.Summary("Repositories disabled", []string{
-		fmt.Sprintf("Organization: %s", org),
-		fmt.Sprintf("Disabled: %d repositories", changed),
-		"The repo-maintenance workflow will create unenrollment PRs",
-	})
 
 	return nil
 }
