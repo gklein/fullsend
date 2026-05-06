@@ -169,6 +169,7 @@ type Client interface {
 	// GitHub rejects the request if the commit is not the PR's current HEAD.
 	CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body, commitSHA string) error
 	ListPullRequestReviews(ctx context.Context, owner, repo string, number int) ([]PullRequestReview, error)
+	DismissPullRequestReview(ctx context.Context, owner, repo string, number, reviewID int, message string) error
 
 	// Change proposal merge
 	MergeChangeProposal(ctx context.Context, owner, repo string, number int) error
