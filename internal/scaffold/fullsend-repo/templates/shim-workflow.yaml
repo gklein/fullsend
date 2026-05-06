@@ -328,6 +328,10 @@ jobs:
         && (
           github.event.comment.body == '/retro'
           || startsWith(github.event.comment.body, '/retro ')
+          || startsWith(github.event.comment.body, format('{0}{1}', '/retro', fromJSON('"\n"')))
+          || github.event.comment.body == '/fullsend retro'
+          || startsWith(github.event.comment.body, '/fullsend retro ')
+          || startsWith(github.event.comment.body, format('{0}{1}', '/fullsend retro', fromJSON('"\n"')))
         )
         && (
           github.event.comment.author_association == 'OWNER'

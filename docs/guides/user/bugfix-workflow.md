@@ -61,6 +61,7 @@ You can control the pipeline from issue or PR comments:
 | `/triage` | Issue comment | Re-runs triage from scratch (clears all labels, reopens if closed) |
 | `/code` | Issue comment | Hands off to the code agent (expects `ready-to-code` or forces with human ack) |
 | `/review` | PR comment | Enqueues a new review round for the current PR head |
+| `/retro` | Issue or PR comment | Triggers a retrospective analysis of the workflow |
 
 ### What to expect from agent PRs
 
