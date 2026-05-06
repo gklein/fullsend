@@ -130,6 +130,10 @@ gcloud iam service-accounts keys create sa-key.json \
 
 The installer is interactive. It will open multiple browser windows to create and install a GitHub App for each agent role. Follow the prompts in each window to complete the app setup.
 
+During installation, you'll be prompted to choose repository enrollment:
+- **[a] Enroll all repositories** — immediately enrolls all org repos (excluding `.fullsend`)
+- **[n] Enroll no repositories** — skip enrollment during install; enroll repositories later
+
 Near the end, the installer opens a browser to create a fine-grained personal access token (dispatch token). When creating it, make sure to grant **Actions: Read and write** permission scoped to the `.fullsend` repository — otherwise the verification step will fail with a 404.
 
 If the installer fails partway through, run `fullsend admin uninstall "$ORG_NAME"` to clean up before retrying. The uninstall preflight will prompt you to add the `delete_repo` scope if it is missing.
@@ -137,10 +141,7 @@ If the installer fails partway through, run `fullsend admin uninstall "$ORG_NAME
 **With WIF (recommended):**
 
 ```bash
-export REPO_NAME="<repo-name>"
-
 fullsend admin install "$ORG_NAME" \
-  --repo "$REPO_NAME" \
   --gcp-project "$GCP_PROJECT" \
   --gcp-region global \
   --gcp-wif-provider "$WIF_PROVIDER" \
@@ -150,10 +151,7 @@ fullsend admin install "$ORG_NAME" \
 **With SA key (legacy):**
 
 ```bash
-export REPO_NAME="<repo-name>"
-
 fullsend admin install "$ORG_NAME" \
-  --repo "$REPO_NAME" \
   --gcp-project "$GCP_PROJECT" \
   --gcp-region global \
   --gcp-credentials-file sa-key.json
@@ -168,7 +166,6 @@ If you already have fullsend installed with a service account key:
 2. Re-run the installer with WIF flags (the installer updates secrets in-place):
    ```bash
    fullsend admin install "$ORG_NAME" \
-     --repo "$REPO_NAME" \
      --skip-app-setup \
      --gcp-project "$GCP_PROJECT" \
      --gcp-region global \
@@ -179,11 +176,9 @@ If you already have fullsend installed with a service account key:
 4. Delete the old SA key: `gcloud iam service-accounts keys delete <KEY_ID> --iam-account=...`
 5. Remove the `FULLSEND_GCP_SA_KEY_JSON` secret from the `.fullsend` repo settings
 
-**Note**: the `--repo` flag can be repeated to onboard multiple repositories.
-
 ## 3. Merge enrollment PRs
 
-After install completes, the installer dispatches a workflow that creates an enrollment PR in each repo passed via `--repo`. These PRs add a shim workflow (`.github/workflows/fullsend.yaml`) that wires events to the agent pipeline.
+If you chose to enroll repositories during install, the installer dispatches a workflow that creates an enrollment PR in each enrolled repo. These PRs add a shim workflow (`.github/workflows/fullsend.yaml`) that wires events to the agent pipeline.
 
 Review and merge each enrollment PR to complete enrollment.
 
