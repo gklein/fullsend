@@ -400,7 +400,7 @@ func TestDownloadReleaseBinary_ChecksumMismatch(t *testing.T) {
 	checksumBody := fmt.Sprintf("%s  fullsend_1.0.0_linux_amd64.tar.gz\n", wrongHash)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1.0.0/fullsend_1.0.0_checksums.txt" {
+		if r.URL.Path == "/v1.0.0/checksums.txt" {
 			fmt.Fprint(w, checksumBody)
 		} else if r.URL.Path == "/v1.0.0/fullsend_1.0.0_linux_amd64.tar.gz" {
 			w.Write(tarBytes)
@@ -443,7 +443,7 @@ func TestDownloadReleaseBinary_ChecksumMatch(t *testing.T) {
 	checksumBody := fmt.Sprintf("%s  fullsend_2.0.0_linux_amd64.tar.gz\n", correctHash)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v2.0.0/fullsend_2.0.0_checksums.txt" {
+		if r.URL.Path == "/v2.0.0/checksums.txt" {
 			fmt.Fprint(w, checksumBody)
 		} else if r.URL.Path == "/v2.0.0/fullsend_2.0.0_linux_amd64.tar.gz" {
 			w.Write(tarBytes)

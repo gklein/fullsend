@@ -1446,7 +1446,7 @@ func downloadReleaseBinary(ver, arch, destPath string) error {
 // GoReleaser format: "<sha256>  <filename>\n"
 func downloadChecksumForAsset(ver, assetName string) (string, error) {
 	cleanVer := strings.TrimPrefix(ver, "v")
-	url := fmt.Sprintf("%s/v%s/fullsend_%s_checksums.txt", releaseBaseURL, cleanVer, cleanVer)
+	url := fmt.Sprintf("%s/v%s/checksums.txt", releaseBaseURL, cleanVer)
 
 	resp, err := httpClient.Get(url) //nolint:gosec // URL is constructed from known constants
 	if err != nil {
