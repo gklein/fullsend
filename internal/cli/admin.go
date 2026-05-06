@@ -1105,7 +1105,11 @@ func runReposEnable(ctx context.Context, client forge.Client, printer *ui.Printe
 	// Determine which repos to enable.
 	var reposToEnable []string
 	if all {
-		// Get all org repos.
+		// Get all org repos by calling ListOrgRepos.
+		// Note: disable --all iterates cfg.Repos instead of calling ListOrgRepos.
+		// This asymmetry is intentional: enable --all discovers all current org repos,
+		// while disable --all operates on previously configured repos (which may have
+		// been deleted from the org but still need unenrollment PRs for cleanup).
 		printer.StepStart("Discovering all organization repositories")
 		allRepos, err := client.ListOrgRepos(ctx, org)
 		if err != nil {
@@ -1273,6 +1277,13 @@ func runReposDisable(ctx context.Context, client forge.Client, printer *ui.Print
 }
 
 // loadRepoConfig verifies the .fullsend repository exists and loads config.yaml.
+//
+// Note: The read-modify-write pattern used by enable/disable (loadRepoConfig →
+// modify → saveRepoConfig) has no optimistic concurrency control. Concurrent
+// admin CLI invocations could race, with the last write winning. This is
+// acceptable for an admin CLI where concurrent usage is rare, and the state
+// is recoverable (just re-run the command). Production systems would use
+// conditional writes (e.g., if-match headers with ETags).
 func loadRepoConfig(ctx context.Context, client forge.Client, printer *ui.Printer, org string) (*config.OrgConfig, error) {
 	// Verify .fullsend repository exists.
 	printer.StepStart("Checking .fullsend repository")
