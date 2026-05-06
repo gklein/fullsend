@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,39 @@ import (
 
 	"github.com/fullsend-ai/fullsend/internal/harness"
 )
+
+func TestFileModeMatchesFilesystem(t *testing.T) {
+	scaffoldRoot := "fullsend-repo"
+
+	var onDiskExecutable []string
+	err := filepath.WalkDir(scaffoldRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return walkErr
+		}
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			return infoErr
+		}
+		relPath := path[len(scaffoldRoot)+1:]
+		if info.Mode()&0o111 != 0 {
+			onDiskExecutable = append(onDiskExecutable, relPath)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+
+	for _, path := range onDiskExecutable {
+		assert.Equal(t, "100755", FileMode(path),
+			"file %s is executable on disk but not in executableFiles", path)
+	}
+
+	for path := range executableFiles {
+		info, statErr := os.Stat(filepath.Join(scaffoldRoot, path))
+		require.NoError(t, statErr, "file %s is in executableFiles but not on disk", path)
+		assert.NotEqual(t, os.FileMode(0), info.Mode()&0o111,
+			"file %s is in executableFiles but is not executable on disk", path)
+	}
+}
 
 func TestFullsendRepoFilesExist(t *testing.T) {
 	expected := []string{

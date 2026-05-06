@@ -383,6 +383,10 @@ func TestFakeClient_ErrorInjection(t *testing.T) {
 		{"SetOrgSecretRepos", func(fc *FakeClient) error {
 			return fc.SetOrgSecretRepos(ctx, "o", "n", nil)
 		}},
+		{"CommitFiles", func(fc *FakeClient) error {
+			_, err := fc.CommitFiles(ctx, "o", "r", "m", nil)
+			return err
+		}},
 	}
 
 	for _, m := range methods {

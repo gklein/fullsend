@@ -71,6 +71,12 @@ type DismissedReviewRecord struct {
 	Message     string
 }
 
+// CommitFilesRecord records a CommitFiles call.
+type CommitFilesRecord struct {
+	Owner, Repo, Message string
+	Files                []TreeFile
+}
+
 // FakeClient is a thread-safe test double for forge.Client.
 // Pre-populate its fields to control return values, and inspect
 // recorder slices after the test to verify which calls were made.
@@ -122,6 +128,7 @@ type FakeClient struct {
 	MinimizedComments []MinimizedCommentRecord
 	CreatedReviews    []ReviewRecord
 	DismissedReviews  []DismissedReviewRecord
+	CommittedFiles    []CommitFilesRecord
 
 	// internal counters
 	proposalCounter int
@@ -331,6 +338,31 @@ func (f *FakeClient) DeleteFile(_ context.Context, owner, repo, path, message st
 		Message: message,
 	})
 	return nil
+}
+
+func (f *FakeClient) CommitFiles(_ context.Context, owner, repo, message string, files []TreeFile) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("CommitFiles"); e != nil {
+		return false, e
+	}
+
+	f.CommittedFiles = append(f.CommittedFiles, CommitFilesRecord{
+		Owner:   owner,
+		Repo:    repo,
+		Message: message,
+		Files:   files,
+	})
+
+	if f.FileContents == nil {
+		f.FileContents = make(map[string][]byte)
+	}
+	for _, file := range files {
+		f.FileContents[owner+"/"+repo+"/"+file.Path] = file.Content
+	}
+
+	return true, nil
 }
 
 func (f *FakeClient) CreateBranch(_ context.Context, owner, repo, branchName string) error {
