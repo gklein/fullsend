@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       stage:
-        description: 'Stage name (triage, code, review, fix)'
+        description: 'Stage name (triage, code, review, fix, retro)'
         required: true
         type: string
       event_type:

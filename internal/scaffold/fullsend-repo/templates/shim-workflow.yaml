@@ -32,7 +32,7 @@ on:
   issue_comment:
     types: [created]
   pull_request_target:
-    types: [opened, synchronize, ready_for_review]
+    types: [opened, synchronize, ready_for_review, closed]
   pull_request_review:
     types: [submitted]
 
@@ -137,7 +137,8 @@ jobs:
         startsWith(github.event.comment.body, '/review ') ||
         startsWith(github.event.comment.body, format('{0}{1}', '/review', fromJSON('"\n"')))
       )) ||
-      github.event_name == 'pull_request_target'
+      (github.event_name == 'pull_request_target'
+        && github.event.action != 'closed')
     steps:
       - name: Build minimal payload
         id: payload
@@ -277,6 +278,101 @@ jobs:
             -f source_repo="$SOURCE_REPO" \
             -f event_payload="$EVENT_PAYLOAD" \
             -f trigger_source="$TRIGGER_USER"
+
+  dispatch-retro:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: retro-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    # Fires on all closed PRs (merged and abandoned). Retrospectives on
+    # abandoned PRs are valuable — they surface why work was discarded.
+    if: >-
+      github.event_name == 'pull_request_target'
+        && github.event.action == 'closed'
+    steps:
+      - name: Build minimal payload
+        id: payload
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HTML_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          PAYLOAD=$(jq -cn \
+            --arg pn "${PR_NUMBER}" \
+            --arg pu "${PR_HTML_URL}" \
+            '{pull_request: {number: ($pn | tonumber), html_url: $pu}}')
+          echo "json=$PAYLOAD" >> "$GITHUB_OUTPUT"
+      - name: Dispatch retro stage
+        env:
+          GH_TOKEN: ${{ secrets.FULLSEND_DISPATCH_TOKEN }}
+          EVENT_PAYLOAD: ${{ steps.payload.outputs.json }}
+          EVENT_TYPE: ${{ github.event_name }}
+          SOURCE_REPO: ${{ github.repository }}
+          DISPATCH_REPO: ${{ github.repository_owner }}/.fullsend
+        run: |
+          gh workflow run dispatch.yml \
+            --repo "$DISPATCH_REPO" \
+            -f stage=retro \
+            -f event_type="$EVENT_TYPE" \
+            -f source_repo="$SOURCE_REPO" \
+            -f event_payload="$EVENT_PAYLOAD"
+
+  dispatch-retro-command:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: retro-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    if: >-
+      github.event_name == 'issue_comment'
+        && github.event.comment.user.type != 'Bot'
+        && (
+          github.event.comment.body == '/retro'
+          || startsWith(github.event.comment.body, '/retro ')
+          || startsWith(github.event.comment.body, format('{0}{1}', '/retro', fromJSON('"\n"')))
+          || github.event.comment.body == '/fullsend retro'
+          || startsWith(github.event.comment.body, '/fullsend retro ')
+          || startsWith(github.event.comment.body, format('{0}{1}', '/fullsend retro', fromJSON('"\n"')))
+        )
+        && (
+          github.event.comment.author_association == 'OWNER'
+          || github.event.comment.author_association == 'MEMBER'
+          || github.event.comment.author_association == 'COLLABORATOR'
+        )
+    steps:
+      - name: Build minimal payload
+        id: payload
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_HTML_URL: ${{ github.event.issue.html_url }}
+          # For PR comments, issue.pull_request.html_url gives the /pull/N URL.
+          # For issue comments, this is empty.
+          PR_HTML_URL: ${{ github.event.issue.pull_request.html_url || '' }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          # Use PR URL if available (comment on a PR), otherwise issue URL.
+          ORIGINATING_URL="${PR_HTML_URL:-${ISSUE_HTML_URL}}"
+          PAYLOAD=$(jq -cn \
+            --arg in "${ISSUE_NUMBER}" \
+            --arg ou "${ORIGINATING_URL}" \
+            --arg cb "${COMMENT_BODY:-}" \
+            '{issue: {number: ($in | tonumber), html_url: $ou},
+              comment: {body: $cb}}')
+          echo "json=$PAYLOAD" >> "$GITHUB_OUTPUT"
+      - name: Dispatch retro stage
+        env:
+          GH_TOKEN: ${{ secrets.FULLSEND_DISPATCH_TOKEN }}
+          EVENT_PAYLOAD: ${{ steps.payload.outputs.json }}
+          EVENT_TYPE: ${{ github.event_name }}
+          SOURCE_REPO: ${{ github.repository }}
+          DISPATCH_REPO: ${{ github.repository_owner }}/.fullsend
+        run: |
+          gh workflow run dispatch.yml \
+            --repo "$DISPATCH_REPO" \
+            -f stage=retro \
+            -f event_type="$EVENT_TYPE" \
+            -f source_repo="$SOURCE_REPO" \
+            -f event_payload="$EVENT_PAYLOAD"
 
   dispatch-stop-fix:
     runs-on: ubuntu-latest
