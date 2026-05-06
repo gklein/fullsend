@@ -55,7 +55,7 @@ The shim file MUST match the content embedded in `internal/scaffold/fullsend-rep
 
 1. **Event payload via environment variables** — All GitHub Actions context values (`toJSON(github.event)`, `github.event_name`, `github.repository`, `github.repository_owner`) are assigned to environment variables (`EVENT_PAYLOAD`, `EVENT_TYPE`, `SOURCE_REPO`, `DISPATCH_REPO`) and referenced as `"$VAR"` in the `run:` script. This prevents script injection from attacker-controlled fields (issue titles, comment bodies, PR descriptions).
 
-2. **Slash-command matching** — Uses exact equality (`github.event.comment.body == '/triage'`) for bare commands and `startsWith(github.event.comment.body, '/triage ')` (with trailing space) for commands with arguments (e.g. `/triage this issue is ready`). This avoids false positives from partial matches like `/triagefoo` while allowing natural-language arguments after the command.
+2. **Slash-command matching** — Uses a three-condition pattern per command: (1) exact equality for bare commands (`github.event.comment.body == '/triage'`), (2) `startsWith` with a trailing space for same-line arguments (`startsWith(github.event.comment.body, '/triage ')`), and (3) `startsWith` with a trailing newline for multi-line bodies (`startsWith(github.event.comment.body, format('{0}{1}', '/triage', fromJSON('"\n"')))`). The `fromJSON('"\n"')` expression produces a literal newline character, which GitHub Actions expression strings cannot represent directly. This avoids false positives from partial matches like `/triagefoo` while supporting both inline arguments and newline-separated bodies.
 
 3. **Label matching** — Uses `github.event.action == 'labeled' && github.event.label.name == 'ready-to-code'` (exact match on the triggering label) rather than `contains(github.event.issue.labels.*.name, ...)` (which scans all labels). This ensures dispatch fires only on the labeling action that matters, not on unrelated label additions to an issue that already has the label.
 
@@ -84,7 +84,8 @@ jobs:
       github.event_name == 'issues' ||
       (github.event_name == 'issue_comment' && (
         github.event.comment.body == '/triage' ||
-        startsWith(github.event.comment.body, '/triage ')
+        startsWith(github.event.comment.body, '/triage ') ||
+        startsWith(github.event.comment.body, format('{0}{1}', '/triage', fromJSON('"\n"')))
       ))
     steps:
       - name: Dispatch triage
