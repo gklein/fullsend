@@ -65,14 +65,15 @@ func AgentAppConfig(org, role string) AppConfig {
 	case "fullsend":
 		base.Description = fmt.Sprintf("Fullsend orchestrator for %s", org)
 		base.Permissions = AppPermissions{
-			Actions:        "write",
-			Contents:       "write",
-			Workflows:      "write",
-			Issues:         "read",
-			PullRequests:   "write",
-			Checks:         "read",
-			Administration: "write",
-			Members:        "read",
+			Actions:              "write",
+			Contents:             "write",
+			Workflows:            "write",
+			Issues:               "read",
+			PullRequests:         "write",
+			Checks:               "read",
+			Administration:       "write",
+			Members:              "read",
+			OrganizationProjects: "read",
 		}
 		base.Events = []string{"issues", "push", "workflow_dispatch"}
 

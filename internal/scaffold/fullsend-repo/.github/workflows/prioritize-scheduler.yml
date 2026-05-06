@@ -71,17 +71,14 @@ jobs:
           CURSOR=""
 
           while [[ "${HAS_NEXT_PAGE}" == "true" ]]; do
-            if [[ -z "${CURSOR}" ]]; then
-              AFTER_ARG=""
-            else
-              AFTER_ARG=", after: \$cursor"
-            fi
-
-            PAGE_JSON=$(gh api graphql -f query="
-              query(\$projectId: ID!$([ -n "${CURSOR}" ] && echo ', $cursor: String!')) {
-                node(id: \$projectId) {
+            # $cursor is declared as nullable (String, not String!) so the
+            # same query works for the first page (no cursor arg → null)
+            # and subsequent pages (cursor arg provided).
+            PAGE_JSON=$(gh api graphql -f query='
+              query($projectId: ID!, $cursor: String) {
+                node(id: $projectId) {
                   ... on ProjectV2 {
-                    items(first: 100${AFTER_ARG}) {
+                    items(first: 100, after: $cursor) {
                       pageInfo {
                         hasNextPage
                         endCursor
@@ -109,7 +106,7 @@ jobs:
                   }
                 }
               }
-            " -f projectId="${PROJECT_ID}" ${CURSOR:+-f cursor="${CURSOR}"})
+            ' -f projectId="${PROJECT_ID}" ${CURSOR:+-f cursor="${CURSOR}"})
 
             ITEMS_JSON=$(jq -s '
               .[0].data.node.items.nodes += .[1].data.node.items.nodes
@@ -180,6 +177,11 @@ jobs:
             ISSUE_URL=$(echo "${row}" | jq -r '.url')
             ISSUE_NUMBER=$(echo "${row}" | jq -r '.number')
             SOURCE_REPO=$(echo "${ISSUE_URL}" | sed 's|https://github.com/||; s|/issues/.*||')
+
+            if [[ ! "${SOURCE_REPO}" =~ ^${ORG}/ ]]; then
+              echo "::warning::Skipping issue from unexpected org: ${SOURCE_REPO}"
+              continue
+            fi
 
             EVENT_PAYLOAD=$(jq -n \
               --arg url "${ISSUE_URL}" \
