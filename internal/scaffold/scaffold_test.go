@@ -154,6 +154,8 @@ func TestTriageWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "event_payload")
 	assert.Contains(t, s, "setup-agent-env.sh")
 	assert.Contains(t, s, "fullsend")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs for same issue
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-triage-")
@@ -189,6 +191,8 @@ func TestCodeWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "sandbox-token")
 	assert.Contains(t, s, "push-token")
 	assert.Contains(t, s, "permission-contents: read")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs for same issue
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-code-")
@@ -207,6 +211,8 @@ func TestReviewWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "FULLSEND_REVIEW_CLIENT_ID")
 	assert.Contains(t, s, "sandbox-token")
 	assert.Contains(t, s, "review-token")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-review-")
@@ -266,6 +272,20 @@ func TestSetupGcpActionContent(t *testing.T) {
 	assert.Contains(t, s, "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE")
 	// Verify sandbox preparation
 	assert.Contains(t, s, "prepare-sandbox-credentials.sh")
+}
+
+func TestValidateEnrollmentActionContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/actions/validate-enrollment/action.yml")
+	require.NoError(t, err)
+	s := string(content)
+	// Verify outputs contract
+	assert.Contains(t, s, "outputs:")
+	assert.Contains(t, s, "name:")
+	assert.Contains(t, s, "steps.extract.outputs.name")
+	// Verify step ID matches output reference
+	assert.Contains(t, s, "id: extract")
+	// Verify enrollment validation script
+	assert.Contains(t, s, "validate-source-repo.sh")
 }
 
 func TestCodeHarnessContent(t *testing.T) {
