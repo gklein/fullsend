@@ -15,7 +15,7 @@ on:
         type: string
 
 concurrency:
-  group: fullsend-prioritize-${{ fromJSON(inputs.event_payload).issue.number }}
+  group: fullsend-prioritize-${{ inputs.source_repo }}-${{ fromJSON(inputs.event_payload).issue.number }}
   cancel-in-progress: true
 
 jobs:
@@ -40,6 +40,9 @@ jobs:
           client-id: ${{ vars.FULLSEND_PRIORITIZE_CLIENT_ID }}
           private-key: ${{ secrets.FULLSEND_PRIORITIZE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+
+      - name: Pre-mask GCP credential file path
+        run: echo "::add-mask::${GITHUB_WORKSPACE}/gha-creds-"
 
       - name: Authenticate to Google Cloud (WIF)
         if: vars.FULLSEND_GCP_AUTH_MODE == 'wif'
