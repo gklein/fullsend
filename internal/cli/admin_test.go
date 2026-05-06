@@ -38,9 +38,6 @@ func TestInstallCmd_RequiresOrg(t *testing.T) {
 func TestInstallCmd_Flags(t *testing.T) {
 	cmd := newInstallCmd()
 
-	repoFlag := cmd.Flags().Lookup("repo")
-	require.NotNil(t, repoFlag, "expected --repo flag")
-
 	agentsFlag := cmd.Flags().Lookup("agents")
 	require.NotNil(t, agentsFlag, "expected --agents flag")
 	assert.Equal(t, "fullsend,triage,coder,review", agentsFlag.DefValue)
@@ -60,6 +57,10 @@ func TestInstallCmd_Flags(t *testing.T) {
 
 	wifSAEmailFlag := cmd.Flags().Lookup("gcp-wif-sa-email")
 	require.NotNil(t, wifSAEmailFlag, "expected --gcp-wif-sa-email flag")
+
+	// --repo flag should not exist (issue #495)
+	repoFlag := cmd.Flags().Lookup("repo")
+	assert.Nil(t, repoFlag, "--repo flag should have been removed")
 }
 
 func TestUninstallCmd_RequiresOrg(t *testing.T) {
