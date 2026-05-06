@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -627,4 +628,99 @@ func TestRunDisableRepos_CommitMessageFormat(t *testing.T) {
 
 	require.Len(t, client.CreatedFiles, 1)
 	assert.Contains(t, client.CreatedFiles[0].Message, "chore: disable 2 repositories")
+}
+
+func TestPromptEnrollment_ChooseAll(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"lowercase a", "a\n"},
+		{"uppercase A", "A\n"},
+		{"word all", "all\n"},
+		{"word ALL", "ALL\n"},
+		{"with spaces", "  a  \n"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := strings.NewReader(tc.input)
+			printer := ui.New(&discardWriter{})
+
+			enrollAll, err := promptEnrollment(printer, input)
+			require.NoError(t, err)
+			assert.True(t, enrollAll)
+		})
+	}
+}
+
+func TestPromptEnrollment_ChooseNone(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"lowercase n", "n\n"},
+		{"uppercase N", "N\n"},
+		{"word none", "none\n"},
+		{"word NONE", "NONE\n"},
+		{"with spaces", "  n  \n"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := strings.NewReader(tc.input)
+			printer := ui.New(&discardWriter{})
+
+			enrollAll, err := promptEnrollment(printer, input)
+			require.NoError(t, err)
+			assert.False(t, enrollAll)
+		})
+	}
+}
+
+func TestPromptEnrollment_RetryOnInvalidInput(t *testing.T) {
+	// First input is invalid, second is valid.
+	input := strings.NewReader("invalid\na\n")
+	printer := ui.New(&discardWriter{})
+
+	enrollAll, err := promptEnrollment(printer, input)
+	require.NoError(t, err)
+	assert.True(t, enrollAll)
+}
+
+func TestPromptEnrollment_MultipleRetriesBeforeValid(t *testing.T) {
+	// Multiple invalid inputs before valid one.
+	input := strings.NewReader("y\nyes\nmaybe\nn\n")
+	printer := ui.New(&discardWriter{})
+
+	enrollAll, err := promptEnrollment(printer, input)
+	require.NoError(t, err)
+	assert.False(t, enrollAll)
+}
+
+func TestPromptEnrollment_ErrorOnEOF(t *testing.T) {
+	// EOF without any valid input.
+	input := strings.NewReader("")
+	printer := ui.New(&discardWriter{})
+
+	_, err := promptEnrollment(printer, input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading enrollment choice")
+}
+
+func TestPromptEnrollment_ErrorOnReadFailure(t *testing.T) {
+	// errorReader always returns an error.
+	input := &errorReader{}
+	printer := ui.New(&discardWriter{})
+
+	_, err := promptEnrollment(printer, input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading enrollment choice")
+}
+
+// errorReader is a test helper that always returns an error on Read.
+type errorReader struct{}
+
+func (e *errorReader) Read(p []byte) (n int, err error) {
+	return 0, fmt.Errorf("simulated read error")
 }

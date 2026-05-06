@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -185,6 +186,10 @@ func newInstallCmd() *cobra.Command {
 				inferenceProviderName = loadExistingInferenceProvider(ctx, client, org)
 			}
 
+			if dryRun {
+				return runDryRun(ctx, client, printer, org, nil, roles, inferenceProvider, inferenceProviderName)
+			}
+
 			// Collect agent credentials via app setup.
 			var agentCreds []layers.AgentCredentials
 			if !skipAppSetup {
@@ -199,30 +204,29 @@ func newInstallCmd() *cobra.Command {
 			}
 
 			// Prompt for enrollment choice: all or none.
-			var repos []string
-			if !dryRun {
-				enrollAll, err := promptEnrollment(printer)
-				if err != nil {
-					return err
-				}
-				if enrollAll {
-					// Discover repos and filter out .fullsend.
-					allRepos, err := client.ListOrgRepos(ctx, org)
-					if err != nil {
-						return fmt.Errorf("listing org repos: %w", err)
-					}
-					for _, r := range allRepos {
-						if r.Name != forge.ConfigRepoName {
-							repos = append(repos, r.Name)
-						}
-					}
-					printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
-				} else {
-					printer.StepInfo("No repositories will be enrolled during install")
-					printer.StepInfo(fmt.Sprintf("To enroll repositories later, use: fullsend admin repos enable %s <repo-name> or --all", org))
-				}
-				printer.Blank()
+			enrollAll, err := promptEnrollment(printer, os.Stdin)
+			if err != nil {
+				return err
 			}
+
+			var repos []string
+			if enrollAll {
+				// Discover repos and filter out .fullsend.
+				allRepos, err := client.ListOrgRepos(ctx, org)
+				if err != nil {
+					return fmt.Errorf("listing org repos: %w", err)
+				}
+				for _, r := range allRepos {
+					if r.Name != forge.ConfigRepoName {
+						repos = append(repos, r.Name)
+					}
+				}
+				printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
+			} else {
+				printer.StepInfo("No repositories will be enrolled during install")
+				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use: fullsend admin repos enable %s <repo-name> or --all", org))
+			}
+			printer.Blank()
 
 			return runInstall(ctx, client, printer, org, repos, roles, agentCreds, inferenceProvider, inferenceProviderName, vendorBinary)
 		},
@@ -912,29 +916,32 @@ func collectEnrolledRepoIDs(allRepos []forge.Repository, enabledRepos []string) 
 
 // promptEnrollment asks the user whether to enroll all repositories or none.
 // Returns true if the user chooses to enroll all, false if none.
-func promptEnrollment(printer *ui.Printer) (bool, error) {
+// Accepts an io.Reader to enable testing without os.Stdin.
+func promptEnrollment(printer *ui.Printer, in io.Reader) (bool, error) {
 	printer.Header("Repository Enrollment")
 	printer.Blank()
 	printer.StepInfo("Choose repository enrollment:")
 	printer.StepInfo("  [a] Enroll all repositories (excluding .fullsend)")
 	printer.StepInfo("  [n] Enroll no repositories (configure later with 'fullsend admin repos enable')")
 	printer.Blank()
-	fmt.Print("Enter choice (a/n): ")
 
-	reader := bufio.NewReader(os.Stdin)
-	choice, err := reader.ReadString('\n')
-	if err != nil {
-		return false, fmt.Errorf("reading enrollment choice: %w", err)
-	}
-	choice = strings.TrimSpace(strings.ToLower(choice))
+	reader := bufio.NewReader(in)
+	for {
+		printer.StepInfo("Enter choice (a/n): ")
+		choice, err := reader.ReadString('\n')
+		if err != nil {
+			return false, fmt.Errorf("reading enrollment choice: %w", err)
+		}
+		choice = strings.TrimSpace(strings.ToLower(choice))
 
-	switch choice {
-	case "a", "all":
-		return true, nil
-	case "n", "none":
-		return false, nil
-	default:
-		return false, fmt.Errorf("invalid choice: %q (expected 'a' or 'n')", choice)
+		switch choice {
+		case "a", "all":
+			return true, nil
+		case "n", "none":
+			return false, nil
+		default:
+			printer.StepWarn(fmt.Sprintf("Invalid choice: %q (expected 'a' or 'n')", choice))
+		}
 	}
 }
 
