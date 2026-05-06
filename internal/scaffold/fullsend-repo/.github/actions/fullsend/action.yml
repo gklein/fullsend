@@ -113,6 +113,10 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p "${GITHUB_WORKSPACE}/output"
+        # SECURITY: Never expose --no-post-script as a workflow input.
+        # Post-scripts enforce secret scanning, protected-path blocks,
+        # and review-downgrade controls. Skipping them in CI bypasses
+        # all post-push security gates.
         fullsend run "${AGENT}" \
           --fullsend-dir "${GITHUB_WORKSPACE}" \
           --output-dir "${GITHUB_WORKSPACE}/output" \
