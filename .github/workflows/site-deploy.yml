@@ -122,6 +122,10 @@ jobs:
             core.setOutput('preview_alias', previewAlias);
             core.setOutput('pr_number', prNumber != null ? String(prNumber) : '');
 
+      # Same 10214 issue as previews: wrangler-action runs script-level `wrangler secret bulk`
+      # before `deploy` when `secrets:` is set. Use `wrangler versions secret bulk` in preCommands
+      # instead (cloudflare/wrangler-action#374).
+      # preCommands run under `/bin/sh` (dash on Ubuntu): no `pipefail` (bash-only).
       - name: Deploy to production (Workers + static assets)
         id: cf-prod
         if: github.event.workflow_run.event == 'push'
@@ -131,13 +135,20 @@ jobs:
           workingDirectory: cloudflare_site
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          preCommands: |
+            set -eu
+            secrets_file="$(mktemp)"
+            printf '%s\n' \
+              "GITHUB_APP_CLIENT_SECRET=${GITHUB_APP_CLIENT_SECRET}" \
+              "TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY}" \
+              >"$secrets_file"
+            npx wrangler@4.36.0 versions secret bulk "$secrets_file" \
+              --message "Production secrets (workflow-run ${{ github.event.workflow_run.id }})"
+            rm -f "$secrets_file"
           command: deploy --name="${{ vars.CLOUDFLARE_PROJECT_NAME }}"
           vars: |
             GITHUB_APP_CLIENT_ID
             TURNSTILE_SITE_KEY
-          secrets: |
-            GITHUB_APP_CLIENT_SECRET
-            TURNSTILE_SECRET_KEY
         env:
           GITHUB_APP_CLIENT_ID: ${{ vars.FULLSEND_GITHUB_APP_CLIENT_ID }}
           GITHUB_APP_CLIENT_SECRET: ${{ secrets.FULLSEND_GITHUB_APP_CLIENT_SECRET }}
@@ -148,6 +159,7 @@ jobs:
       # That conflicts with `versions upload` (API 10214: latest version isn't deployed). Apply secrets
       # with `wrangler versions secret bulk` in preCommands instead (cloudflare/wrangler-action#374).
       # Plain `vars` are only auto-injected for deploy/publish, so pass `--var` on `versions upload`.
+      # preCommands run under `/bin/sh` (dash on Ubuntu): no `pipefail` (bash-only).
       - name: Upload preview version (Workers + static assets)
         id: cf-preview
         if: github.event.workflow_run.event == 'pull_request'
@@ -158,7 +170,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           preCommands: |
-            set -euo pipefail
+            set -eu
             secrets_file="$(mktemp)"
             printf '%s\n' \
               "GITHUB_APP_CLIENT_SECRET=${GITHUB_APP_CLIENT_SECRET}" \
