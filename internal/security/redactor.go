@@ -134,7 +134,7 @@ func defaultPrefixPatterns() []secretPattern {
 		{"github_pat", `ghp_[a-zA-Z0-9_]{36,}`},
 		{"github_oauth", `gho_[a-zA-Z0-9_]{36,}`},
 		{"github_user_token", `ghu_[a-zA-Z0-9_]{36,}`},
-		{"github_server_token", `ghs_[a-zA-Z0-9_]{36,}`},
+		{"github_server_token", `ghs_[a-zA-Z0-9_.\-]{36,}`},
 		{"github_refresh_token", `ghr_[a-zA-Z0-9_]{36,}`},
 		{"slack_token", `xox[baprs]-[a-zA-Z0-9-]{10,}`},
 		{"google_api_key", `AIza[a-zA-Z0-9_-]{35}`},

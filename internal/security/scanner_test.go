@@ -127,8 +127,12 @@ func TestSecretRedactor(t *testing.T) {
 	})
 
 	t.Run("github installation token new JWT format redacted", func(t *testing.T) {
-		// GitHub's April 2026 token format: ghs_APPID_JWT (~520 chars with underscores)
-		token := "ghs_12345_" + strings.Repeat("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9", 14)
+		// GitHub's April 2026 token format: ghs_APPID_HEADER.PAYLOAD.SIGNATURE (~520 chars)
+		// JWT segments are base64url-encoded and separated by dots.
+		header := strings.Repeat("eyJhbGciOiJSUzI1NiJ9", 3)
+		payload := strings.Repeat("eyJzdWIiOiIxMjM0NTY3ODkw", 6)
+		sig := strings.Repeat("dBjftJeZ4CVP-mB92K27uhbU", 6)
+		token := "ghs_12345_" + header + "." + payload + "." + sig
 		result := r.Scan("Token: " + token)
 		assert.False(t, result.Safe)
 		assert.NotContains(t, result.Sanitized, "ghs_12345_eyJ")
