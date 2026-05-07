@@ -79,6 +79,16 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		"scripts/validate-source-repo.sh",
 		"skills/code-implementation/SKILL.md",
 		"templates/shim-workflow.yaml",
+		"agents/prioritize.md",
+		"env/prioritize.env",
+		"harness/prioritize.yaml",
+		"policies/prioritize.yaml",
+		"schemas/prioritize-result.schema.json",
+		"scripts/setup-prioritize.sh",
+		"scripts/pre-prioritize.sh",
+		"scripts/post-prioritize.sh",
+		".github/workflows/prioritize.yml",
+		".github/workflows/prioritize-scheduler.yml",
 	}
 
 	for _, path := range expected {
@@ -454,6 +464,77 @@ func TestRepoMaintenanceWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "config.yaml")
 	assert.Contains(t, s, "templates/shim-workflow.yaml",
 		"push trigger must include shim template so changes propagate to enrolled repos")
+}
+
+func TestPrioritizeWorkflowContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/prioritize.yml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "# fullsend-stage: prioritize")
+	assert.Contains(t, s, "workflow_dispatch")
+	assert.Contains(t, s, "event_type")
+	assert.Contains(t, s, "source_repo")
+	assert.Contains(t, s, "event_payload")
+	assert.Contains(t, s, "FULLSEND_PROJECT_NUMBER")
+	assert.Contains(t, s, "setup-agent-env.sh")
+	assert.Contains(t, s, "agent: prioritize")
+	assert.Contains(t, s, "concurrency:")
+	assert.Contains(t, s, "fullsend-prioritize")
+	assert.Contains(t, s, "cancel-in-progress: true")
+	// Org-scoped agent needs an empty target-repo directory.
+	assert.Contains(t, s, "mkdir -p target-repo")
+	// Issue URL comes from event_payload, not pre-script output file.
+	assert.Contains(t, s, "GITHUB_ISSUE_URL")
+	assert.Contains(t, s, "fromJSON(inputs.event_payload)")
+}
+
+func TestPrioritizeSchedulerWorkflowContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/prioritize-scheduler.yml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "schedule:")
+	assert.Contains(t, s, "cron:")
+	assert.Contains(t, s, "workflow_dispatch")
+	assert.Contains(t, s, "fullsend-prioritize-scheduler")
+	assert.Contains(t, s, "RICE Score")
+	assert.Contains(t, s, "prioritize.yml")
+	assert.Contains(t, s, "FULLSEND_PROJECT_NUMBER")
+}
+
+func TestPrioritizeAgentPromptContent(t *testing.T) {
+	content, err := FullsendRepoFile("agents/prioritize.md")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "agent-result.json")
+	assert.Contains(t, s, "RICE")
+	assert.Contains(t, s, "Reach")
+	assert.Contains(t, s, "Impact")
+	assert.Contains(t, s, "Confidence")
+	assert.Contains(t, s, "Effort")
+	assert.Contains(t, s, "customer-research skill")
+}
+
+func TestPrioritizeSchemaContent(t *testing.T) {
+	content, err := FullsendRepoFile("schemas/prioritize-result.schema.json")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "$schema")
+	assert.Contains(t, s, "reach")
+	assert.Contains(t, s, "impact")
+	assert.Contains(t, s, "confidence")
+	assert.Contains(t, s, "effort")
+	assert.Contains(t, s, "reasoning")
+}
+
+func TestPrioritizeHarnessContent(t *testing.T) {
+	content, err := FullsendRepoFile("harness/prioritize.yaml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "agents/prioritize.md")
+	assert.Contains(t, s, "pre_script")
+	assert.Contains(t, s, "post_script")
+	assert.Contains(t, s, "runner_env")
+	assert.Contains(t, s, "PROJECT_NUMBER")
 }
 
 func TestValidateTriageDeleted(t *testing.T) {
