@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -120,30 +121,32 @@ func TestCollectLogs_InvalidSource(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestPathTraversalContainment(t *testing.T) {
-	// Simulate the containment check used in ExtractOutputFiles.
-	localDir := "/tmp/output"
-	cleanBase := filepath.Clean(localDir) + string(filepath.Separator)
+func TestExec_OpenshellNotInPath(t *testing.T) {
+	t.Setenv("PATH", "")
 
-	tests := []struct {
-		name    string
-		relPath string
-		safe    bool
-	}{
-		{"normal file", "report.md", true},
-		{"nested file", "subdir/report.md", true},
-		{"traversal", "../../../etc/passwd", false},
-		{"traversal with prefix", "../../home/runner/.bashrc", false},
-		{"dot segments in middle", "subdir/../../etc/shadow", false},
-	}
+	_, _, _, err := Exec("test-sandbox", "echo hello", 10*time.Second)
+	assert.Error(t, err)
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			localPath := filepath.Join(localDir, tt.relPath)
-			contained := strings.HasPrefix(filepath.Clean(localPath), cleanBase)
-			assert.Equal(t, tt.safe, contained, "relPath=%q localPath=%q", tt.relPath, localPath)
-		})
-	}
+func TestOsRootContainment(t *testing.T) {
+	dir := t.TempDir()
+
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	defer root.Close()
+
+	f, err := root.Create("safe.txt")
+	require.NoError(t, err)
+	f.Close()
+
+	_, err = root.Create("../../../etc/passwd")
+	assert.Error(t, err)
+
+	_, err = root.Create("../../home/runner/.bashrc")
+	assert.Error(t, err)
+
+	_, err = root.Create("subdir/../../etc/shadow")
+	assert.Error(t, err)
 }
 
 func TestSanitizeDownload_RemovesSymlinks(t *testing.T) {

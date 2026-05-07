@@ -184,45 +184,15 @@ func Delete(name string) error {
 	return nil
 }
 
-// GetSSHConfig retrieves the SSH config for a sandbox.
-func GetSSHConfig(name string) (string, error) {
-	out, err := exec.Command("openshell", "sandbox", "ssh-config", name).Output()
-	if err != nil {
-		return "", fmt.Errorf("getting SSH config for sandbox %q: %w", name, err)
-	}
-	return string(out), nil
-}
+// Exec runs a command inside a sandbox and returns stdout, stderr, and exit code.
+func Exec(sandboxName, command string, timeout time.Duration) (stdout, stderr string, exitCode int, err error) {
+	timeoutSecs := fmt.Sprintf("%d", int(timeout.Seconds()))
 
-// SCP copies a local file or directory into a sandbox.
-func SCP(sshConfigPath, sandboxName, localPath, remotePath string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), transferTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "scp",
-		"-F", sshConfigPath,
-		"-r",
-		localPath,
-		fmt.Sprintf("openshell-%s:%s", sandboxName, remotePath),
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("scp to sandbox %q timed out after %s", sandboxName, transferTimeout)
-		}
-		return fmt.Errorf("scp to sandbox %q failed: %s: %w", sandboxName, string(out), err)
-	}
-	return nil
-}
-
-// SSH runs a command inside a sandbox and returns stdout, stderr, and exit code.
-func SSH(sshConfigPath, sandboxName, command string, timeout time.Duration) (stdout, stderr string, exitCode int, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "ssh",
-		"-F", sshConfigPath,
-		fmt.Sprintf("openshell-%s", sandboxName),
-		command,
+	cmd := exec.Command("openshell", "sandbox", "exec",
+		"--name", sandboxName,
+		"--no-tty",
+		"--timeout", timeoutSecs,
+		"--", "sh", "-c", command,
 	)
 
 	var stdoutBuf, stderrBuf strings.Builder
@@ -235,27 +205,27 @@ func SSH(sshConfigPath, sandboxName, command string, timeout time.Duration) (std
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 
-	if runErr != nil && ctx.Err() != nil {
-		return stdoutBuf.String(), stderrBuf.String(), exitCode,
-			fmt.Errorf("ssh command timed out after %s", timeout)
+	if runErr != nil && cmd.ProcessState == nil {
+		return "", "", exitCode, fmt.Errorf("openshell exec failed to start: %w", runErr)
 	}
 
-	if runErr != nil && cmd.ProcessState == nil {
-		return "", "", exitCode, fmt.Errorf("ssh failed to start: %w", runErr)
+	if exitCode == 124 {
+		return stdoutBuf.String(), stderrBuf.String(), exitCode,
+			fmt.Errorf("command timed out after %s", timeout)
 	}
 
 	return stdoutBuf.String(), stderrBuf.String(), exitCode, nil
 }
 
-// SSHStream runs a command inside a sandbox, streaming output to the given writers.
-func SSHStream(sshConfigPath, sandboxName, command string, timeout time.Duration, stdoutW, stderrW *os.File) (int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+// ExecStream runs a command inside a sandbox, streaming output to the given writers.
+func ExecStream(sandboxName, command string, timeout time.Duration, stdoutW, stderrW *os.File) (int, error) {
+	timeoutSecs := fmt.Sprintf("%d", int(timeout.Seconds()))
 
-	cmd := exec.CommandContext(ctx, "ssh",
-		"-F", sshConfigPath,
-		fmt.Sprintf("openshell-%s", sandboxName),
-		command,
+	cmd := exec.Command("openshell", "sandbox", "exec",
+		"--name", sandboxName,
+		"--no-tty",
+		"--timeout", timeoutSecs,
+		"--", "sh", "-c", command,
 	)
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
@@ -266,27 +236,29 @@ func SSHStream(sshConfigPath, sandboxName, command string, timeout time.Duration
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 
-	if err != nil && ctx.Err() != nil {
-		return exitCode, fmt.Errorf("ssh command timed out after %s", timeout)
+	if err != nil && cmd.ProcessState == nil {
+		return exitCode, fmt.Errorf("openshell exec failed to start: %w", err)
 	}
 
-	if err != nil && cmd.ProcessState == nil {
-		return exitCode, fmt.Errorf("ssh failed to start: %w", err)
+	if exitCode == 124 {
+		return exitCode, fmt.Errorf("command timed out after %s", timeout)
 	}
 
 	return exitCode, nil
 }
 
-// SSHStreamReader runs a command inside a sandbox, returning an io.ReadCloser for
+// ExecStreamReader runs a command inside a sandbox, returning an io.ReadCloser for
 // stdout so the caller can parse structured output. Stderr is forwarded to the
 // given writer. The caller must read stdout to completion, then call cmd.Wait().
-func SSHStreamReader(sshConfigPath, sandboxName, command string, timeout time.Duration, stderrW io.Writer) (io.ReadCloser, *exec.Cmd, context.CancelFunc, error) {
+func ExecStreamReader(sandboxName, command string, timeout time.Duration, stderrW io.Writer) (io.ReadCloser, *exec.Cmd, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	timeoutSecs := fmt.Sprintf("%d", int(timeout.Seconds()))
 
-	cmd := exec.CommandContext(ctx, "ssh",
-		"-F", sshConfigPath,
-		fmt.Sprintf("openshell-%s", sandboxName),
-		command,
+	cmd := exec.CommandContext(ctx, "openshell", "sandbox", "exec",
+		"--name", sandboxName,
+		"--no-tty",
+		"--timeout", timeoutSecs,
+		"--", "sh", "-c", command,
 	)
 	cmd.Stderr = stderrW
 
@@ -298,66 +270,59 @@ func SSHStreamReader(sshConfigPath, sandboxName, command string, timeout time.Du
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		return nil, nil, nil, fmt.Errorf("starting ssh command: %w", err)
+		return nil, nil, nil, fmt.Errorf("starting openshell exec: %w", err)
 	}
 
 	return stdout, cmd, cancel, nil
 }
 
-// RsyncFrom copies a directory from a sandbox to the local machine using rsync
-// with safety flags: symlinks are skipped (--no-links) and .git/hooks/ is
-// excluded to prevent a compromised sandbox from injecting executable content
-// into the host repo. Requires rsync on both host and sandbox.
-func RsyncFrom(sshConfigPath, sandboxName, remoteDir, localDir string) error {
-	// Trailing slashes ensure rsync copies contents, not the directory itself.
-	if !strings.HasSuffix(remoteDir, "/") {
-		remoteDir += "/"
-	}
-	if !strings.HasSuffix(localDir, "/") {
-		localDir += "/"
-	}
-
+// Upload copies a local file or directory into a sandbox.
+func Upload(sandboxName, localPath, remotePath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), transferTimeout)
 	defer cancel()
 
-	remote := fmt.Sprintf("openshell-%s:%s", sandboxName, remoteDir)
-	cmd := exec.CommandContext(ctx, "rsync",
-		"-a",
-		"--no-links",
-		"--exclude", ".git/hooks/",
-		"-e", fmt.Sprintf("ssh -F %s", sshConfigPath),
-		remote,
-		localDir,
+	cmd := exec.CommandContext(ctx, "openshell", "sandbox", "upload",
+		sandboxName,
+		localPath,
+		remotePath,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("rsync from sandbox %q timed out after %s", sandboxName, transferTimeout)
+			return fmt.Errorf("upload to sandbox %q timed out after %s", sandboxName, transferTimeout)
 		}
-		return fmt.Errorf("rsync from sandbox %q failed: %s: %w", sandboxName, string(out), err)
+		return fmt.Errorf("upload to sandbox %q failed: %s: %w", sandboxName, string(out), err)
 	}
 	return nil
 }
 
-// SCPFrom copies a file or directory from a sandbox to the local machine.
-func SCPFrom(sshConfigPath, sandboxName, remotePath, localPath string) error {
+// Download copies a file or directory from a sandbox to the local machine.
+func Download(sandboxName, remotePath, localPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), transferTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "scp",
-		"-F", sshConfigPath,
-		"-r",
-		fmt.Sprintf("openshell-%s:%s", sandboxName, remotePath),
+	cmd := exec.CommandContext(ctx, "openshell", "sandbox", "download",
+		sandboxName,
+		remotePath,
 		localPath,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("scp from sandbox %q timed out after %s", sandboxName, transferTimeout)
+			return fmt.Errorf("download from sandbox %q timed out after %s", sandboxName, transferTimeout)
 		}
-		return fmt.Errorf("scp from sandbox %q failed: %s: %w", sandboxName, string(out), err)
+		return fmt.Errorf("download from sandbox %q failed: %s: %w", sandboxName, string(out), err)
 	}
 	return nil
+}
+
+// SafeDownload copies a directory from a sandbox to the local machine and then
+// sanitizes the result by removing symlinks and .git/hooks/.
+func SafeDownload(sandboxName, remoteDir, localDir string) error {
+	if err := Download(sandboxName, remoteDir, localDir); err != nil {
+		return err
+	}
+	return sanitizeDownload(localDir)
 }
 
 // CollectLogs runs `openshell logs <name> --source <source> -n 0` and returns
@@ -380,13 +345,18 @@ func CollectLogs(name, source string) (string, error) {
 
 // ExtractTranscripts copies Claude transcript files (.jsonl) from the sandbox
 // to a local output directory.
-func ExtractTranscripts(sshConfigPath, sandboxName, agentName, outputDir string) error {
+func ExtractTranscripts(sandboxName, agentName, outputDir string) error {
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("creating output dir: %w", err)
 	}
 
-	// Find transcript files in the sandbox.
-	stdout, _, _, err := SSH(sshConfigPath, sandboxName,
+	root, err := os.OpenRoot(outputDir)
+	if err != nil {
+		return fmt.Errorf("opening output root: %w", err)
+	}
+	defer root.Close()
+
+	stdout, _, _, err := Exec(sandboxName,
 		fmt.Sprintf("find %s -name '*.jsonl' 2>/dev/null || true", SandboxClaudeConfig),
 		10*time.Second,
 	)
@@ -401,23 +371,22 @@ func ExtractTranscripts(sshConfigPath, sandboxName, agentName, outputDir string)
 	}
 	files := strings.Split(trimmed, "\n")
 
-	cleanBase := filepath.Clean(outputDir) + string(filepath.Separator)
-
 	for _, remotePath := range files {
 		remotePath = strings.TrimSpace(remotePath)
 		if remotePath == "" {
 			continue
 		}
 		localName := fmt.Sprintf("%s-%s", agentName, filepath.Base(remotePath))
-		localPath := filepath.Join(outputDir, localName)
 
-		// Prevent path traversal from sandbox-controlled filenames.
-		if !strings.HasPrefix(filepath.Clean(localPath), cleanBase) {
-			fmt.Fprintf(os.Stderr, "  [%s] Skipping path traversal attempt: %s\n", agentName, localName)
+		f, createErr := root.Create(localName)
+		if createErr != nil {
+			fmt.Fprintf(os.Stderr, "  [%s] Skipping (path rejected): %s: %v\n", agentName, localName, createErr)
 			continue
 		}
+		f.Close()
 
-		if scpErr := SCPFrom(sshConfigPath, sandboxName, remotePath, localPath); scpErr != nil {
+		localPath := filepath.Join(outputDir, localName)
+		if scpErr := Download(sandboxName, remotePath, localPath); scpErr != nil {
 			fmt.Fprintf(os.Stderr, "  [%s] Failed to copy transcript: %v\n", agentName, scpErr)
 			continue
 		}
@@ -429,13 +398,18 @@ func ExtractTranscripts(sshConfigPath, sandboxName, agentName, outputDir string)
 
 // ExtractOutputFiles copies all files under a remote directory in the sandbox
 // to a local output directory, preserving relative paths.
-func ExtractOutputFiles(sshConfigPath, sandboxName, remoteDir, localDir string) ([]string, error) {
+func ExtractOutputFiles(sandboxName, remoteDir, localDir string) ([]string, error) {
 	if err := os.MkdirAll(localDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating local output dir: %w", err)
 	}
 
-	// List files in the sandbox output directory.
-	stdout, _, _, err := SSH(sshConfigPath, sandboxName,
+	root, err := os.OpenRoot(localDir)
+	if err != nil {
+		return nil, fmt.Errorf("opening output root: %w", err)
+	}
+	defer root.Close()
+
+	stdout, _, _, err := Exec(sandboxName,
 		fmt.Sprintf("find %s -type f 2>/dev/null || true", remoteDir),
 		10*time.Second,
 	)
@@ -449,32 +423,30 @@ func ExtractOutputFiles(sshConfigPath, sandboxName, remoteDir, localDir string) 
 	}
 	lines := strings.Split(trimmed, "\n")
 
-	cleanBase := filepath.Clean(localDir) + string(filepath.Separator)
-
 	var extracted []string
 	for _, remotePath := range lines {
 		remotePath = strings.TrimSpace(remotePath)
 		if remotePath == "" {
 			continue
 		}
-		// Preserve the relative path under remoteDir.
 		relPath := strings.TrimPrefix(remotePath, remoteDir)
 		relPath = strings.TrimPrefix(relPath, "/")
-		localPath := filepath.Join(localDir, relPath)
 
-		// Prevent path traversal from sandbox-controlled filenames.
-		if !strings.HasPrefix(filepath.Clean(localPath), cleanBase) {
-			fmt.Fprintf(os.Stderr, "  Skipping path traversal attempt: %s\n", relPath)
+		f, createErr := root.Create(relPath)
+		if createErr != nil {
+			fmt.Fprintf(os.Stderr, "  Skipping (path rejected): %s: %v\n", relPath, createErr)
 			continue
 		}
+		f.Close()
 
+		localPath := filepath.Join(localDir, relPath)
 		if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "  Failed to create dir for %s: %v\n", relPath, err)
 			continue
 		}
 
-		if scpErr := SCPFrom(sshConfigPath, sandboxName, remotePath, localPath); scpErr != nil {
-			fmt.Fprintf(os.Stderr, "  Failed to copy %s: %v\n", relPath, scpErr)
+		if dlErr := Download(sandboxName, remotePath, localPath); dlErr != nil {
+			fmt.Fprintf(os.Stderr, "  Failed to copy %s: %v\n", relPath, dlErr)
 			continue
 		}
 		extracted = append(extracted, localPath)
