@@ -1,5 +1,5 @@
 ---
-title: "0017. Credential Isolation for Sandboxed Agents"
+title: "17. Credential Isolation for Sandboxed Agents"
 status: Accepted
 relates_to:
   - security-threat-model
@@ -10,7 +10,7 @@ topics:
   - security
 ---
 
-# 0017. Credential Isolation for Sandboxed Agents
+# 17. Credential Isolation for Sandboxed Agents
 
 Date: 2026-04-01
 

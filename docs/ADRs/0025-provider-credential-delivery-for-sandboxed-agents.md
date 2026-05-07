@@ -1,5 +1,5 @@
 ---
-title: "0025. Provider-based credential delivery for sandboxed agents"
+title: "25. Provider-based credential delivery for sandboxed agents"
 status: Accepted
 relates_to:
   - agent-architecture
@@ -12,7 +12,7 @@ topics:
   - providers
 ---
 
-# 0025. Provider-based credential delivery for sandboxed agents
+# 25. Provider-based credential delivery for sandboxed agents
 
 Date: 2026-04-23
 

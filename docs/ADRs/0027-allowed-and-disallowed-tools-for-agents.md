@@ -1,5 +1,5 @@
 ---
-title: "0027. Allowed and Disallowed Tools for Agents"
+title: "27. Allowed and Disallowed Tools for Agents"
 status: Proposed
 relates_to:
   - agent-architecture
@@ -10,7 +10,7 @@ topics:
   - sandbox
 ---
 
-# 0027. Allowed and Disallowed Tools for Agents
+# 27. Allowed and Disallowed Tools for Agents
 
 Date: 2026-04-21
 
