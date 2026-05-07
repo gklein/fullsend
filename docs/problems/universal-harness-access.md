@@ -151,7 +151,7 @@ The URL fetch mechanism must prevent Server-Side Request Forgery attacks.
 
 **Implemented defenses:**
 
-1. **Protocol allowlist:** Only `https://` permitted. Reject `http://`, `ftp://`, `file://`, `gopher://`, etc.
+1. **Protocol allowlist:** Only `https://` permitted. Reject all other protocols including insecure HTTP (`http://`) and non-HTTP protocols (`ftp://`, `file://`, `gopher://`, etc.).
 2. **Domain allowlist:** Configurable in `config.yaml`:
    ```yaml
    security:
@@ -511,12 +511,16 @@ type FetchPolicy struct {
     AllowedDomains []string
     MaxSizeBytes   int64
     Timeout        time.Duration
+    MaxDepth       int // Maximum depth for transitive dependencies
+    MaxResources   int // Maximum total resources to fetch
 }
 
 var DefaultPolicy = FetchPolicy{
     AllowedDomains: []string{"github.com", "gitlab.com", "cdn.fullsend.ai"},
     MaxSizeBytes:   10 * 1024 * 1024, // 10 MB
     Timeout:        30 * time.Second,
+    MaxDepth:       10, // Maximum recursion depth for dependencies
+    MaxResources:   50, // Maximum total resources fetched per harness
 }
 
 // FetchURL fetches a URL with SSRF protection and returns the content.
@@ -566,10 +570,13 @@ func FetchURL(ctx context.Context, rawURL string, policy FetchPolicy) ([]byte, e
     }
 
     // 5. Read body with size limit
-    limited := io.LimitReader(resp.Body, policy.MaxSizeBytes)
+    limited := io.LimitReader(resp.Body, policy.MaxSizeBytes+1)
     content, err := io.ReadAll(limited)
     if err != nil {
         return nil, fmt.Errorf("reading response: %w", err)
+    }
+    if int64(len(content)) > policy.MaxSizeBytes {
+        return nil, fmt.Errorf("response exceeds maximum size of %d bytes", policy.MaxSizeBytes)
     }
 
     return content, nil
@@ -711,17 +718,18 @@ type Dependency struct {
 // ResolveHarness resolves all resources (local and remote) and returns paths.
 func ResolveHarness(ctx context.Context, h *harness.Harness, policy fetch.FetchPolicy) (*ResolvedHarness, error) {
     resolved := &ResolvedHarness{Harness: h}
+    resourceCount := 0
 
     // Resolve agent
     var err error
-    resolved.AgentPath, err = resolveResource(ctx, h.Agent, h.AllowedRemoteResources, policy)
+    resolved.AgentPath, err = resolveResourceWithLimits(ctx, h.Agent, h.AllowedRemoteResources, policy, 0, &resourceCount)
     if err != nil {
         return nil, fmt.Errorf("resolving agent: %w", err)
     }
 
     // Resolve policy
     if h.Policy != "" {
-        resolved.PolicyPath, err = resolveResource(ctx, h.Policy, h.AllowedRemoteResources, policy)
+        resolved.PolicyPath, err = resolveResourceWithLimits(ctx, h.Policy, h.AllowedRemoteResources, policy, 0, &resourceCount)
         if err != nil {
             return nil, fmt.Errorf("resolving policy: %w", err)
         }
@@ -729,7 +737,7 @@ func ResolveHarness(ctx context.Context, h *harness.Harness, policy fetch.FetchP
 
     // Resolve skills (each skill may have transitive dependencies)
     for _, skill := range h.Skills {
-        skillPath, err := resolveResource(ctx, skill, h.AllowedRemoteResources, policy)
+        skillPath, err := resolveResourceWithLimits(ctx, skill, h.AllowedRemoteResources, policy, 0, &resourceCount)
         if err != nil {
             return nil, fmt.Errorf("resolving skill %s: %w", skill, err)
         }
@@ -743,9 +751,22 @@ func ResolveHarness(ctx context.Context, h *harness.Harness, policy fetch.FetchP
     return resolved, nil
 }
 
-// resolveResource resolves a single resource (local path or URL).
-func resolveResource(ctx context.Context, ref string, allowedPrefixes []string, policy fetch.FetchPolicy) (string, error) {
+// resolveResourceWithLimits resolves a single resource with depth and count limits.
+func resolveResourceWithLimits(ctx context.Context, ref string, allowedPrefixes []string, policy fetch.FetchPolicy, depth int, resourceCount *int) (string, error) {
+    // Check depth limit
+    if depth > policy.MaxDepth {
+        return "", fmt.Errorf("exceeded maximum dependency depth of %d", policy.MaxDepth)
+    }
+
+    // Check resource count limit
+    if *resourceCount >= policy.MaxResources {
+        return "", fmt.Errorf("exceeded maximum resource count of %d", policy.MaxResources)
+    }
+
     if harness.isURL(ref) {
+        // Increment resource count for remote fetches
+        *resourceCount++
+
         // Check if URL matches allowed prefixes
         if !matchesAllowedPrefix(ref, allowedPrefixes) {
             return "", fmt.Errorf("URL %s does not match allowed_remote_resources", ref)
@@ -861,7 +882,9 @@ package audit
 
 import (
     "encoding/json"
+    "fmt"
     "os"
+    "path/filepath"
     "time"
 )
 
@@ -875,7 +898,17 @@ type FetchLog struct {
 }
 
 func LogFetch(log FetchLog) error {
-    f, err := os.OpenFile("/var/log/fullsend/fetches.jsonl", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+    home, err := os.UserHomeDir()
+    if err != nil {
+        return fmt.Errorf("getting home directory: %w", err)
+    }
+    logDir := filepath.Join(home, ".cache", "fullsend", "audit")
+    if err := os.MkdirAll(logDir, 0755); err != nil {
+        return fmt.Errorf("creating audit log directory: %w", err)
+    }
+    
+    logPath := filepath.Join(logDir, "fetches.jsonl")
+    f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
     if err != nil {
         return err
     }
@@ -1042,4 +1075,4 @@ Universal harness access enables a composable, shareable ecosystem of agents, sk
 4. **Transitive closure applies uniformly**
 5. **Offline mode supports CI/CD environments**
 
-This design should be reviewed for security implications before acceptance. See [ADR-0030](../ADRs/0030-universal-harness-access.md) for the decision record.
+This design should be reviewed for security implications before acceptance. See [ADR-0029](../ADRs/0029-universal-harness-access.md) for the decision record.

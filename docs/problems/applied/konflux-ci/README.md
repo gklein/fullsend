@@ -38,7 +38,7 @@ This is the natural source of [architectural invariants](../../architectural-inv
 - ADR-0013 defines integration service API contracts
 - ADR-0012 defines namespace name format
 - ADR-0011 defines RBAC roles
-- ADR-0030 defines Tekton Results naming conventions
+- ADR-0029 defines Tekton Results naming conventions
 - ADR-0046 defines the common task runner image
 
 Contribution requirements for the architecture repo: significant changes require ADRs and 2 peer approvals; clarifications require 1 approval.
