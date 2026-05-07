@@ -20,9 +20,9 @@ Proposed
 
 ## Context
 
-`fullsend admin install` copies ~50 files from the Go binary's embedded scaffold
+`fullsend admin install` copies ~60 files from the Go binary's embedded scaffold
 (`internal/scaffold/fullsend-repo/`) into each org's `.fullsend` repo. This
-includes agent workflows (125–354 lines each), a composite action, setup
+includes agent workflows (78–305 lines each), a composite action, setup
 scripts, and a dispatcher. When a bug is fixed or a security patch lands in the
 scaffold, every org must re-run `fullsend admin install` to pick up the change.
 Workflow drift across orgs is the norm.
@@ -127,7 +127,7 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
   distribution mechanism (e.g., GitLab CI/CD Components or `include:`)
   independent of this ADR.
 - **Scaffold output changes:** `fullsend admin install` will emit thin callers
-  (~20 lines each) instead of full agent workflows (125–354 lines each). This
+  (~20 lines each) instead of full agent workflows (78–305 lines each). This
   is a user-visible change — orgs running `admin install` after this change
   ships will see substantially different workflow files in `.fullsend`.
 - **Token generation is transitional:** The initial reusable workflows use
