@@ -107,6 +107,9 @@ type FakeClient struct {
 	// Issue comments for ListIssueComments / UpdateIssueComment.
 	IssueComments map[string][]IssueComment // key: "owner/repo/number"
 
+	// CommitFilesChanged controls the return value of CommitFiles (default true).
+	CommitFilesChanged *bool
+
 	// Pull request head SHA for GetPullRequestHeadSHA.
 	PullRequestHeadSHA string
 
@@ -362,7 +365,8 @@ func (f *FakeClient) CommitFiles(_ context.Context, owner, repo, message string,
 		f.FileContents[owner+"/"+repo+"/"+file.Path] = file.Content
 	}
 
-	return true, nil
+	changed := f.CommitFilesChanged == nil || *f.CommitFilesChanged
+	return changed, nil
 }
 
 func (f *FakeClient) CreateBranch(_ context.Context, owner, repo, branchName string) error {

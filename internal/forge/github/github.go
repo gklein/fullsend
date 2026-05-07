@@ -4,7 +4,7 @@ package github
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // Git's blob hash algorithm, not used for security
 	"encoding/base64"
 	"encoding/json"
 	"errors"

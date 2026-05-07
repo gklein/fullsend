@@ -447,6 +447,7 @@ func TestFakeClient_ThreadSafety(t *testing.T) {
 			_, _ = fc.OrgSecretExists(ctx, "o", "secret")
 			_ = fc.DeleteOrgSecret(ctx, "o", "n")
 			_ = fc.SetOrgSecretRepos(ctx, "o", "n", []int64{1, 2})
+			_, _ = fc.CommitFiles(ctx, "o", "r", "m", []TreeFile{{Path: "p", Content: []byte("c"), Mode: "100644"}})
 		}(i)
 	}
 

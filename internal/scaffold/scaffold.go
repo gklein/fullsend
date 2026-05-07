@@ -20,6 +20,7 @@ func FullsendRepoFile(path string) ([]byte, error) {
 // TestFileModeMatchesFilesystem verifies this set stays in sync.
 var executableFiles = map[string]struct{}{
 	"scripts/post-code.sh":                   {},
+	"scripts/post-retro.sh":                  {},
 	"scripts/post-review.sh":                 {},
 	"scripts/post-triage.sh":                 {},
 	"scripts/post-triage-test.sh":            {},
@@ -29,8 +30,10 @@ var executableFiles = map[string]struct{}{
 	"scripts/prepare-sandbox-credentials.sh": {},
 	"scripts/reconcile-repos.sh":             {},
 	"scripts/scan-secrets":                   {},
+	"scripts/pre-retro.sh":                   {},
 	"scripts/validate-output-schema.sh":      {},
 	"scripts/validate-output-schema-test.sh": {},
+	"scripts/validate-source-repo.sh":        {},
 }
 
 // FileMode returns the Git tree mode for a scaffold file.
