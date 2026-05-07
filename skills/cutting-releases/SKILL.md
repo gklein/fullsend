@@ -113,6 +113,28 @@ gh release view <tag>
 
 Check that the title, changelog, and binary assets look correct.
 
+### 9. Install the binary locally
+
+Download the release binary for the current platform, unpack it, and install
+it to `~/bin/` with a versioned name:
+
+```bash
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+cd /tmp
+gh release download <tag> --pattern "fullsend_*_${OS}_${ARCH}.tar.gz" --clobber
+tar xzf fullsend_*_${OS}_${ARCH}.tar.gz fullsend
+mkdir -p ~/bin
+mv fullsend ~/bin/fullsend-<tag>
+chmod +x ~/bin/fullsend-<tag>
+```
+
+Verify it works and print the installed path:
+
+```
+~/bin/fullsend-<tag> --version
+```
+
 ## Notes
 
 - **Pre-releases:** Tags with `-rc.N`, `-alpha.N`, or `-beta.N` suffixes are
