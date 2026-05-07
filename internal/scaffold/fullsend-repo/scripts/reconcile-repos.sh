@@ -85,6 +85,9 @@ close_pr_on_branch() {
   fi
 }
 
+# load_default_branch fetches the default branch name and current SHA for a
+# given repo. Sets DEFAULT_BRANCH and DEFAULT_BRANCH_SHA as side effects.
+# Returns 0 on success, 1 on failure (with error logged).
 load_default_branch() {
   local repo="$1"
 
@@ -102,7 +105,7 @@ load_default_branch() {
 }
 
 # ensure_branch creates or resets a branch to the default branch tip.
-# Sets DEFAULT_BRANCH as a side effect (callers need it for PR creation).
+# Sets DEFAULT_BRANCH and DEFAULT_BRANCH_SHA as side effects.
 # Returns 0 on success, 1 on failure (with error logged).
 ensure_branch() {
   local repo="$1"
