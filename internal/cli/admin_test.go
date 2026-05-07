@@ -207,19 +207,27 @@ func TestEnsureConfigRepoExists_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "checking for config repo")
 }
 
-func TestReposCommand_HasSubcommands(t *testing.T) {
-	cmd := newReposCmd()
+func TestEnableCommand_HasReposSubcommand(t *testing.T) {
+	cmd := newEnableCmd()
 	names := make(map[string]bool)
 	for _, sub := range cmd.Commands() {
 		names[sub.Name()] = true
 	}
-	assert.True(t, names["enable"], "expected enable subcommand")
-	assert.True(t, names["disable"], "expected disable subcommand")
+	assert.True(t, names["repos"], "expected repos subcommand")
+}
+
+func TestDisableCommand_HasReposSubcommand(t *testing.T) {
+	cmd := newDisableCmd()
+	names := make(map[string]bool)
+	for _, sub := range cmd.Commands() {
+		names[sub.Name()] = true
+	}
+	assert.True(t, names["repos"], "expected repos subcommand")
 }
 
 func TestReposEnableCmd_RequiresOrg(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "repos", "enable"})
+	cmd.SetArgs([]string{"admin", "enable", "repos"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requires at least 1 arg")
@@ -229,14 +237,14 @@ func TestReposEnableCmd_RequiresReposOrAllFlag(t *testing.T) {
 	cmd := newRootCmd()
 	// Set GH_TOKEN to avoid token resolution error.
 	t.Setenv("GH_TOKEN", "test-token")
-	cmd.SetArgs([]string{"admin", "repos", "enable", "testorg"})
+	cmd.SetArgs([]string{"admin", "enable", "repos", "testorg"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must specify repository names or use --all flag")
 }
 
 func TestReposEnableCmd_HasAllFlag(t *testing.T) {
-	cmd := newReposEnableCmd()
+	cmd := newEnableReposCmd()
 	allFlag := cmd.Flags().Lookup("all")
 	require.NotNil(t, allFlag, "expected --all flag")
 	assert.Equal(t, "false", allFlag.DefValue)
@@ -244,7 +252,7 @@ func TestReposEnableCmd_HasAllFlag(t *testing.T) {
 
 func TestReposDisableCmd_RequiresOrg(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "repos", "disable"})
+	cmd.SetArgs([]string{"admin", "disable", "repos"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requires at least 1 arg")
@@ -254,14 +262,14 @@ func TestReposDisableCmd_RequiresReposOrAllFlag(t *testing.T) {
 	cmd := newRootCmd()
 	// Set GH_TOKEN to avoid token resolution error.
 	t.Setenv("GH_TOKEN", "test-token")
-	cmd.SetArgs([]string{"admin", "repos", "disable", "testorg"})
+	cmd.SetArgs([]string{"admin", "disable", "repos", "testorg"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must specify repository names or use --all flag")
 }
 
 func TestReposDisableCmd_HasAllFlag(t *testing.T) {
-	cmd := newReposDisableCmd()
+	cmd := newDisableReposCmd()
 	allFlag := cmd.Flags().Lookup("all")
 	require.NotNil(t, allFlag, "expected --all flag")
 	assert.Equal(t, "false", allFlag.DefValue)

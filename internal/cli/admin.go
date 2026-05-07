@@ -32,7 +32,8 @@ func newAdminCmd() *cobra.Command {
 	cmd.AddCommand(newInstallCmd())
 	cmd.AddCommand(newUninstallCmd())
 	cmd.AddCommand(newAnalyzeCmd())
-	cmd.AddCommand(newReposCmd())
+	cmd.AddCommand(newEnableCmd())
+	cmd.AddCommand(newDisableCmd())
 	return cmd
 }
 
@@ -1008,14 +1009,23 @@ func promptDispatchToken(ctx context.Context, client forge.Client, printer *ui.P
 	return token, nil
 }
 
-func newReposCmd() *cobra.Command {
+func newEnableCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "repos",
-		Short: "Manage repository enrollment",
-		Long:  "Commands for enabling and disabling repository enrollment in fullsend.",
+		Use:   "enable",
+		Short: "Enable fullsend features",
+		Long:  "Commands for enabling fullsend features such as repository enrollment.",
 	}
-	cmd.AddCommand(newReposEnableCmd())
-	cmd.AddCommand(newReposDisableCmd())
+	cmd.AddCommand(newEnableReposCmd())
+	return cmd
+}
+
+func newDisableCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "disable",
+		Short: "Disable fullsend features",
+		Long:  "Commands for disabling fullsend features such as repository enrollment.",
+	}
+	cmd.AddCommand(newDisableReposCmd())
 	return cmd
 }
 
@@ -1069,9 +1079,9 @@ func newReposSubcommand(use, short, long, allFlagHelp string, runFn reposRunFunc
 	return cmd
 }
 
-func newReposEnableCmd() *cobra.Command {
+func newEnableReposCmd() *cobra.Command {
 	return newReposSubcommand(
-		"enable <org> [repo...]",
+		"repos <org> [repo...]",
 		"Enable repositories for fullsend enrollment",
 		"Enables the specified repositories for fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to enable all repositories (excluding .fullsend).",
 		"enable all repositories (excluding .fullsend)",
@@ -1079,9 +1089,9 @@ func newReposEnableCmd() *cobra.Command {
 	)
 }
 
-func newReposDisableCmd() *cobra.Command {
+func newDisableReposCmd() *cobra.Command {
 	return newReposSubcommand(
-		"disable <org> [repo...]",
+		"repos <org> [repo...]",
 		"Disable repositories from fullsend enrollment",
 		"Disables the specified repositories from fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to disable all repositories.",
 		"disable all repositories",

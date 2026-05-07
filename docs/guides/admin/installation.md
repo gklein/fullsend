@@ -196,13 +196,13 @@ After installation, you can enroll or unenroll repositories at any time using th
 To enroll specific repositories:
 
 ```bash
-fullsend admin repos enable "$ORG_NAME" <repo-name> [repo-name...]
+fullsend admin enable repos "$ORG_NAME" <repo-name> [repo-name...]
 ```
 
 To enroll all repositories:
 
 ```bash
-fullsend admin repos enable "$ORG_NAME" --all
+fullsend admin enable repos "$ORG_NAME" --all
 ```
 
 The enable command:
@@ -215,13 +215,13 @@ The enable command:
 To unenroll specific repositories:
 
 ```bash
-fullsend admin repos disable "$ORG_NAME" <repo-name> [repo-name...]
+fullsend admin disable repos "$ORG_NAME" <repo-name> [repo-name...]
 ```
 
 To unenroll all repositories:
 
 ```bash
-fullsend admin repos disable "$ORG_NAME" --all
+fullsend admin disable repos "$ORG_NAME" --all
 ```
 
 The disable command:
