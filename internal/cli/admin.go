@@ -1030,11 +1030,12 @@ func newDisableCmd() *cobra.Command {
 }
 
 // reposRunFunc is the signature for repo enable/disable operations.
-type reposRunFunc func(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool) error
+type reposRunFunc func(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool, yolo bool) error
 
 // newReposSubcommand creates a repos enable or disable subcommand with shared setup logic.
 func newReposSubcommand(use, short, long, allFlagHelp string, runFn reposRunFunc) *cobra.Command {
 	var all bool
+	var yolo bool
 
 	cmd := &cobra.Command{
 		Use:   use,
@@ -1070,11 +1071,12 @@ func newReposSubcommand(use, short, long, allFlagHelp string, runFn reposRunFunc
 			printer := ui.New(os.Stdout)
 			ctx := cmd.Context()
 
-			return runFn(ctx, client, printer, org, repos, all)
+			return runFn(ctx, client, printer, org, repos, all, yolo)
 		},
 	}
 
 	cmd.Flags().BoolVar(&all, "all", false, allFlagHelp)
+	cmd.Flags().BoolVar(&yolo, "yolo", false, "skip confirmation prompt")
 
 	return cmd
 }
@@ -1085,7 +1087,7 @@ func newEnableReposCmd() *cobra.Command {
 		"Enable repositories for fullsend enrollment",
 		"Enables the specified repositories for fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to enable all repositories (excluding .fullsend).",
 		"enable all repositories (excluding .fullsend)",
-		runReposEnable,
+		runEnableRepos,
 	)
 }
 
@@ -1095,12 +1097,12 @@ func newDisableReposCmd() *cobra.Command {
 		"Disable repositories from fullsend enrollment",
 		"Disables the specified repositories from fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to disable all repositories.",
 		"disable all repositories",
-		runReposDisable,
+		runDisableRepos,
 	)
 }
 
-// runReposEnable enables the specified repositories for fullsend enrollment.
-func runReposEnable(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool) error {
+// runEnableRepos enables the specified repositories for fullsend enrollment.
+func runEnableRepos(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool, yolo bool) error {
 	printer.Banner()
 	printer.Blank()
 	printer.Header("Enabling repositories for " + org)
@@ -1200,8 +1202,8 @@ func runReposEnable(ctx context.Context, client forge.Client, printer *ui.Printe
 	return nil
 }
 
-// runReposDisable disables the specified repositories from fullsend enrollment.
-func runReposDisable(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool) error {
+// runDisableRepos disables the specified repositories from fullsend enrollment.
+func runDisableRepos(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool, yolo bool) error {
 	printer.Banner()
 	printer.Blank()
 	printer.Header("Disabling repositories for " + org)
@@ -1223,6 +1225,21 @@ func runReposDisable(ctx context.Context, client forge.Client, printer *ui.Print
 		}
 		sort.Strings(reposToDisable)
 		printer.StepDone(fmt.Sprintf("Found %d repositories to disable", len(reposToDisable)))
+
+		// Prompt for confirmation when disabling all repos.
+		if !yolo && len(reposToDisable) > 0 {
+			printer.Blank()
+			printer.StepWarn(fmt.Sprintf("This will disable all %d repositories in %s.", len(reposToDisable), org))
+			printer.StepInfo(fmt.Sprintf("Type the organization name (%s) to confirm:", org))
+			var confirmation string
+			if _, err := fmt.Scanln(&confirmation); err != nil {
+				return fmt.Errorf("reading confirmation: %w", err)
+			}
+			if confirmation != org {
+				return fmt.Errorf("confirmation did not match; aborting disable")
+			}
+			printer.Blank()
+		}
 	} else {
 		// Validate provided repo names.
 		printer.StepStart("Validating repository names")
