@@ -123,7 +123,7 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
   inline, which partially mitigates this.
 - **GitHub-specific mechanism:** `workflow_call` and `secrets: inherit` are
   GitHub Actions primitives with no direct equivalent in other CI systems.
-  Multi-forge support (ADR 0028, [PR #601](https://github.com/fullsend-ai/fullsend/pull/601)) will need its own
+  Multi-forge support ([ADR 0028](0028-gitlab-support.md)) will need its own
   distribution mechanism (e.g., GitLab CI/CD Components or `include:`)
   independent of this ADR.
 - **Scaffold output changes:** `fullsend admin install` will emit thin callers
