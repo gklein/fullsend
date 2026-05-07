@@ -35,7 +35,7 @@ gh-aw uses GitHub's own `GITHUB_TOKEN`, scoped per-job. The agent gets a read-on
 
 ### Repository enrollment
 
-Fullsend must inject a shim workflow into each target repo. The CLI creates a branch (`fullsend/onboard`), writes `.github/workflows/fullsend.yaml` with the `pull_request_target` trigger, and opens a PR. A human must merge this PR to complete enrollment ([ADR 0013, proposed](docs/ADRs/0013-admin-install-repo-enrollment-v1.md)).
+Fullsend must inject a shim workflow into each target repo. The CLI creates a branch (`fullsend/onboard`), writes `.github/workflows/fullsend.yaml` with the `pull_request_target` trigger, and opens a PR. A human must merge this PR to complete enrollment ([ADR 0013, proposed](../ADRs/0013-admin-install-repo-enrollment-v1.md)).
 
 gh-aw enrollment is adding a markdown file to your repo. `gh aw run` generates the corresponding `.lock.yml`.
 
