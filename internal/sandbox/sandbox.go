@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,26 @@ const (
 	readyPoll       = 2 * time.Second
 	transferTimeout = 5 * time.Minute
 )
+
+func sanitizeDownload(localDir string) error {
+	return filepath.WalkDir(localDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(localDir, path)
+
+		if d.Type()&fs.ModeSymlink != 0 {
+			return os.Remove(path)
+		}
+
+		if d.IsDir() && rel == filepath.Join(".git", "hooks") {
+			os.RemoveAll(path)
+			return filepath.SkipDir
+		}
+
+		return nil
+	})
+}
 
 // EnsureProvider creates or updates a provider on the gateway. Credential
 // values may contain ${VAR} references which are expanded from the host

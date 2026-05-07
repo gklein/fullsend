@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -143,4 +144,77 @@ func TestPathTraversalContainment(t *testing.T) {
 			assert.Equal(t, tt.safe, contained, "relPath=%q localPath=%q", tt.relPath, localPath)
 		})
 	}
+}
+
+func TestSanitizeDownload_RemovesSymlinks(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a regular file.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.txt"), []byte("ok"), 0o644))
+
+	// Create a symlink (dangling is fine — we just need it to exist).
+	require.NoError(t, os.Symlink("/nonexistent/target", filepath.Join(dir, "danger")))
+
+	err := sanitizeDownload(dir)
+	require.NoError(t, err)
+
+	// Regular file should survive.
+	_, err = os.Stat(filepath.Join(dir, "real.txt"))
+	assert.NoError(t, err)
+
+	// Symlink should be removed.
+	_, err = os.Lstat(filepath.Join(dir, "danger"))
+	assert.True(t, os.IsNotExist(err), "symlink should have been removed")
+}
+
+func TestSanitizeDownload_RemovesGitHooks(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create .git/hooks/ with a script.
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte("#!/bin/sh\nmalicious"), 0o755))
+
+	// Create a safe file under .git/.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[core]"), 0o644))
+
+	err := sanitizeDownload(dir)
+	require.NoError(t, err)
+
+	// .git/hooks/ should be removed entirely.
+	_, err = os.Stat(hooksDir)
+	assert.True(t, os.IsNotExist(err), ".git/hooks/ should have been removed")
+
+	// .git/config should survive.
+	_, err = os.Stat(filepath.Join(dir, ".git", "config"))
+	assert.NoError(t, err)
+}
+
+func TestSanitizeDownload_NestedSymlinks(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create nested structure with symlinks at various depths.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a", "b", "real.txt"), []byte("ok"), 0o644))
+	require.NoError(t, os.Symlink("/etc/passwd", filepath.Join(dir, "a", "b", "link")))
+	require.NoError(t, os.Symlink("/etc/shadow", filepath.Join(dir, "a", "top-link")))
+
+	err := sanitizeDownload(dir)
+	require.NoError(t, err)
+
+	// Real file survives.
+	_, err = os.Stat(filepath.Join(dir, "a", "b", "real.txt"))
+	assert.NoError(t, err)
+
+	// Both symlinks removed.
+	_, err = os.Lstat(filepath.Join(dir, "a", "b", "link"))
+	assert.True(t, os.IsNotExist(err))
+	_, err = os.Lstat(filepath.Join(dir, "a", "top-link"))
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestSanitizeDownload_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	err := sanitizeDownload(dir)
+	assert.NoError(t, err)
 }
