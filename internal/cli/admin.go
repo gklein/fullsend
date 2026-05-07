@@ -224,7 +224,7 @@ func newInstallCmd() *cobra.Command {
 				printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
 			} else {
 				printer.StepInfo("No repositories will be enrolled during install")
-				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use: fullsend admin repos enable %s <repo-name> or --all", org))
+				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use: fullsend admin enable repos %s <repo-name> or --all", org))
 			}
 			printer.Blank()
 

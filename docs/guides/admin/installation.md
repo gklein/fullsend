@@ -132,7 +132,7 @@ The installer is interactive. It will open multiple browser windows to create an
 
 During installation, you'll be prompted to choose repository enrollment:
 - **[a] Enroll all repositories** — immediately enrolls all org repos (excluding `.fullsend`)
-- **[n] Enroll no repositories** — skip enrollment during install; enroll repositories later
+- **[n] Enroll no repositories** — skip enrollment during install; enroll repositories later using `fullsend admin enable repos`
 
 Near the end, the installer opens a browser to create a fine-grained personal access token (dispatch token). When creating it, make sure to grant **Actions: Read and write** permission scoped to the `.fullsend` repository — otherwise the verification step will fail with a 404.
 
