@@ -447,6 +447,15 @@ func TestHarnessesLoadAndValidate(t *testing.T) {
 	assert.True(t, loaded >= 2, "expected at least 2 harnesses, got %d", loaded)
 }
 
+func TestRepoMaintenanceWorkflowContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/repo-maintenance.yml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "config.yaml")
+	assert.Contains(t, s, "templates/shim-workflow.yaml",
+		"push trigger must include shim template so changes propagate to enrolled repos")
+}
+
 func TestValidateTriageDeleted(t *testing.T) {
 	_, err := FullsendRepoFile("scripts/validate-triage.sh")
 	assert.Error(t, err, "validate-triage.sh should have been deleted")
