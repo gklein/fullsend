@@ -906,7 +906,7 @@ func LogFetch(log FetchLog) error {
     if err := os.MkdirAll(logDir, 0755); err != nil {
         return fmt.Errorf("creating audit log directory: %w", err)
     }
-    
+
     logPath := filepath.Join(logDir, "fetches.jsonl")
     f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
     if err != nil {
