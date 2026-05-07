@@ -1,5 +1,5 @@
 ---
-title: "0030. Reusable workflows for action-installed distribution"
+title: "30. Reusable workflows for action-installed distribution"
 status: Proposed
 relates_to:
   - agent-infrastructure
@@ -10,7 +10,7 @@ topics:
   - composite-action
 ---
 
-# 0030. Reusable workflows for action-installed distribution
+# 30. Reusable workflows for action-installed distribution
 
 Date: 2026-05-06
 
@@ -20,12 +20,12 @@ Proposed
 
 ## Context
 
-`fullsend admin install` copies ~30 files from the Go binary's embedded scaffold
+`fullsend admin install` copies ~50 files from the Go binary's embedded scaffold
 (`internal/scaffold/fullsend-repo/`) into each org's `.fullsend` repo. This
-includes full 100–160 line agent workflows, a composite action, setup scripts,
-and a dispatcher. When a bug is fixed or a security patch lands in the scaffold,
-every org must re-run `fullsend admin install` to pick up the change. Workflow
-drift across orgs is the norm.
+includes agent workflows (125–354 lines each), a composite action, setup
+scripts, and a dispatcher. When a bug is fixed or a security patch lands in the
+scaffold, every org must re-run `fullsend admin install` to pick up the change.
+Workflow drift across orgs is the norm.
 
 The dispatch chain established in
 [ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md) —
@@ -95,3 +95,26 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
 - Stage-based dispatch ([ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md)),
   shim workflows, and org-specific content (agents, harness, policies, scripts)
   are unchanged.
+- **Trust boundary shift:** `secrets: inherit` passes all caller secrets to
+  reusable workflow code hosted in `fullsend-ai/fullsend` (a public repo).
+  Under the scaffold-copy model, secrets are consumed by code in the org's
+  own repo. Under the reusable-workflow model, secrets flow to upstream code.
+  SHA pinning (not just tag pinning) gives orgs full control over which
+  upstream code runs with their secrets. This aligns with the project's
+  threat model priority on external injection — a compromised upstream ref
+  could affect all downstream orgs simultaneously, making SHA pinning the
+  recommended default for production installations.
+- **Upstream availability:** `fullsend-ai/fullsend` becomes a runtime
+  dependency for all downstream orgs. If the repo is unavailable or a pinned
+  ref is deleted, downstream workflow runs fail. Scaffold copies are immune
+  to upstream outages after install.
+- **Cross-repo debugging:** When reusable workflows fail, the call stack spans
+  two repositories (the org's `.fullsend` and `fullsend-ai/fullsend`).
+  Developers must inspect both the thin caller and the upstream workflow to
+  diagnose failures. GitHub's workflow run UI shows reusable workflow steps
+  inline, which partially mitigates this.
+- **GitHub-specific mechanism:** `workflow_call` and `secrets: inherit` are
+  GitHub Actions primitives with no direct equivalent in other CI systems.
+  Multi-forge support (ADR 0028, [PR #601](https://github.com/fullsend-ai/fullsend/pull/601)) will need its own
+  distribution mechanism (e.g., GitLab CI/CD Components or `include:`)
+  independent of this ADR.
