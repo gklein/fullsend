@@ -121,9 +121,17 @@ All resources remain local paths. Sharing requires manual copy-paste.
 
 ## Decision
 
-**Deferred.** This decision requires deeper security analysis and consensus on the trust model. Propose **Option A with security extensions** (see Consequences) for discussion, but do not accept this ADR until the implementation plan in `docs/plans/universal-harness-access.md` is reviewed and key security questions are resolved.
+**Status: Deferred** — pending security review and consensus on trust model.
 
-The proposed approach:
+This ADR is **not accepted**. The proposed approach described below is presented for discussion only. Do not implement until:
+1. The implementation plan in `docs/plans/universal-harness-access.md` has been reviewed
+2. Key security questions in the Open Questions section are resolved
+3. Consensus is reached on the trust model for remote resources
+
+### Proposed approach (pending security review)
+
+**Option A with security extensions** is proposed for consideration:
+
 - Support URLs, absolute paths, and relative paths uniformly for all harness resources
 - Fetch and cache remote resources content-addressed by SHA256
 - Validate integrity, apply SSRF protection, and enforce per-resource policies (read-only vs executable)

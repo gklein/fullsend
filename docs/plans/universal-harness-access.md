@@ -196,6 +196,7 @@ The URL fetch mechanism must prevent Server-Side Request Forgery attacks.
          - cdn.fullsend.ai
        # Reject all others
    ```
+   **Subdomain matching:** Adding `example.com` to the allowlist also permits all subdomains (`*.example.com`). This is intentional for domains like `github.com` (where users don't control subdomains), but creates risk for domains where users can register subdomains (e.g., some cloud hosting providers). **Only allowlist domains where subdomain control is restricted.** For user-controlled hosting platforms, allowlist the specific subdomain (e.g., `myorg.cloudprovider.com`, not `cloudprovider.com`).
 3. **No redirects:** HTTP 3xx responses are rejected. The URL must return 200 OK directly.
 4. **Internal IP rejection:** Refuse to fetch from:
    - `127.0.0.0/8` (loopback)
@@ -464,6 +465,14 @@ type Harness struct {
 
 func (h *Harness) Validate() error {
     // existing validation...
+
+    // Validate allowed_remote_resources entries are HTTPS URLs
+    for _, prefix := range h.AllowedRemoteResources {
+        u, err := url.Parse(prefix)
+        if err != nil || u.Scheme != "https" {
+            return fmt.Errorf("allowed_remote_resources entry %q must be an HTTPS URL", prefix)
+        }
+    }
 
     // Validate that all URL references match allowed prefixes
     for _, skill := range h.Skills {
@@ -816,7 +825,7 @@ func resolveResourceWithLimits(ctx context.Context, ref string, allowedPrefixes 
 
         // Check cache first
         if hasHash {
-            if content, entry, _ := fetch.CacheGet(expectedHash); content != nil {
+            if content, _, _ := fetch.CacheGet(expectedHash); content != nil {
                 return filepath.Join(fetch.CachePath(expectedHash), "content"), nil
             }
         }
