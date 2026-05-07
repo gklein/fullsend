@@ -173,6 +173,7 @@ jobs:
               echo "::error::Failed to dispatch $workflow_name: $output"
               exit 1
             fi
+            echo "::notice::Dispatched ${workflow_name} → ${output}"
             dispatched=$((dispatched + 1))
             dispatched_workflows+=("$workflow_name")
           done
