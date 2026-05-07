@@ -383,6 +383,10 @@ func TestFakeClient_ErrorInjection(t *testing.T) {
 		{"SetOrgSecretRepos", func(fc *FakeClient) error {
 			return fc.SetOrgSecretRepos(ctx, "o", "n", nil)
 		}},
+		{"CommitFiles", func(fc *FakeClient) error {
+			_, err := fc.CommitFiles(ctx, "o", "r", "m", nil)
+			return err
+		}},
 	}
 
 	for _, m := range methods {
@@ -443,6 +447,7 @@ func TestFakeClient_ThreadSafety(t *testing.T) {
 			_, _ = fc.OrgSecretExists(ctx, "o", "secret")
 			_ = fc.DeleteOrgSecret(ctx, "o", "n")
 			_ = fc.SetOrgSecretRepos(ctx, "o", "n", []int64{1, 2})
+			_, _ = fc.CommitFiles(ctx, "o", "r", "m", []TreeFile{{Path: "p", Content: []byte("c"), Mode: "100644"}})
 		}(i)
 	}
 

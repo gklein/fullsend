@@ -84,41 +84,43 @@ func (l *WorkflowsLayer) RequiredScopes(op Operation) []string {
 	}
 }
 
-// Install writes the workflow files and CODEOWNERS to the .fullsend repo.
-// CODEOWNERS failure is treated as a warning, not a fatal error.
-//
-// Note: writing multiple files sequentially via the Contents API can cause
-// transient 404s because each file write creates a new commit and the branch
-// ref is updated asynchronously. The GitHub client's retry logic handles
-// this. CODEOWNERS is written last and its failure is non-fatal because
-// some orgs restrict CODEOWNERS writes to specific teams.
+// Install writes the workflow files and CODEOWNERS to the .fullsend repo
+// in a single atomic commit using the Git Trees API. If all files already
+// match the current tree, no commit is created (idempotent).
 func (l *WorkflowsLayer) Install(ctx context.Context) error {
+	var files []forge.TreeFile
 	err := scaffold.WalkFullsendRepo(func(path string, content []byte) error {
-		// Pin the CLI version in the composite action so workflow
-		// runs download the same CLI that produced this scaffold.
 		if path == actionYMLPath {
 			content = l.pinVersionInAction(content)
 		}
-
-		l.ui.StepStart("Writing " + path)
-		writeErr := l.client.CreateOrUpdateFile(ctx, l.org, forge.ConfigRepoName, path, "chore: update "+path, content)
-		if writeErr != nil {
-			l.ui.StepFail("Failed to write " + path)
-			return fmt.Errorf("writing %s: %w", path, writeErr)
-		}
-		l.ui.StepDone("Wrote " + path)
+		files = append(files, forge.TreeFile{
+			Path:    path,
+			Content: content,
+			Mode:    scaffold.FileMode(path),
+		})
 		return nil
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("collecting scaffold files: %w", err)
 	}
 
-	l.ui.StepStart("Writing " + codeownersPath)
-	if err := l.client.CreateOrUpdateFile(ctx, l.org, forge.ConfigRepoName, codeownersPath,
-		"chore: update "+codeownersPath, []byte(l.codeownersContent())); err != nil {
-		l.ui.StepWarn("Could not write " + codeownersPath + ": " + err.Error())
+	files = append(files, forge.TreeFile{
+		Path:    codeownersPath,
+		Content: []byte(l.codeownersContent()),
+		Mode:    "100644",
+	})
+
+	l.ui.StepStart("Writing scaffold files")
+	committed, err := l.client.CommitFiles(ctx, l.org, forge.ConfigRepoName,
+		"chore: update fullsend scaffold", files)
+	if err != nil {
+		l.ui.StepFail("Failed to write scaffold files")
+		return fmt.Errorf("committing scaffold files: %w", err)
+	}
+	if committed {
+		l.ui.StepDone(fmt.Sprintf("Wrote %d files", len(files)))
 	} else {
-		l.ui.StepDone("Wrote " + codeownersPath)
+		l.ui.StepDone("Scaffold up to date")
 	}
 
 	return nil
