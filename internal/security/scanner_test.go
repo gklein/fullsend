@@ -1,6 +1,7 @@
 package security
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -123,6 +124,15 @@ func TestSecretRedactor(t *testing.T) {
 		assert.False(t, result.Safe)
 		assert.NotContains(t, result.Sanitized, "ghp_FAKEtest")
 		assert.True(t, hasFinding(result, "github_pat"))
+	})
+
+	t.Run("github installation token new JWT format redacted", func(t *testing.T) {
+		// GitHub's April 2026 token format: ghs_APPID_JWT (~520 chars with underscores)
+		token := "ghs_12345_" + strings.Repeat("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9", 14)
+		result := r.Scan("Token: " + token)
+		assert.False(t, result.Safe)
+		assert.NotContains(t, result.Sanitized, "ghs_12345_eyJ")
+		assert.True(t, hasFinding(result, "github_server_token"))
 	})
 
 	t.Run("openai key redacted", func(t *testing.T) {
