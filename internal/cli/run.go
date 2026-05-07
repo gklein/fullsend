@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"debug/elf"
 	"encoding/hex"
@@ -18,6 +19,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -447,6 +449,26 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return fmt.Errorf("creating run directory: %w", err)
 	}
+
+	oidcCtx, oidcCancel := context.WithCancel(context.Background())
+	var oidcWg sync.WaitGroup
+	if oidcURL := os.Getenv("FULLSEND_GCP_OIDC_URL"); oidcURL != "" {
+		oidcAuth, err := readOIDCAuthFile(os.Getenv("FULLSEND_GCP_OIDC_AUTH_FILE"))
+		if err != nil {
+			printer.StepWarn("OIDC token refresh disabled: " + err.Error())
+		} else {
+			printer.StepDone("OIDC token refresh enabled (WIF mode)")
+			oidcWg.Add(1)
+			go func() {
+				defer oidcWg.Done()
+				runOIDCRefresh(oidcCtx, sshConfigPath, sandboxName, oidcURL, oidcAuth, printer)
+			}()
+		}
+	}
+	defer func() {
+		oidcCancel()
+		oidcWg.Wait()
+	}()
 
 	var lastExitCode int
 	var runCount int
@@ -920,6 +942,92 @@ func runHeartbeat(printer *ui.Printer, start time.Time, timeout time.Duration, d
 			printer.Heartbeat(msg)
 		}
 	}
+}
+
+func readOIDCAuthFile(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("FULLSEND_GCP_OIDC_AUTH_FILE not set")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading OIDC auth file: %w", err)
+	}
+	val := strings.TrimSpace(string(data))
+	if val == "" {
+		return "", fmt.Errorf("OIDC auth file is empty")
+	}
+	return val, nil
+}
+
+var oidcRefreshInterval = 4 * time.Minute
+
+func runOIDCRefresh(ctx context.Context, sshConfigPath, sandboxName, oidcURL, oidcAuth string, printer *ui.Printer) {
+	ticker := time.NewTicker(oidcRefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := refreshOIDCToken(ctx, sshConfigPath, sandboxName, oidcURL, oidcAuth); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				printer.StepWarn("OIDC token refresh failed: " + err.Error())
+			} else {
+				printer.StepDone("OIDC token refreshed")
+			}
+		}
+	}
+}
+
+func refreshOIDCToken(ctx context.Context, sshConfigPath, sandboxName, oidcURL, oidcAuth string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", oidcURL, nil)
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", oidcAuth)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetching OIDC token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("OIDC endpoint returned HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return fmt.Errorf("reading OIDC token response: %w", err)
+	}
+	if len(body) == 0 {
+		return fmt.Errorf("OIDC endpoint returned empty token")
+	}
+	if !json.Valid(body) {
+		return fmt.Errorf("OIDC endpoint returned non-JSON response")
+	}
+
+	tmpFile, err := os.CreateTemp("", "fullsend-oidc-*.token")
+	if err != nil {
+		return fmt.Errorf("creating temp token file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write(body); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("writing temp token file: %w", err)
+	}
+	tmpFile.Close()
+
+	remotePath := sandbox.SandboxWorkspace + "/.gcp-oidc-token"
+	if err := sandbox.SCP(sshConfigPath, sandboxName, tmpFile.Name(), remotePath); err != nil {
+		return fmt.Errorf("copying token to sandbox: %w", err)
+	}
+
+	return nil
 }
 
 func buildClaudeCommand(agentName, model, repoDir string) string {
