@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -352,6 +355,122 @@ func TestResolveLinuxBinary_Download(t *testing.T) {
 	// Verify the downloaded artifact is a valid Linux ELF for the requested arch.
 	t.Setenv("FULLSEND_SANDBOX_ARCH", "amd64")
 	assert.NoError(t, validateLinuxBinary(binPath), "downloaded binary should be a valid Linux/amd64 ELF")
+}
+
+func TestReadOIDCAuthFile_Success(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "auth")
+	require.NoError(t, os.WriteFile(f, []byte("bearer test-token"), 0o600))
+	val, err := readOIDCAuthFile(f)
+	require.NoError(t, err)
+	assert.Equal(t, "bearer test-token", val)
+}
+
+func TestReadOIDCAuthFile_EmptyPath(t *testing.T) {
+	_, err := readOIDCAuthFile("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not set")
+}
+
+func TestReadOIDCAuthFile_EmptyFile(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "auth")
+	require.NoError(t, os.WriteFile(f, []byte(""), 0o600))
+	_, err := readOIDCAuthFile(f)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty")
+}
+
+func TestRefreshOIDCToken_FetchSucceedsSCPFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "bearer test-auth", r.Header.Get("Authorization"))
+		fmt.Fprint(w, `{"value":"fresh-oidc-token-content"}`)
+	}))
+	defer srv.Close()
+
+	err := refreshOIDCToken(context.Background(), "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "copying token to sandbox")
+}
+
+func TestRefreshOIDCToken_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	err := refreshOIDCToken(context.Background(), "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "403")
+}
+
+func TestRefreshOIDCToken_EmptyResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	err := refreshOIDCToken(context.Background(), "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty token")
+}
+
+func TestRefreshOIDCToken_NonJSONResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "<html>Service Unavailable</html>")
+	}))
+	defer srv.Close()
+
+	err := refreshOIDCToken(context.Background(), "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-JSON response")
+}
+
+func TestRefreshOIDCToken_CancelledContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"value":"fresh-oidc-token-content"}`)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := refreshOIDCToken(ctx, "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fetching OIDC token")
+}
+
+func TestRunOIDCRefresh_TicksAndStops(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		fmt.Fprint(w, `{"value":"fresh-oidc-token-content"}`)
+	}))
+	defer srv.Close()
+
+	origInterval := oidcRefreshInterval
+	oidcRefreshInterval = 50 * time.Millisecond
+	defer func() { oidcRefreshInterval = origInterval }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	printer := ui.New(io.Discard)
+
+	finished := make(chan struct{})
+	go func() {
+		runOIDCRefresh(ctx, "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth", printer)
+		close(finished)
+	}()
+
+	require.Eventually(t, func() bool { return calls.Load() >= 2 }, 2*time.Second, 10*time.Millisecond,
+		"expected at least 2 refresh calls")
+
+	cancel()
+
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runOIDCRefresh did not exit after context was cancelled")
+	}
+
+	assert.GreaterOrEqual(t, calls.Load(), int32(2))
 }
 
 func TestDownloadChecksumForAsset_ParsesLine(t *testing.T) {

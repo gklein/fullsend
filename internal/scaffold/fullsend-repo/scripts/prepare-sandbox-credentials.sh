@@ -9,9 +9,9 @@ set -euo pipefail
 # endpoint, so this script pre-fetches the OIDC token and rewrites the config
 # to use a file-based credential source instead.
 #
-# Note: the OIDC token expires after ~10 min but the GCP access token obtained
-# via STS lasts 1 hour. Runs exceeding 1 hour will fail on access token refresh
-# since the static OIDC token will have expired.
+# Note: the OIDC token expires after ~10 min. The fullsend CLI refreshes it
+# automatically using FULLSEND_GCP_OIDC_URL and FULLSEND_GCP_OIDC_AUTH_FILE
+# exported below.
 #
 # In SA-key mode (type != external_account), this script is a no-op.
 
@@ -43,6 +43,12 @@ if [[ "$CRED_TYPE" == "external_account" ]]; then
     }
   }' "$CRED_CONFIG" > "$SANDBOX_CREDS"
 
+  OIDC_AUTH_FILE="$RUNNER_TEMP/gcp-oidc-auth"
+  printf '%s' "$OIDC_AUTH" > "$OIDC_AUTH_FILE"
+  chmod 600 "$OIDC_AUTH_FILE"
+
   echo "GOOGLE_APPLICATION_CREDENTIALS=$SANDBOX_CREDS" >> "$GITHUB_ENV"
   echo "GCP_OIDC_TOKEN_FILE=$OIDC_DEST" >> "$GITHUB_ENV"
+  echo "FULLSEND_GCP_OIDC_URL=$OIDC_URL" >> "$GITHUB_ENV"
+  echo "FULLSEND_GCP_OIDC_AUTH_FILE=$OIDC_AUTH_FILE" >> "$GITHUB_ENV"
 fi
