@@ -22,6 +22,8 @@ func TestAdminCommand_HasSubcommands(t *testing.T) {
 	assert.True(t, names["install <org>"], "expected install subcommand")
 	assert.True(t, names["uninstall <org>"], "expected uninstall subcommand")
 	assert.True(t, names["analyze <org>"], "expected analyze subcommand")
+	assert.True(t, names["enable"], "expected enable subcommand")
+	assert.True(t, names["disable"], "expected disable subcommand")
 }
 
 func TestInstallCmd_RequiresOrg(t *testing.T) {
@@ -593,7 +595,8 @@ func TestRunDisableRepos_ErrorWhenDisablingFullsend(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot disable .fullsend repository")
 }
 
-func TestRunDisableRepos_ErrorWhenRepoNotFound(t *testing.T) {
+func TestRunDisableRepos_AllowsRepoNotInConfig(t *testing.T) {
+	// Disable should allow repos not in config (for cleanup of deleted repos).
 	cfg := setupTestConfig(map[string]bool{
 		"web-app": true,
 	})
@@ -601,8 +604,9 @@ func TestRunDisableRepos_ErrorWhenRepoNotFound(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	err := runDisableRepos(context.Background(), client, printer, "testorg", []string{"nonexistent"}, false, true)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "repository nonexistent not found")
+	require.NoError(t, err)
+	// Should succeed but make no changes (repo not in config, nothing to disable)
+	assert.Len(t, client.CreatedFiles, 0)
 }
 
 func TestRunDisableRepos_CommitMessageFormat(t *testing.T) {

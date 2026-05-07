@@ -224,10 +224,16 @@ To unenroll all repositories:
 fullsend admin disable repos "$ORG_NAME" --all
 ```
 
+The `--all` flag prompts for confirmation by requiring you to type the organization name. To skip the prompt (e.g., in scripts):
+
+```bash
+fullsend admin disable repos "$ORG_NAME" --all --yolo
+```
+
 The disable command:
 - Updates `config.yaml` to mark repositories as disabled
 - Triggers the `repo-maintenance` workflow to create unenrollment PRs
-- Validates that repositories exist in the organization
+- Validates repository names against the config (not GitHub) to allow cleanup of deleted repos
 - Does not delete existing shim workflows (merge the unenrollment PR to remove them)
 
 ## 5. Test the pipeline

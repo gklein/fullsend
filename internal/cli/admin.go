@@ -1241,22 +1241,17 @@ func runDisableRepos(ctx context.Context, client forge.Client, printer *ui.Print
 			printer.Blank()
 		}
 	} else {
-		// Validate provided repo names.
+		// Validate provided repo names against config (not GitHub).
+		// Unlike enable, disable is cleanup and must handle repos deleted from GitHub.
 		printer.StepStart("Validating repository names")
 		for _, repo := range repos {
 			if repo == forge.ConfigRepoName {
 				printer.StepFail("Cannot disable .fullsend repository")
 				return fmt.Errorf("cannot disable .fullsend repository itself")
 			}
-			// Check if repo exists in org.
-			_, err := client.GetRepo(ctx, org, repo)
-			if err != nil {
-				if forge.IsNotFound(err) {
-					printer.StepFail(fmt.Sprintf("Repository %s not found", repo))
-					return fmt.Errorf("repository %s not found in %s", repo, org)
-				}
-				printer.StepFail(fmt.Sprintf("Failed to check repository %s", repo))
-				return fmt.Errorf("checking repository %s: %w", repo, err)
+			// Check if repo exists in config (don't require GitHub existence for cleanup).
+			if _, exists := cfg.Repos[repo]; !exists {
+				printer.StepWarn(fmt.Sprintf("Repository %s not in config (skipping)", repo))
 			}
 		}
 		reposToDisable = repos
