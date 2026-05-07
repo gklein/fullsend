@@ -1,5 +1,5 @@
 ---
-title: "0032. safe-push wrapper binary for sandboxed agents"
+title: "32. safe-push wrapper binary for sandboxed agents"
 status: Proposed
 relates_to:
   - agent-architecture
@@ -13,7 +13,7 @@ topics:
   - credentials
 ---
 
-# 0032. safe-push wrapper binary for sandboxed agents
+# 32. safe-push wrapper binary for sandboxed agents
 
 Date: 2026-05-07
 
