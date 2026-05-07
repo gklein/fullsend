@@ -138,6 +138,8 @@ This ADR is **not accepted**. The proposed approach described below is presented
 - Extend transitive closure to all referenced resources
 - Introduce access policies that constrain what remote resources can do (more restrictive than local resources)
 
+**Cache location and persistence:** The cache is stored in the repository's workspace (e.g., `.fullsend-cache/` directory or similar location accessible to the workflow runner). In ephemeral CI/CD environments like GitHub Actions, where each workflow run gets a fresh runner, the cache is rebuilt on each run. To reduce fetch latency and network dependencies, the implementation should leverage the platform's native caching mechanisms (e.g., GitHub Actions cache, GitLab CI cache) to persist the content-addressed cache across workflow runs. This allows frequently-used remote resources to be restored from the platform cache rather than re-fetched from their source URLs on every run.
+
 ## Consequences
 
 If Option A (URL support everywhere with security extensions) is accepted:
