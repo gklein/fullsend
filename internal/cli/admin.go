@@ -224,7 +224,7 @@ func newInstallCmd() *cobra.Command {
 				printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
 			} else {
 				printer.StepInfo("No repositories will be enrolled during install")
-				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use: fullsend admin repos enable %s <repo-name> or --all", org))
+				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use: fullsend admin enable repos %s <repo-name> or --all", org))
 			}
 			printer.Blank()
 
@@ -922,7 +922,7 @@ func promptEnrollment(printer *ui.Printer, in io.Reader) (bool, error) {
 	printer.Blank()
 	printer.StepInfo("Choose repository enrollment:")
 	printer.StepInfo("  [a] Enroll all repositories (excluding .fullsend)")
-	printer.StepInfo("  [n] Enroll no repositories (configure later with 'fullsend admin repos enable')")
+	printer.StepInfo("  [n] Enroll no repositories (configure later with 'fullsend admin enable repos')")
 	printer.Blank()
 
 	reader := bufio.NewReader(in)
