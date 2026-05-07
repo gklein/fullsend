@@ -451,10 +451,13 @@ package harness
 import (
     "net/url"
     "path/filepath"
+    "strings"
 )
 
-// isURL returns true if s is an HTTP(S) URL.
-func isURL(s string) bool {
+// IsURL returns true if s is an HTTP(S) URL.
+// Note: This intentionally accepts both http:// and https:// for classification purposes.
+// FetchURL enforces the HTTPS-only requirement at fetch time.
+func IsURL(s string) bool {
     u, err := url.Parse(s)
     return err == nil && (u.Scheme == "http" || u.Scheme == "https")
 }
@@ -466,12 +469,12 @@ func isAbsPath(s string) bool {
 
 // isRelPath returns true if s is a relative file path.
 func isRelPath(s string) bool {
-    return !isURL(s) && !isAbsPath(s)
+    return !IsURL(s) && !isAbsPath(s)
 }
 
-// parseIntegrityHash extracts the SHA256 hash from a URL fragment.
+// ParseIntegrityHash extracts the SHA256 hash from a URL fragment.
 // Example: https://example.com/file.md#sha256=abc123 -> "abc123"
-func parseIntegrityHash(rawURL string) (urlWithoutHash, hash string, hasHash bool) {
+func ParseIntegrityHash(rawURL string) (urlWithoutHash, hash string, hasHash bool) {
     u, err := url.Parse(rawURL)
     if err != nil {
         return rawURL, "", false
@@ -695,6 +698,8 @@ package resolve
 import (
     "context"
     "fmt"
+    "path/filepath"
+    "time"
 
     "github.com/fullsend-ai/fullsend/internal/fetch"
     "github.com/fullsend-ai/fullsend/internal/harness"
@@ -763,7 +768,7 @@ func resolveResourceWithLimits(ctx context.Context, ref string, allowedPrefixes 
         return "", fmt.Errorf("exceeded maximum resource count of %d", policy.MaxResources)
     }
 
-    if harness.isURL(ref) {
+    if harness.IsURL(ref) {
         // Increment resource count for remote fetches
         *resourceCount++
 
@@ -773,7 +778,7 @@ func resolveResourceWithLimits(ctx context.Context, ref string, allowedPrefixes 
         }
 
         // Parse integrity hash (if present)
-        cleanURL, expectedHash, hasHash := harness.parseIntegrityHash(ref)
+        cleanURL, expectedHash, hasHash := harness.ParseIntegrityHash(ref)
 
         // Check cache first
         if hasHash {
