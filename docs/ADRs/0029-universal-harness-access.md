@@ -192,6 +192,33 @@ See `docs/problems/universal-harness-access.md` for detailed implementation plan
 5. **Schema extension:** Add `allowed_remote_resources[]` to harness YAML.
 6. **CLI flag:** `fullsend run --offline` to disable all network fetches (fail if harness references a URL).
 
+### Differences from traditional package management
+
+This approach differs from traditional package management systems (npm, pip, cargo) in important ways:
+
+- **Composable files, not blackbox packages:** Harnesses are not packaged as opaque bundles. Instead, they reference individual files (agent definitions, skills, policies) that can live in different locations. A harness might reference an agent from one repository, skills from another, and a policy from a third. This is more flexible and encourages fine-grained reuse — you can mix-and-match components without forking entire packages.
+
+- **Trade-offs of granular composition:**
+  - **Pros:** Encourages modular design and selective reuse. Organizations can adopt upstream agents while providing their own policies, or use community skills with organization-controlled agent definitions.
+  - **Cons:** Increases attack surface — every URL is a potential injection point. Requires verifying multiple resources per harness rather than a single package artifact. Dependency resolution is more complex because transitive dependencies can come from disparate sources.
+
+This granularity is intentional: the goal is to enable decentralized evolution of agent ecosystems, not just centralized package distribution.
+
+### Repository organization for shared harnesses
+
+To support community sharing and provide a trusted source for harness components, fullsend-ai should maintain dedicated GitHub repositories for harness files and components. Suggested structure:
+
+- **`fullsend-ai/harnesses`** — First-class, fully supported harness definitions. These are rigorously evaluated, have test coverage, and are maintained by the fullsend team. Organizations can reference these with high confidence.
+
+- **`fullsend-ai/community`** — Community-contributed harnesses, agents, skills, and policies. Lower evaluation bar, more experimental, and more likely to accept external contributions. Acts as a proving ground for components that may graduate to `harnesses`.
+
+- **Tiered trust model:**
+  - First-class components (from `harnesses`) could be referenced without explicit hash pinning (trust the repository).
+  - Community components (from `community`) should require explicit hash pinning or signature verification.
+  - External components (from arbitrary URLs) require both hash pinning and explicit allowlisting in `config.yaml`.
+
+This repository structure makes it easier for organizations to adopt shared components while understanding the trust boundaries.
+
 ### Open questions
 
 - **Signature verification:** Should remote resources be signed? By whom? Using what PKI?
@@ -199,6 +226,7 @@ See `docs/problems/universal-harness-access.md` for detailed implementation plan
 - **Version resolution:** If a skill references `policy: v2` but doesn't specify a URL, how is that resolved?
 - **Offline mode:** Should the runner support an offline mode where all resources must be pre-cached?
 - **Lock file format:** What does a dependency lock file look like for harnesses?
+- **Component graduation path:** How do community components graduate to first-class status? What evaluation criteria must they meet?
 
 ## Related Work
 
