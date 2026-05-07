@@ -1126,6 +1126,7 @@ func runEnableRepos(ctx context.Context, client forge.Client, printer *ui.Printe
 		allRepos, err := client.ListOrgRepos(ctx, org)
 		if err != nil {
 			printer.StepFail("Failed to list organization repositories")
+			printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
 			return fmt.Errorf("listing org repos: %w", err)
 		}
 		for _, r := range allRepos {
@@ -1151,6 +1152,7 @@ func runEnableRepos(ctx context.Context, client forge.Client, printer *ui.Printe
 					return fmt.Errorf("repository %s not found in %s", repo, org)
 				}
 				printer.StepFail(fmt.Sprintf("Failed to check repository %s", repo))
+				printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
 				return fmt.Errorf("checking repository %s: %w", repo, err)
 			}
 		}
@@ -1316,6 +1318,7 @@ func loadRepoConfig(ctx context.Context, client forge.Client, printer *ui.Printe
 			return nil, fmt.Errorf(".fullsend repository not found: run 'fullsend admin install %s' first", org)
 		}
 		printer.StepFail("Failed to check .fullsend repository")
+		printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
 		return nil, fmt.Errorf("checking .fullsend repository: %w", err)
 	}
 	printer.StepDone(".fullsend repository exists")
@@ -1325,6 +1328,7 @@ func loadRepoConfig(ctx context.Context, client forge.Client, printer *ui.Printe
 	configData, err := client.GetFileContent(ctx, org, forge.ConfigRepoName, "config.yaml")
 	if err != nil {
 		printer.StepFail("Failed to read config.yaml")
+		printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
 		return nil, fmt.Errorf("reading config.yaml: %w", err)
 	}
 
@@ -1351,6 +1355,7 @@ func saveRepoConfig(ctx context.Context, client forge.Client, printer *ui.Printe
 	printer.StepStart("Committing changes to .fullsend")
 	if err := client.CreateOrUpdateFile(ctx, org, forge.ConfigRepoName, "config.yaml", commitMsg, updatedConfigData); err != nil {
 		printer.StepFail("Failed to commit changes")
+		printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
 		return fmt.Errorf("committing config.yaml: %w", err)
 	}
 	printer.StepDone("Changes committed to .fullsend")
@@ -1359,6 +1364,7 @@ func saveRepoConfig(ctx context.Context, client forge.Client, printer *ui.Printe
 	printer.StepStart("Triggering repo-maintenance workflow")
 	if err := client.DispatchWorkflow(ctx, org, forge.ConfigRepoName, "repo-maintenance.yml", "main", nil); err != nil {
 		printer.StepWarn(fmt.Sprintf("Failed to trigger repo-maintenance: %v", err))
+		printer.StepInfo("Hint: verify your token has 'workflow' scope with: gh auth refresh -s workflow")
 		printer.StepInfo("Changes committed successfully, but you may need to manually trigger the workflow")
 	} else {
 		printer.StepDone("Triggered repo-maintenance workflow")
