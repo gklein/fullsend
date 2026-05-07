@@ -4,6 +4,7 @@ package github
 import (
 	"bytes"
 	"context"
+	"crypto/sha1" //nolint:gosec // Git's blob hash algorithm, not used for security
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -536,6 +537,166 @@ func isTransientStatus(code int) bool {
 	default:
 		return false
 	}
+}
+
+// CommitFiles atomically commits multiple files to the default branch
+// using the Git Trees/Blobs/Commits API. Returns (false, nil) when
+// all files already match the current tree (idempotent).
+func (c *LiveClient) CommitFiles(ctx context.Context, owner, repo, message string, files []forge.TreeFile) (bool, error) {
+	if len(files) == 0 {
+		return false, nil
+	}
+
+	// 1. Get default branch name.
+	repoResp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s", owner, repo))
+	if err != nil {
+		return false, fmt.Errorf("get repo: %w", err)
+	}
+	var repoInfo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := decodeJSON(repoResp, &repoInfo); err != nil {
+		return false, fmt.Errorf("decode repo info: %w", err)
+	}
+
+	// 2. Get current commit SHA from the branch ref.
+	// Wrapped in retryOnTransient for freshly-created repos where the
+	// branch ref may not be materialized yet (async auto_init).
+	var commitSHA string
+	if err := c.retryOnTransient(ctx, "get branch ref", func() error {
+		refResp, refErr := c.get(ctx, fmt.Sprintf("/repos/%s/%s/git/ref/heads/%s", owner, repo, repoInfo.DefaultBranch))
+		if refErr != nil {
+			return fmt.Errorf("get branch ref: %w", refErr)
+		}
+		var ref struct {
+			Object struct {
+				SHA string `json:"sha"`
+			} `json:"object"`
+		}
+		if decErr := decodeJSON(refResp, &ref); decErr != nil {
+			return fmt.Errorf("decode ref: %w", decErr)
+		}
+		commitSHA = ref.Object.SHA
+		return nil
+	}); err != nil {
+		return false, err
+	}
+
+	// 3. Get the current commit to find its tree SHA.
+	cResp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/git/commits/%s", owner, repo, commitSHA))
+	if err != nil {
+		return false, fmt.Errorf("get commit: %w", err)
+	}
+	var commitObj struct {
+		Tree struct {
+			SHA string `json:"sha"`
+		} `json:"tree"`
+	}
+	if err := decodeJSON(cResp, &commitObj); err != nil {
+		return false, fmt.Errorf("decode commit: %w", err)
+	}
+	baseTreeSHA := commitObj.Tree.SHA
+
+	// 4. Get the full recursive tree to compare existing blobs.
+	treeResp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/git/trees/%s?recursive=1", owner, repo, baseTreeSHA))
+	if err != nil {
+		return false, fmt.Errorf("get tree: %w", err)
+	}
+	var existingTree struct {
+		Tree []struct {
+			Path string `json:"path"`
+			Mode string `json:"mode"`
+			SHA  string `json:"sha"`
+		} `json:"tree"`
+		Truncated bool `json:"truncated"`
+	}
+	if err := decodeJSON(treeResp, &existingTree); err != nil {
+		return false, fmt.Errorf("decode tree: %w", err)
+	}
+	if existingTree.Truncated {
+		return false, fmt.Errorf("tree too large (truncated); cannot diff")
+	}
+
+	type blobInfo struct {
+		sha  string
+		mode string
+	}
+	existing := make(map[string]blobInfo, len(existingTree.Tree))
+	for _, entry := range existingTree.Tree {
+		existing[entry.Path] = blobInfo{sha: entry.SHA, mode: entry.Mode}
+	}
+
+	// 5. Compute expected blob SHAs and filter to changed files.
+	var changedEntries []map[string]string
+	for _, f := range files {
+		expectedSHA := blobSHA(f.Content)
+		if info, ok := existing[f.Path]; ok && info.sha == expectedSHA && info.mode == f.Mode {
+			continue
+		}
+		changedEntries = append(changedEntries, map[string]string{
+			"path":    f.Path,
+			"mode":    f.Mode,
+			"type":    "blob",
+			"content": string(f.Content),
+		})
+	}
+
+	if len(changedEntries) == 0 {
+		return false, nil
+	}
+
+	// 6. Create new tree with base_tree + changed entries.
+	treePayload := map[string]any{
+		"base_tree": baseTreeSHA,
+		"tree":      changedEntries,
+	}
+	newTreeResp, err := c.post(ctx, fmt.Sprintf("/repos/%s/%s/git/trees", owner, repo), treePayload)
+	if err != nil {
+		return false, fmt.Errorf("create tree: %w", err)
+	}
+	var newTree struct {
+		SHA string `json:"sha"`
+	}
+	if err := decodeJSON(newTreeResp, &newTree); err != nil {
+		return false, fmt.Errorf("decode new tree: %w", err)
+	}
+
+	// 7. Create commit with new tree and old commit as parent.
+	commitPayload := map[string]any{
+		"message": message,
+		"tree":    newTree.SHA,
+		"parents": []string{commitSHA},
+	}
+	newCommitResp, err := c.post(ctx, fmt.Sprintf("/repos/%s/%s/git/commits", owner, repo), commitPayload)
+	if err != nil {
+		return false, fmt.Errorf("create commit: %w", err)
+	}
+	var newCommit struct {
+		SHA string `json:"sha"`
+	}
+	if err := decodeJSON(newCommitResp, &newCommit); err != nil {
+		return false, fmt.Errorf("decode new commit: %w", err)
+	}
+
+	// 8. Update branch ref to point to new commit.
+	refPayload := map[string]string{
+		"sha": newCommit.SHA,
+	}
+	refUpdateResp, err := c.patch(ctx, fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s", owner, repo, repoInfo.DefaultBranch), refPayload)
+	if err != nil {
+		return false, fmt.Errorf("update ref: %w", err)
+	}
+	refUpdateResp.Body.Close()
+
+	return true, nil
+}
+
+// blobSHA computes the Git blob object SHA-1 for the given content.
+func blobSHA(content []byte) string {
+	h := sha1.New()
+	fmt.Fprintf(h, "blob %d\x00", len(content))
+	h.Write(content)
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // GetFileContent retrieves the content of a file from a repository.
@@ -1193,6 +1354,20 @@ func (c *LiveClient) ListPullRequestReviews(ctx context.Context, owner, repo str
 		}
 	}
 	return result, nil
+}
+
+// DismissPullRequestReview dismisses a review, changing its state to DISMISSED.
+func (c *LiveClient) DismissPullRequestReview(ctx context.Context, owner, repo string, number, reviewID int, message string) error {
+	payload := map[string]string{
+		"message": message,
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews/%d/dismissals", owner, repo, number, reviewID)
+	resp, err := c.put(ctx, path, payload)
+	if err != nil {
+		return fmt.Errorf("dismiss review %d on #%d: %w", reviewID, number, err)
+	}
+	resp.Body.Close()
+	return nil
 }
 
 // MergeChangeProposal squash-merges a pull request by number.

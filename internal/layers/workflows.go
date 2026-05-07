@@ -1,6 +1,7 @@
 package layers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -25,6 +26,14 @@ func init() {
 	managedFiles = append(managedFiles, codeownersPath)
 }
 
+// actionYMLPath is the repo-relative path to the composite action that
+// contains the CLI version input default.
+const actionYMLPath = ".github/actions/fullsend/action.yml"
+
+// versionDefault is the placeholder in the embedded action.yml that gets
+// replaced with the installing CLI's version.
+var versionDefault = []byte("    default: latest")
+
 // WorkflowsLayer manages workflow files and CODEOWNERS in the .fullsend
 // config repo. It writes the reusable agent dispatch workflow, the repo
 // onboarding workflow, and a CODEOWNERS file that grants the installing
@@ -34,6 +43,7 @@ type WorkflowsLayer struct {
 	client            forge.Client
 	ui                *ui.Printer
 	authenticatedUser string
+	cliVersion        string
 }
 
 // Compile-time check that WorkflowsLayer implements Layer.
@@ -41,12 +51,16 @@ var _ Layer = (*WorkflowsLayer)(nil)
 
 // NewWorkflowsLayer creates a new WorkflowsLayer.
 // user is the authenticated user who will own CODEOWNERS entries.
-func NewWorkflowsLayer(org string, client forge.Client, printer *ui.Printer, user string) *WorkflowsLayer {
+// cliVersion is the version of the fullsend CLI performing the install;
+// it is injected into the composite action's version input default so
+// that workflow runs use the same CLI that produced the scaffold.
+func NewWorkflowsLayer(org string, client forge.Client, printer *ui.Printer, user, cliVersion string) *WorkflowsLayer {
 	return &WorkflowsLayer{
 		org:               org,
 		client:            client,
 		ui:                printer,
 		authenticatedUser: user,
+		cliVersion:        cliVersion,
 	}
 }
 
@@ -70,35 +84,43 @@ func (l *WorkflowsLayer) RequiredScopes(op Operation) []string {
 	}
 }
 
-// Install writes the workflow files and CODEOWNERS to the .fullsend repo.
-// CODEOWNERS failure is treated as a warning, not a fatal error.
-//
-// Note: writing multiple files sequentially via the Contents API can cause
-// transient 404s because each file write creates a new commit and the branch
-// ref is updated asynchronously. The GitHub client's retry logic handles
-// this. CODEOWNERS is written last and its failure is non-fatal because
-// some orgs restrict CODEOWNERS writes to specific teams.
+// Install writes the workflow files and CODEOWNERS to the .fullsend repo
+// in a single atomic commit using the Git Trees API. If all files already
+// match the current tree, no commit is created (idempotent).
 func (l *WorkflowsLayer) Install(ctx context.Context) error {
+	var files []forge.TreeFile
 	err := scaffold.WalkFullsendRepo(func(path string, content []byte) error {
-		l.ui.StepStart("Writing " + path)
-		writeErr := l.client.CreateOrUpdateFile(ctx, l.org, forge.ConfigRepoName, path, "chore: update "+path, content)
-		if writeErr != nil {
-			l.ui.StepFail("Failed to write " + path)
-			return fmt.Errorf("writing %s: %w", path, writeErr)
+		if path == actionYMLPath {
+			content = l.pinVersionInAction(content)
 		}
-		l.ui.StepDone("Wrote " + path)
+		files = append(files, forge.TreeFile{
+			Path:    path,
+			Content: content,
+			Mode:    scaffold.FileMode(path),
+		})
 		return nil
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("collecting scaffold files: %w", err)
 	}
 
-	l.ui.StepStart("Writing " + codeownersPath)
-	if err := l.client.CreateOrUpdateFile(ctx, l.org, forge.ConfigRepoName, codeownersPath,
-		"chore: update "+codeownersPath, []byte(l.codeownersContent())); err != nil {
-		l.ui.StepWarn("Could not write " + codeownersPath + ": " + err.Error())
+	files = append(files, forge.TreeFile{
+		Path:    codeownersPath,
+		Content: []byte(l.codeownersContent()),
+		Mode:    "100644",
+	})
+
+	l.ui.StepStart("Writing scaffold files")
+	committed, err := l.client.CommitFiles(ctx, l.org, forge.ConfigRepoName,
+		"chore: update fullsend scaffold", files)
+	if err != nil {
+		l.ui.StepFail("Failed to write scaffold files")
+		return fmt.Errorf("committing scaffold files: %w", err)
+	}
+	if committed {
+		l.ui.StepDone(fmt.Sprintf("Wrote %d files", len(files)))
 	} else {
-		l.ui.StepDone("Wrote " + codeownersPath)
+		l.ui.StepDone("Scaffold up to date")
 	}
 
 	return nil
@@ -149,6 +171,20 @@ func (l *WorkflowsLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	}
 
 	return report, nil
+}
+
+// pinVersionInAction replaces the "default: latest" line in the action.yml
+// version input with the concrete CLI version. If the version is "dev"
+// (local build), it falls back to "latest" and logs a warning.
+func (l *WorkflowsLayer) pinVersionInAction(content []byte) []byte {
+	if l.cliVersion == "" || l.cliVersion == "dev" {
+		if l.cliVersion == "dev" {
+			l.ui.StepWarn("CLI version is \"dev\"; action.yml will use \"latest\" (unpinned)")
+		}
+		return content
+	}
+	pinned := []byte(fmt.Sprintf("    default: %s", l.cliVersion))
+	return bytes.Replace(content, versionDefault, pinned, 1)
 }
 
 func (l *WorkflowsLayer) codeownersContent() string {
