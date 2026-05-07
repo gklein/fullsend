@@ -64,15 +64,20 @@ Thin callers in `.fullsend` use `workflow_call` to invoke upstream reusable
 workflows. Since `workflow_call` runs the callee in the caller's repo context,
 the reusable workflow has access to `.fullsend` secrets and checks out the
 config repo directly. Secrets pass via `secrets: inherit`. Org-specific `vars.*`
-values (client IDs, GCP region, auth mode) pass as explicit `inputs.*` because
-`vars` do not cross the `workflow_call` boundary.
+values (client IDs, GCP region, auth mode) are automatically available in the
+reusable workflow from the caller's context, but thin callers pass them as
+explicit `inputs.*` to make the interface contract self-documenting, ensure
+missing variables surface visibly with org-appropriate defaults, and provide an
+auditable manifest of configuration flowing across the trust boundary. Each
+reusable workflow also declares agent-specific inputs (e.g., `trigger_source`,
+`pr_number`, `instruction` for the fix workflow) beyond the common set.
 
 `dispatch.yml` stays unchanged — thin callers retain `# fullsend-stage:`
 markers, so stage-based dispatch
 ([ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md))
 continues to work without modification.
 
-The dispatch chain uses 1 level of `workflow_call` nesting (limit is 4):
+The dispatch chain uses 1 level of `workflow_call` nesting (limit is 10):
 
 ```
 shim ──workflow_dispatch──> .fullsend/dispatch.yml
@@ -88,8 +93,11 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
   re-install required.
 - `fullsend-ai/fullsend` must remain public for `workflow_call` and `uses:`
   references to resolve (it already is).
-- Each org must map `vars.*` to explicit `inputs.*` in thin callers, since
-  `vars` do not cross the `workflow_call` boundary.
+- Thin callers map `vars.*` to explicit `inputs.*` even though `vars` are
+  automatically available from the caller's context. This makes the reusable
+  workflow's parameter contract visible in the caller's YAML, surfaces
+  missing variables with explicit defaults instead of silent empty strings,
+  and creates a natural review checkpoint when the upstream interface changes.
 - Thin callers pin upstream by tag (`@v1`) or SHA — orgs control when they
   adopt upstream changes.
 - Stage-based dispatch ([ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md)),
@@ -118,3 +126,13 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
   Multi-forge support (ADR 0028, [PR #601](https://github.com/fullsend-ai/fullsend/pull/601)) will need its own
   distribution mechanism (e.g., GitLab CI/CD Components or `include:`)
   independent of this ADR.
+- **Scaffold output changes:** `fullsend admin install` will emit thin callers
+  (~20 lines each) instead of full agent workflows (125–354 lines each). This
+  is a user-visible change — orgs running `admin install` after this change
+  ships will see substantially different workflow files in `.fullsend`.
+- **Token generation is transitional:** The initial reusable workflows use
+  PEM-based token generation via `actions/create-github-app-token` with
+  secrets passed through `secrets: inherit`. The token mint migration
+  ([PR #655](https://github.com/fullsend-ai/fullsend/pull/655)) will replace
+  this with OIDC-based minting, changing the internal token generation
+  mechanism within the reusable workflows but not the thin caller interface.
