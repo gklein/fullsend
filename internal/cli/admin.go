@@ -224,7 +224,7 @@ func newInstallCmd() *cobra.Command {
 				printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
 			} else {
 				printer.StepInfo("No repositories will be enrolled during install")
-				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use: fullsend admin enable repos %s <repo-name> or --all", org))
+				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use: fullsend admin repos enable %s <repo-name> or --all", org))
 			}
 			printer.Blank()
 
@@ -491,7 +491,7 @@ func ensureConfigRepoExists(ctx context.Context, client forge.Client, printer *u
 	return nil
 }
 
-// validateEnabledRepos checks that every --repo value exists in the
+// validateEnabledRepos checks that every enabled repository exists in the
 // discovered (eligible) repo list. Repos filtered out by ListOrgRepos
 // (forks, archived) will not appear in discoveredNames, so this catches
 // the case where a user targets a fork or archived repo.
@@ -536,7 +536,7 @@ func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, o
 	printer.StepDone(fmt.Sprintf("Found %d repositories", len(allRepos)))
 	printer.Blank()
 
-	// Validate that every --repo value matches a discovered repo.
+	// Validate that every enabled repository matches a discovered repo.
 	if err := validateEnabledRepos(enabledRepos, repoNames); err != nil {
 		return err
 	}
