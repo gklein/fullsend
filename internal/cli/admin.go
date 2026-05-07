@@ -1254,9 +1254,10 @@ func runDisableRepos(ctx context.Context, client forge.Client, printer *ui.Print
 			// Check if repo exists in config (don't require GitHub existence for cleanup).
 			if _, exists := cfg.Repos[repo]; !exists {
 				printer.StepWarn(fmt.Sprintf("Repository %s not in config (skipping)", repo))
+				continue
 			}
+			reposToDisable = append(reposToDisable, repo)
 		}
-		reposToDisable = repos
 		printer.StepDone("Repository names validated")
 	}
 

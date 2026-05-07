@@ -233,7 +233,7 @@ fullsend admin disable repos "$ORG_NAME" --all --yolo
 The disable command:
 - Updates `config.yaml` to mark repositories as disabled
 - Triggers the `repo-maintenance` workflow to create unenrollment PRs
-- Validates repository names against the config (not GitHub) to allow cleanup of deleted repos
+- Warns (but does not reject) repository names not found in the config, allowing safe cleanup of deleted repos
 - Does not delete existing shim workflows (merge the unenrollment PR to remove them)
 
 ## 5. Test the pipeline
