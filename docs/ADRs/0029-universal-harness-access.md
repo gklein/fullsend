@@ -121,7 +121,7 @@ All resources remain local paths. Sharing requires manual copy-paste.
 
 ## Decision
 
-**Deferred.** This decision requires deeper security analysis and consensus on the trust model. Propose **Option A with security extensions** (see Consequences) for discussion, but do not accept this ADR until the implementation plan in `docs/problems/universal-harness-access.md` is reviewed and key security questions are resolved.
+**Deferred.** This decision requires deeper security analysis and consensus on the trust model. Propose **Option A with security extensions** (see Consequences) for discussion, but do not accept this ADR until the implementation plan in `docs/plans/universal-harness-access.md` is reviewed and key security questions are resolved.
 
 The proposed approach:
 - Support URLs, absolute paths, and relative paths uniformly for all harness resources
@@ -183,7 +183,7 @@ The implementation must address **how access policies work when agents don't kno
 
 ### Changes required
 
-See `docs/problems/universal-harness-access.md` for detailed implementation plan. Key changes:
+See `docs/plans/universal-harness-access.md` for detailed implementation plan. Key changes:
 
 1. **Harness loader (`internal/harness/harness.go`):** Add URL resolution and caching logic.
 2. **Resource fetcher (new package `internal/fetch/`):** HTTP client with SSRF protection, caching, integrity checking.
@@ -240,4 +240,4 @@ The proposed model combines these patterns: URL-based references (like GitHub Ac
 
 ## Implementation Plan
 
-See `docs/problems/universal-harness-access.md` for full implementation details, security analysis, and migration path.
+See `docs/plans/universal-harness-access.md` for full implementation details, security analysis, and migration path.
