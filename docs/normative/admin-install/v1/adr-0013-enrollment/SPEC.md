@@ -152,6 +152,8 @@ The workflow uses a GitHub App token (generated via `actions/create-github-app-t
 1. Reads enabled repos from `config.yaml` using `yq`
 2. For each repo, checks if the shim already exists on the default branch
 3. If an enrollment PR already exists, updates the shim content on the branch
+   without temporarily resetting the branch to a zero-diff state against the
+   default branch
 4. Otherwise, creates a branch from the default branch tip, writes the shim, and opens a PR titled `chore: connect to fullsend agent pipeline`
 5. Closes any stale unenrollment PR (`fullsend/offboard` branch) for the repo
 
