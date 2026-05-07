@@ -390,11 +390,11 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	if h.SecurityEnabled() {
 		printer.StepStart("Running pre-agent security scan")
 		scanCmd := buildScanContextCommand(repoDir, traceID)
-		stdout, stderr, exitCode, sshErr := sandbox.Exec(sandboxName, scanCmd, 60*time.Second)
-		if sshErr != nil {
-			printer.StepFail("Security scan SSH failed: " + sshErr.Error())
+		stdout, stderr, exitCode, execErr := sandbox.Exec(sandboxName, scanCmd, 60*time.Second)
+		if execErr != nil {
+			printer.StepFail("Security scan failed: " + execErr.Error())
 			if h.FailModeClosed() {
-				return fmt.Errorf("pre-agent security scan failed: %w", sshErr)
+				return fmt.Errorf("pre-agent security scan failed: %w", execErr)
 			}
 			printer.StepWarn("Continuing despite scan failure (fail_mode: open)")
 		} else if exitCode != 0 {
@@ -850,8 +850,8 @@ func bootstrapEnv(sandboxName, repoDir string, h *harness.Harness) error {
 		// https://github.com/fullsend-ai/fullsend/issues/345#issuecomment-4300740512
 		if strings.Contains(hf.Dest, "/bin/") {
 			chmodCmd := fmt.Sprintf("chmod +x %s", hf.Dest)
-			if _, _, _, sshErr := sandbox.Exec(sandboxName, chmodCmd, 10*time.Second); sshErr != nil {
-				return fmt.Errorf("chmod host file %s in sandbox: %w", hf.Dest, sshErr)
+			if _, _, _, execErr := sandbox.Exec(sandboxName, chmodCmd, 10*time.Second); execErr != nil {
+				return fmt.Errorf("chmod host file %s in sandbox: %w", hf.Dest, execErr)
 			}
 		}
 	}
@@ -1034,7 +1034,7 @@ func buildClaudeCommand(agentName, model, repoDir string) string {
 // (buildScanContextCommand) scans to ensure parity.
 const maxContextScanDepth = 5
 
-// buildScanContextCommand builds the SSH command to run `fullsend scan context`
+// buildScanContextCommand builds the command to run `fullsend scan context`
 // inside the sandbox. It finds known context files (including SKILL.md in
 // skill directories) in the repo directory and passes them as arguments.
 func buildScanContextCommand(repoDir, traceID string) string {
