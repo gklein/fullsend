@@ -120,7 +120,10 @@ Follow these steps in order:
 3. **Fill in frontmatter.** `relates_to` must reference existing filenames
    (without `.md`) from `docs/problems/`. Use `"*"` only for ADRs that truly
    apply to all problem areas. The `status` in frontmatter must match the
-   `## Status` heading in the body (the linter enforces this).
+   `## Status` heading in the body (the linter enforces this). The number in
+   the `title` field and the `# heading` must have **no leading zeros**
+   (e.g., `"1. Use ADRs"`, not `"0001. Use ADRs"`). The four-digit
+   zero-padded format is only for filenames.
 4. **Choose the right status.** Use **Proposed** for a draft awaiting
    discussion. Use **Undecided** when the problem is identified but no choice
    has been made. Use **Accepted** when the decision is made. Include an
@@ -205,3 +208,4 @@ If the ADR partially answers a question, add a parenthetical:
 | Wrong ADR number | Check existing files in `docs/ADRs/` first |
 | Editing an accepted ADR's content | Write a new ADR that supersedes it |
 | Forgetting to update architecture.md | It must always reflect current decisions |
+| Leading zeros in title number | Use `"1. Title"` not `"0001. Title"` — zero-padded numbers are only for filenames |
