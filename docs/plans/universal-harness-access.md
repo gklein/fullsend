@@ -84,6 +84,40 @@ pre_script: scripts/pre-code.sh  # scripts must be local (security)
 
 **Principle:** Declarative resources (agent definitions, skills, policies, schemas) can be remote. Executable resources (scripts, binaries) must be local to preserve auditability and prevent direct code execution from untrusted sources.
 
+### Relative Path Resolution for URL-Referenced Resources
+
+When a harness or resource is fetched from a URL, relative paths within that resource are resolved relative to the URL's base path, not the local `.fullsend` directory:
+
+**Example 1: Harness fetched from URL**
+```yaml
+# Harness at: https://github.com/fullsend-ai/harnesses/code.yaml
+agent: agents/code.md                    # → https://github.com/fullsend-ai/harnesses/agents/code.md
+policy: ../policies/code-policy.yaml     # → https://github.com/fullsend-ai/policies/code-policy.yaml
+skills:
+  - skills/rust-linting/SKILL.md         # → https://github.com/fullsend-ai/harnesses/skills/rust-linting/SKILL.md
+```
+
+**Example 2: Skill fetched from URL**
+```yaml
+# Skill at: https://github.com/fullsend-ai/skills/rust-conventions/SKILL.md
+---
+dependencies:
+  - ../common/cargo-integration/SKILL.md  # → https://github.com/fullsend-ai/skills/common/cargo-integration/SKILL.md
+policy: policies/rust-sandbox.yaml        # → https://github.com/fullsend-ai/skills/rust-conventions/policies/rust-sandbox.yaml
+---
+```
+
+**Resolution algorithm:**
+1. If the path is absolute (`/opt/...`): use as-is (local file)
+2. If the path is a URL (`https://...`): use as-is (remote resource)
+3. If the path is relative (`agents/...` or `../other`):
+   - If the containing resource is a URL: resolve relative to the URL's base (URL path semantics)
+   - If the containing resource is local: resolve relative to `.fullsend` directory (filesystem semantics)
+
+**Implication:** A harness author publishing a harness at `https://example.com/harnesses/code.yaml` can use relative paths to reference co-located resources, making the harness portable without hardcoding full URLs. Consumers can fetch the entire harness tree by referencing a single top-level URL.
+
+**Security note:** URL-based relative path resolution follows RFC 3986 (URI Generic Syntax) semantics, including path traversal (`../`). The SSRF protection layer validates that resolved URLs still match allowed domain prefixes after traversal.
+
 ### Transitive Closure
 
 A URL-referenced skill can itself reference other resources:
