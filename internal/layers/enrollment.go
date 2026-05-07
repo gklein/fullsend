@@ -129,7 +129,7 @@ func (l *EnrollmentLayer) awaitWorkflowRun(ctx context.Context, dispatchTime tim
 			if run.Status == "completed" {
 				return run, nil
 			}
-			l.ui.StepInfo(fmt.Sprintf("workflow run %d: %s", run.ID, run.Status))
+			l.ui.StepInfo(fmt.Sprintf("workflow run: %s (%s)", run.HTMLURL, run.Status))
 			break // found our run, keep waiting
 		}
 	}
