@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -118,17 +120,22 @@ func parseTranscriptFile(path string) (transcriptErrorSummary, bool) {
 // JSONL line. Claude Code transcripts can be very large.
 func isResultLine(line []byte) bool {
 	// Result events contain "type":"result" or "type": "result".
-	return strings.Contains(string(line), `"type":"result"`) ||
-		strings.Contains(string(line), `"type": "result"`)
+	return bytes.Contains(line, []byte(`"type":"result"`)) ||
+		bytes.Contains(line, []byte(`"type": "result"`))
 }
 
 // truncateError trims an error message to maxTranscriptErrorLength.
-// If truncated, appends an ellipsis indicator.
+// If truncated, walks back to a valid UTF-8 rune boundary before
+// appending an ellipsis indicator.
 func truncateError(msg string) string {
 	if len(msg) <= maxTranscriptErrorLength {
 		return msg
 	}
-	return msg[:maxTranscriptErrorLength] + "… (truncated)"
+	truncated := msg[:maxTranscriptErrorLength]
+	for len(truncated) > 0 && !utf8.Valid([]byte(truncated)) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + "… (truncated)"
 }
 
 // emitTranscriptErrors writes ::error:: annotations for each transcript
@@ -139,8 +146,8 @@ func emitTranscriptErrors(w io.Writer, summaries []transcriptErrorSummary) {
 		// Sanitize the error message to prevent GHA command injection.
 		msg := sanitizeOutput(s.ErrorMessage)
 		if msg == "" {
-			msg = fmt.Sprintf("agent terminated with error (subtype: %s)", s.Subtype)
+			msg = fmt.Sprintf("agent terminated with error (subtype: %s)", sanitizeOutput(s.Subtype))
 		}
-		fmt.Fprintf(w, "::error title=Agent Error (%s)::%s\n", s.Source, msg)
+		fmt.Fprintf(w, "::error title=Agent Error (%s)::%s\n", sanitizeOutput(s.Source), msg)
 	}
 }

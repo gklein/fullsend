@@ -134,7 +134,7 @@ func TestParseTranscriptFile_TypeWithSpace(t *testing.T) {
 	}
 }
 
-func TestExtractTranscriptErrors_MultiplFiles(t *testing.T) {
+func TestExtractTranscriptErrors_MultipleFiles(t *testing.T) {
 	dir := t.TempDir()
 
 	// File 1: error result.

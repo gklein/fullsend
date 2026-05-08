@@ -79,8 +79,12 @@ extract_error() {
 
   # Emit GHA annotation if running in GitHub Actions.
   if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-    # Sanitize for GHA: replace :: with : : to prevent command injection.
+    # Sanitize for GHA: replace :: and URL-encoded newlines to prevent command injection.
     local safe_msg="${error_msg//::/ :}"
+    safe_msg="${safe_msg//%0A/ }"
+    safe_msg="${safe_msg//%0a/ }"
+    safe_msg="${safe_msg//%0D/ }"
+    safe_msg="${safe_msg//%0d/ }"
     echo "::error title=Agent Error (${basename})::${safe_msg}"
   fi
 }
