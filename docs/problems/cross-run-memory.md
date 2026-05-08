@@ -14,7 +14,7 @@ Two mechanisms partially address this:
 
 **Per-repo AGENTS.md / skills.** Humans (or the retro agent's proposals, once accepted) encode repo-specific knowledge as skills or agent instructions. This is the right long-term solution for stable, generalizable patterns. But it requires human intervention to convert a run outcome into a skill, and it doesn't capture transient or tactical information ("the last 3 runs on this repo all failed because the CI runner was misconfigured — don't retry lint failures until #142 is resolved").
 
-**Retro agent (Building Block 14).** Analyzes completed workflows and files improvement proposals as GitHub issues. Effective for systemic improvements, but the proposals enter the issue backlog and require human triage before they affect future runs. The latency is days to weeks, not run-to-run.
+**Retro agent ([§14 retro agent runtime](../architecture.md)).** Analyzes completed workflows and files improvement proposals as GitHub issues. Effective for systemic improvements, but the proposals enter the issue backlog and require human triage before they affect future runs. The latency is days to weeks, not run-to-run.
 
 Neither mechanism provides **automatic, immediate feedback** from one run's outcome to the next run's context.
 
@@ -63,7 +63,7 @@ This follows the existing pattern: the harness assembles context on the host, th
 
 - **Codebase context** — memory is a fourth context source alongside code, per-repo instructions, and org-level architecture docs. It follows the same principle: structured, minimal, injected by the harness.
 - **Testing agents** — run outcomes are a form of eval signal. Memory recording could feed into the eval framework for measuring whether agents improve over time on a given repo.
-- **Operational observability** — memory summaries are a structured subset of the observability data already being collected (transcripts, workflow logs). The question is packaging it for agent consumption.
+- **Operational observability** — hemory summaries are a structured subset of the observability data already being collected (transcripts, workflow logs). The question is packaging it for agent consumption.
 - **Agent architecture** — the retro agent and memory are complementary. Retro proposes systemic improvements requiring human approval. Memory provides immediate tactical context automatically. A mature system might have the retro agent *curate* the memory file, pruning stale entries and promoting stable patterns to skills.
 
 ## Open questions
