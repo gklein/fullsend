@@ -100,7 +100,7 @@ func TestBuildClaudeCommand_EscapesQuotes(t *testing.T) {
 func TestBuildScanContextCommand_SourcesEnv(t *testing.T) {
 	traceID := "aabbccdd-1122-4334-8556-aabbccddeeff"
 	cmd := buildScanContextCommand("/tmp/workspace/repo", traceID)
-	assert.Contains(t, cmd, "source /tmp/workspace/.env &&")
+	assert.Contains(t, cmd, ". /tmp/workspace/.env &&")
 	assert.Contains(t, cmd, "FULLSEND_TRACE_ID='"+traceID+"'")
 	assert.Contains(t, cmd, "-exec fullsend scan context")
 }
