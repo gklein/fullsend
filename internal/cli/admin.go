@@ -207,15 +207,15 @@ func newInstallCmd() *cobra.Command {
 				}
 			}
 
+			// Discover all org repos upfront to avoid redundant API calls in runDryRun/runInstall.
+			allRepos, err := client.ListOrgRepos(ctx, org)
+			if err != nil {
+				return fmt.Errorf("listing org repos: %w", err)
+			}
+
 			var repos []string
-			var allRepos []forge.Repository
 			if enrollAll {
-				// Discover repos and filter out .fullsend.
-				discovered, err := client.ListOrgRepos(ctx, org)
-				if err != nil {
-					return fmt.Errorf("listing org repos: %w", err)
-				}
-				allRepos = discovered
+				// Filter out .fullsend from enrollment.
 				for _, r := range allRepos {
 					if r.Name != forge.ConfigRepoName {
 						repos = append(repos, r.Name)
