@@ -30,6 +30,27 @@ runs:
       run: |
         set -euo pipefail
 
+        # retry_curl: retry a curl command up to MAX_ATTEMPTS times with exponential backoff.
+        # Usage: retry_curl [curl args...]
+        retry_curl() {
+          local max_attempts=3
+          local attempt=1
+          local delay=5
+          while true; do
+            if curl "$@"; then
+              return 0
+            fi
+            if (( attempt >= max_attempts )); then
+              echo "::error::Download failed after ${max_attempts} attempts"
+              return 1
+            fi
+            echo "::warning::Download attempt ${attempt}/${max_attempts} failed, retrying in ${delay}s..."
+            sleep "${delay}"
+            (( attempt++ ))
+            (( delay *= 3 ))
+          done
+        }
+
         # Use vendored binary if present (placed by fullsend admin install --vendor-fullsend-binary).
         # GitHub Contents API does not preserve the executable bit, so check -f not -x.
         if [[ -f "${GITHUB_WORKSPACE}/bin/fullsend" ]]; then
@@ -57,7 +78,7 @@ runs:
         esac
 
         if [[ "${VERSION}" == "latest" ]]; then
-          TAG="$(curl -fsSL -H "Accept: application/vnd.github+json" \
+          TAG="$(retry_curl -fsSL -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/fullsend-ai/fullsend/releases/latest" | jq -r '.tag_name')"
           if [[ -z "${TAG}" || "${TAG}" == "null" ]]; then
             echo "::error::Could not resolve latest release tag"
@@ -86,7 +107,7 @@ runs:
         URL="${BASE_URL}/${ASSET_NAME}"
 
         echo "Downloading from: ${URL}"
-        curl -fsSL "$URL" -o "/tmp/${ASSET_NAME}"
+        retry_curl -fsSL "$URL" -o "/tmp/${ASSET_NAME}"
         mkdir -p "${RUNNER_TEMP}/fullsend"
         tar -xzf "/tmp/${ASSET_NAME}" -C "${RUNNER_TEMP}/fullsend"
         echo "${RUNNER_TEMP}/fullsend" >> "${GITHUB_PATH}"
@@ -98,7 +119,23 @@ runs:
     - name: Install OpenShell
       shell: bash
       run: |
-        curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/v0.0.30/install.sh | sh
+        set -euo pipefail
+        max_attempts=3
+        attempt=1
+        delay=5
+        while true; do
+          if curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/v0.0.30/install.sh | sh; then
+            break
+          fi
+          if (( attempt >= max_attempts )); then
+            echo "::error::OpenShell install failed after ${max_attempts} attempts"
+            exit 1
+          fi
+          echo "::warning::OpenShell install attempt ${attempt}/${max_attempts} failed, retrying in ${delay}s..."
+          sleep "${delay}"
+          (( attempt++ ))
+          (( delay *= 3 ))
+        done
         openshell --version
 
     - name: Install validation dependencies
