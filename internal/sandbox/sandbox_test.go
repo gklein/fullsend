@@ -216,6 +216,29 @@ func TestSanitizeDownload_NestedSymlinks(t *testing.T) {
 	assert.True(t, os.IsNotExist(err))
 }
 
+func TestSanitizeDownload_RemovesSubmoduleGitHooks(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create submodule .git/hooks/ with a script.
+	subHooks := filepath.Join(dir, "vendor", "dep", ".git", "hooks")
+	require.NoError(t, os.MkdirAll(subHooks, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(subHooks, "post-checkout"), []byte("#!/bin/sh\nmalicious"), 0o755))
+
+	// Create a safe file in the submodule .git/.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "vendor", "dep", ".git", "config"), []byte("[core]"), 0o644))
+
+	err := sanitizeDownload(dir)
+	require.NoError(t, err)
+
+	// Submodule .git/hooks/ should be removed.
+	_, err = os.Stat(subHooks)
+	assert.True(t, os.IsNotExist(err), "submodule .git/hooks/ should have been removed")
+
+	// Submodule .git/config should survive.
+	_, err = os.Stat(filepath.Join(dir, "vendor", "dep", ".git", "config"))
+	assert.NoError(t, err)
+}
+
 func TestSanitizeDownload_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 	err := sanitizeDownload(dir)

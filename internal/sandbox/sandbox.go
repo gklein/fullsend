@@ -29,14 +29,14 @@ func sanitizeDownload(localDir string) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(localDir, path)
-
 		if d.Type()&fs.ModeSymlink != 0 {
 			return os.Remove(path)
 		}
 
-		if d.IsDir() && rel == filepath.Join(".git", "hooks") {
-			os.RemoveAll(path)
+		if d.IsDir() && d.Name() == "hooks" && filepath.Base(filepath.Dir(path)) == ".git" {
+			if err := os.RemoveAll(path); err != nil {
+				return fmt.Errorf("removing .git/hooks: %w", err)
+			}
 			return filepath.SkipDir
 		}
 
@@ -186,9 +186,12 @@ func Delete(name string) error {
 
 // Exec runs a command inside a sandbox and returns stdout, stderr, and exit code.
 func Exec(sandboxName, command string, timeout time.Duration) (stdout, stderr string, exitCode int, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+10*time.Second)
+	defer cancel()
+
 	timeoutSecs := fmt.Sprintf("%d", int(timeout.Seconds()))
 
-	cmd := exec.Command("openshell", "sandbox", "exec",
+	cmd := exec.CommandContext(ctx, "openshell", "sandbox", "exec",
 		"--name", sandboxName,
 		"--no-tty",
 		"--timeout", timeoutSecs,
@@ -368,6 +371,8 @@ func ExtractTranscripts(sandboxName, agentName, outputDir string) error {
 		}
 		localName := fmt.Sprintf("%s-%s", agentName, filepath.Base(remotePath))
 
+		// Validate path stays within outputDir (kernel-enforced), then remove
+		// the probe file so DownloadFile can write the actual content.
 		f, createErr := root.Create(localName)
 		if createErr != nil {
 			fmt.Fprintf(os.Stderr, "  [%s] Skipping (path rejected): %s: %v\n", agentName, localName, createErr)
@@ -430,6 +435,8 @@ func ExtractOutputFiles(sandboxName, remoteDir, localDir string) ([]string, erro
 			}
 		}
 
+		// Validate path stays within localDir (kernel-enforced), then remove
+		// the probe file so DownloadFile can write the actual content.
 		f, createErr := root.Create(relPath)
 		if createErr != nil {
 			fmt.Fprintf(os.Stderr, "  Skipping (path rejected): %s: %v\n", relPath, createErr)
