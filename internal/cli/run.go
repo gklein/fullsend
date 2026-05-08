@@ -441,7 +441,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 			oidcWg.Add(1)
 			go func() {
 				defer oidcWg.Done()
-				runOIDCRefresh(oidcCtx, sshConfigPath, sandboxName, oidcURL, oidcAuth, printer)
+				runOIDCRefresh(oidcCtx, sandboxName, oidcURL, oidcAuth, printer)
 			}()
 		}
 	}
@@ -940,7 +940,7 @@ func readOIDCAuthFile(path string) (string, error) {
 
 var oidcRefreshInterval = 4 * time.Minute
 
-func runOIDCRefresh(ctx context.Context, sshConfigPath, sandboxName, oidcURL, oidcAuth string, printer *ui.Printer) {
+func runOIDCRefresh(ctx context.Context, sandboxName, oidcURL, oidcAuth string, printer *ui.Printer) {
 	ticker := time.NewTicker(oidcRefreshInterval)
 	defer ticker.Stop()
 
@@ -949,7 +949,7 @@ func runOIDCRefresh(ctx context.Context, sshConfigPath, sandboxName, oidcURL, oi
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := refreshOIDCToken(ctx, sshConfigPath, sandboxName, oidcURL, oidcAuth); err != nil {
+			if err := refreshOIDCToken(ctx, sandboxName, oidcURL, oidcAuth); err != nil {
 				if ctx.Err() != nil {
 					return
 				}
@@ -961,7 +961,7 @@ func runOIDCRefresh(ctx context.Context, sshConfigPath, sandboxName, oidcURL, oi
 	}
 }
 
-func refreshOIDCToken(ctx context.Context, sshConfigPath, sandboxName, oidcURL, oidcAuth string) error {
+func refreshOIDCToken(ctx context.Context, sandboxName, oidcURL, oidcAuth string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", oidcURL, nil)
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)
@@ -1002,7 +1002,7 @@ func refreshOIDCToken(ctx context.Context, sshConfigPath, sandboxName, oidcURL, 
 	tmpFile.Close()
 
 	remotePath := sandbox.SandboxWorkspace + "/.gcp-oidc-token"
-	if err := sandbox.SCP(sshConfigPath, sandboxName, tmpFile.Name(), remotePath); err != nil {
+	if err := sandbox.Upload(sandboxName, tmpFile.Name(), remotePath); err != nil {
 		return fmt.Errorf("copying token to sandbox: %w", err)
 	}
 
