@@ -80,6 +80,8 @@ Therefore, the only tamper-proof delivery path for the policy file is the contai
 
 Introduce `safe-push`, a Go binary that acts as a mandatory policy gate for all `git push` operations from inside the sandbox. `safe-push` is a Tier 2 mechanism ([ADR 0025](0025-provider-credential-delivery-for-sandboxed-agents.md)) that coexists with Tier 1 post-script push — the harness configuration determines which model an agent uses.
 
+Tier 2 is a scoped relaxation of the constraint established in the [security threat model](../problems/security-threat-model.md), which states that "agents cannot take forge actions directly — credentialed operations (push, label, comment) are applied by deterministic post-scripts outside the sandbox." Under Tier 2, agents *can* push directly, but only through `safe-push` with policy enforcement and only in environments where the risk profile justifies it (private repos, internal tooling). The threat model constraint remains the default — Tier 1 post-script push is the recommended path for public and high-risk repos.
+
 ### Binary design
 
 `safe-push` is a Go binary baked into the sandbox container image at `/usr/local/bin/safe-push`, protected by Landlock as read-only and executable.
@@ -95,7 +97,7 @@ safe-push --force origin feature/my-branch   # denied by default policy
 
 1. **Parse** the push arguments — remote, refspecs, flags (`--force`, `--force-with-lease`, `--delete`, `--tags`, `+` prefix in refspecs).
 2. **Evaluate** against the policy file at `/etc/fullsend/safe-push-policy.yaml` (read-only, Landlock-protected).
-3. **Allow:** Fork a child process that runs `/usr/bin/git push` with the original arguments, wait for it to exit, and propagate the exit code. Using `fork`+`exec` rather than direct `exec` preserves the `safe-push` parent in the process tree, which is required for L7 process-tree tracking — OpenShell walks `/proc/pid/` ancestry to verify that the `git` process making the network call is descended from `safe-push`.
+3. **Allow:** Spawn a child process via `os/exec` that runs `/usr/bin/git push` with the original arguments, wait for it to exit, and propagate the exit code. Spawning a child rather than replacing the process image preserves the `safe-push` parent in the process tree, which is required for L7 process-tree tracking — OpenShell walks `/proc/pid/` ancestry to verify that the `git` process making the network call is descended from `safe-push`.
    **Deny:** Print a clear error to stderr describing what was blocked and why (e.g., `safe-push: denied: force-push is not allowed by policy`), write a structured JSON audit entry to `/tmp/workspace/.safe-push-audit.jsonl`, and exit non-zero.
 
 ### L7 enforcement
@@ -103,7 +105,8 @@ safe-push --force origin feature/my-branch   # denied by default policy
 OpenShell L7 policy ensures that `safe-push` is the only path to push:
 
 - **`safe-push` (`/usr/local/bin/safe-push`):** L7 process-tree tracking allows `git` processes descended from `safe-push` to reach `git-receive-pack` on `github.com`.
-- **Direct `git push`:** L7 blocks `git` processes that are NOT descended from `safe-push` from reaching `git-receive-pack`. The agent cannot push by calling `git` directly.
+- **All other binaries:** L7 denies all processes that are NOT descended from `safe-push` from reaching `git-receive-pack`. This includes direct `git push`, custom scripts using `curl` to speak the git smart HTTP protocol, compiled binaries, and custom git remote helpers (`git-remote-<transport>` scripts the agent could write to `/tmp/`). The L7 deny rule must match the endpoint, not the binary — any process reaching `git-receive-pack` without `safe-push` ancestry is blocked.
+- **SSH transport:** L7 policy must block outbound SSH (port 22 and `ssh.github.com:443`) to prevent the agent from bypassing HTTPS-based enforcement by configuring a remote with `git@github.com:...` syntax. The entire enforcement model assumes HTTPS transport — SSH is an opaque encrypted tunnel where L7 cannot inspect or gate operations.
 - **Other git network operations** (`fetch`, `pull`, `clone`, `ls-remote`): Gated by L7 directly — allow or deny by binary + host + path as appropriate for the agent's tier. `safe-push` is not involved.
 
 ### Credential separation
@@ -112,7 +115,7 @@ OpenShell L7 policy ensures that `safe-push` is the only path to push:
 
 1. Agent calls `safe-push origin feature/my-branch`
 2. `safe-push` checks policy — allowed
-3. `safe-push` forks a child that runs `/usr/bin/git push origin feature/my-branch`
+3. `safe-push` spawns a child process running `/usr/bin/git push origin feature/my-branch`
 4. `git` makes HTTPS request to `github.com/repo.git/git-receive-pack`
 5. OpenShell gateway intercepts, provider injects real token into auth header
 6. Request reaches GitHub with valid credentials
@@ -199,4 +202,5 @@ timeout_minutes: 120
 - The single baked-in policy is a simplification. When per-agent customization is needed, the options (multiple named images or ephemeral image layering) have been analyzed and documented, with the trade-offs understood. Runtime configuration (env vars, writable config files) is not viable because the agent controls all writable state inside the sandbox.
 - The `safe-push` binary, its policy file, and the real `git` binary must all reside on Landlock-protected read-only paths. If any of these can be modified by the agent, the enforcement is bypassed.
 - Audit logging for denied operations is best-effort (writable path, agent could tamper). The primary security boundary is the deny itself (the push never reaches the network), not the audit record.
-- Credential separation is maintained: `safe-push` never sees or handles credentials. OpenShell providers inject credentials at the HTTP layer after `safe-push` has already approved the operation and forked the real `git` process.
+- Credential separation is maintained: `safe-push` never sees or handles credentials. OpenShell providers inject credentials at the HTTP layer after `safe-push` has already approved the operation and spawned the real `git` process.
+- Tier 2 is a scoped relaxation of the security threat model's constraint that "agents cannot take forge actions directly." The threat model constraint remains the default for public and high-risk repos (Tier 1). Tier 2 must be an explicit opt-in via harness configuration, not an automatic upgrade.
