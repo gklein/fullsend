@@ -616,11 +616,22 @@ func FetchURL(ctx context.Context, rawURL string, policy FetchPolicy) ([]byte, e
     }
 
     // 4. Fetch with timeout and size limit
+    // NOTE: To prevent DNS rebinding attacks, the actual implementation must use a custom
+    // http.Transport with a DialContext that pins the connection to the pre-validated IP
+    // address. The illustrative code below will perform a second DNS lookup at fetch time,
+    // which could return a different IP. See: https://golang.org/pkg/net/http/#Transport
     client := &http.Client{
         Timeout: policy.Timeout,
         CheckRedirect: func(req *http.Request, via []*http.Request) error {
             return http.ErrUseLastResponse // No redirects
         },
+        // Production implementation would add:
+        // Transport: &http.Transport{
+        //     DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+        //         // Use first validated IP instead of re-resolving DNS
+        //         return net.Dial(network, net.JoinHostPort(ips[0].String(), port))
+        //     },
+        // },
     }
 
     resp, err := client.Get(rawURL)
@@ -850,8 +861,14 @@ func resolveResourceWithLimits(ctx context.Context, ref string, allowedPrefixes 
 
         // Check cache first
         if hasHash {
-            if content, _, _ := fetch.CacheGet(expectedHash); content != nil {
-                return filepath.Join(fetch.CachePath(expectedHash), "content"), nil
+            content, _, err := fetch.CacheGet(expectedHash)
+            if err != nil {
+                return "", fmt.Errorf("reading cache for %s: %w", cleanURL, err)
+            }
+            if content != nil {
+                // Note: actual implementation would pass workspaceRoot to CachePath
+                workspaceRoot := "." // illustrative
+                return filepath.Join(fetch.CachePath(workspaceRoot, expectedHash), "content"), nil
             }
         }
 
@@ -872,7 +889,9 @@ func resolveResourceWithLimits(ctx context.Context, ref string, allowedPrefixes 
             return "", fmt.Errorf("caching %s: %w", cleanURL, err)
         }
 
-        return filepath.Join(fetch.CachePath(actualHash), "content"), nil
+        // Note: actual implementation would pass workspaceRoot to CachePath
+        workspaceRoot := "." // illustrative
+        return filepath.Join(fetch.CachePath(workspaceRoot, actualHash), "content"), nil
     }
 
     // Local path — return as-is (already resolved by ResolveRelativeTo)
@@ -1018,12 +1037,13 @@ if offline && hasRemoteReferences(h) {
 ### Phase 1: Read-only URL support (MVP)
 
 - Implement URL detection, fetch, cache, SSRF protection
+- **Mandatory hash pinning:** All URLs must include `#sha256=...` fragments. URLs without hashes are rejected.
 - Support URLs for agents, skills, policies (declarative resources only)
 - Require all URL references to be declared in `allowed_remote_resources`
 - No runtime fetch—all resources resolved at harness load time
 - No transitive dependency resolution yet (skills cannot reference other skills)
 
-**Deliverable:** `fullsend run` can load a harness that references `agent: https://...`
+**Deliverable:** `fullsend run` can load a harness that references `agent: https://...#sha256=abc123...`
 
 ### Phase 2: Transitive dependency resolution
 
@@ -1034,13 +1054,13 @@ if offline && hasRemoteReferences(h) {
 
 **Deliverable:** A URL-referenced skill can itself reference other skills or policies
 
-### Phase 3: Integrity pinning and lock files
+### Phase 3: Lock files for transitive dependencies
 
-- Support `#sha256=...` fragments in URLs
-- Generate `harness.lock` file that pins all transitive dependencies
-- Warn on unpinned URLs; require pinning for production harnesses
+- Generate `harness.lock` file that pins all transitive dependencies (URLs and hashes)
+- Lock file ensures reproducible builds across environments
+- Warn when harness references change but lock file is not updated
 
-**Deliverable:** `fullsend lock harness/code.yaml` generates a lock file
+**Deliverable:** `fullsend lock harness/code.yaml` generates a lock file with all resolved dependencies
 
 ### Phase 4: Runtime dependency loading
 
