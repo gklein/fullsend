@@ -4,6 +4,7 @@ description: >
   Use when the user wants to tag a release, cut a release candidate, or ship a
   new version. Also use when asking about release process, versioning, or how
   GoReleaser is configured.
+allowed-tools: Read, Grep, Glob
 ---
 
 # Cutting Releases
@@ -115,25 +116,16 @@ Check that the title, changelog, and binary assets look correct.
 
 ### 9. Install the binary locally
 
-Download the release binary for the current platform, unpack it, and install
-it to `~/bin/` with a versioned name:
+Ask the user where to install (default: `~/.local/bin/`), then run
+[scripts/install-binary.sh](scripts/install-binary.sh):
 
 ```bash
-ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-cd /tmp
-gh release download <tag> --pattern "fullsend_*_${OS}_${ARCH}.tar.gz" --clobber
-tar xzf fullsend_*_${OS}_${ARCH}.tar.gz fullsend
-mkdir -p ~/bin
-mv fullsend ~/bin/fullsend-<tag>
-chmod +x ~/bin/fullsend-<tag>
+bash scripts/install-binary.sh <tag> [install-dir]
 ```
 
-Verify it works and print the installed path:
-
-```
-~/bin/fullsend-<tag> --version
-```
+The script downloads the release archive, verifies its SHA-256 checksum
+against the release's `checksums.txt`, and installs the binary as
+`fullsend-<tag>` so multiple versions can coexist.
 
 ## Notes
 
