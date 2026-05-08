@@ -73,8 +73,8 @@ repos:
 
       - id: lint-adr-frontmatter
         name: lint ADR frontmatter
-        entry: uv run --script ./hack/lint-adr-frontmatter
-        language: system
+        entry: ./hack/lint-adr-frontmatter
+        language: script
         files: ^docs/ADRs/.*\.md$
         pass_filenames: false
 
