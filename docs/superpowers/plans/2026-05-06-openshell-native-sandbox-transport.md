@@ -109,7 +109,7 @@ func TestSanitizeDownload_EmptyDir(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go test ./internal/sandbox/ -run 'TestSanitizeDownload' -v`
+Run: `go test ./internal/sandbox/ -run 'TestSanitizeDownload' -v`
 Expected: compilation error — `sanitizeDownload` not defined.
 
 - [ ] **Step 3: Implement `sanitizeDownload`**
@@ -143,13 +143,13 @@ func sanitizeDownload(localDir string) error {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go test ./internal/sandbox/ -run 'TestSanitizeDownload' -v`
+Run: `go test ./internal/sandbox/ -run 'TestSanitizeDownload' -v`
 Expected: all 4 tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && git add internal/sandbox/sandbox.go internal/sandbox/sandbox_test.go && git commit -m "feat(sandbox): add sanitizeDownload for symlink and git hooks cleanup"
+git add internal/sandbox/sandbox.go internal/sandbox/sandbox_test.go && git commit -m "feat(sandbox): add sanitizeDownload for symlink and git hooks cleanup"
 ```
 
 ---
@@ -179,7 +179,7 @@ func TestExec_OpenshellNotInPath(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go test ./internal/sandbox/ -run 'TestExec_OpenshellNotInPath' -v`
+Run: `go test ./internal/sandbox/ -run 'TestExec_OpenshellNotInPath' -v`
 Expected: compilation error — `Exec` not defined.
 
 - [ ] **Step 3: Implement `Exec` and remove `SSH`**
@@ -226,18 +226,18 @@ Remove the old `SSH` function (lines 197-227) and `GetSSHConfig` function (lines
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go test ./internal/sandbox/ -run 'TestExec' -v`
+Run: `go test ./internal/sandbox/ -run 'TestExec' -v`
 Expected: PASS.
 
 - [ ] **Step 5: Run full sandbox tests**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go test ./internal/sandbox/ -v`
+Run: `go test ./internal/sandbox/ -v`
 Expected: all tests pass. (Build may fail due to callers of the old `SSH` — that's expected and will be fixed in Task 5.)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && git add internal/sandbox/sandbox.go internal/sandbox/sandbox_test.go && git commit -m "feat(sandbox): replace SSH with Exec using openshell sandbox exec"
+git add internal/sandbox/sandbox.go internal/sandbox/sandbox_test.go && git commit -m "feat(sandbox): replace SSH with Exec using openshell sandbox exec"
 ```
 
 ---
@@ -320,18 +320,18 @@ func ExecStreamReader(sandboxName, command string, timeout time.Duration, stderr
 
 - [ ] **Step 3: Verify sandbox package compiles**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go build ./internal/sandbox/`
+Run: `go build ./internal/sandbox/`
 Expected: success.
 
 - [ ] **Step 4: Run sandbox tests**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go test ./internal/sandbox/ -v`
+Run: `go test ./internal/sandbox/ -v`
 Expected: all tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && git add internal/sandbox/sandbox.go && git commit -m "feat(sandbox): replace SSHStream/SSHStreamReader with ExecStream/ExecStreamReader"
+git add internal/sandbox/sandbox.go && git commit -m "feat(sandbox): replace SSHStream/SSHStreamReader with ExecStream/ExecStreamReader"
 ```
 
 ---
@@ -412,18 +412,18 @@ func SafeDownload(sandboxName, remoteDir, localDir string) error {
 
 - [ ] **Step 4: Verify sandbox package compiles**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go build ./internal/sandbox/`
+Run: `go build ./internal/sandbox/`
 Expected: success.
 
 - [ ] **Step 5: Run sandbox tests**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go test ./internal/sandbox/ -v`
+Run: `go test ./internal/sandbox/ -v`
 Expected: all tests pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && git add internal/sandbox/sandbox.go && git commit -m "feat(sandbox): replace SCP/SCPFrom/RsyncFrom with Upload/Download/SafeDownload"
+git add internal/sandbox/sandbox.go && git commit -m "feat(sandbox): replace SCP/SCPFrom/RsyncFrom with Upload/Download/SafeDownload"
 ```
 
 ---
@@ -469,7 +469,7 @@ func TestOsRootContainment(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go test ./internal/sandbox/ -run 'TestOsRootContainment' -v`
+Run: `go test ./internal/sandbox/ -run 'TestOsRootContainment' -v`
 Expected: PASS (this test validates stdlib behavior, so it should pass immediately — the real migration test is that `ExtractTranscripts`/`ExtractOutputFiles` compile with the new API).
 
 - [ ] **Step 3: Update `ExtractTranscripts`**
@@ -606,18 +606,18 @@ The old test validates the `filepath.Clean` + `HasPrefix` pattern which is no lo
 
 - [ ] **Step 6: Verify sandbox package compiles**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go build ./internal/sandbox/`
+Run: `go build ./internal/sandbox/`
 Expected: success.
 
 - [ ] **Step 7: Run sandbox tests**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go test ./internal/sandbox/ -v`
+Run: `go test ./internal/sandbox/ -v`
 Expected: all tests pass.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && git add internal/sandbox/sandbox.go internal/sandbox/sandbox_test.go && git commit -m "feat(sandbox): update ExtractTranscripts/ExtractOutputFiles to use Exec/Download and os.Root"
+git add internal/sandbox/sandbox.go internal/sandbox/sandbox_test.go && git commit -m "feat(sandbox): update ExtractTranscripts/ExtractOutputFiles to use Exec/Download and os.Root"
 ```
 
 ---
@@ -634,7 +634,7 @@ After Tasks 2-5, the old `SSH`, `SSHStream`, `SSHStreamReader`, `SCP`, `SCPFrom`
 The `"context"` import is still needed by `ExecStreamReader`. Remove any imports that are no longer used. Run:
 
 ```bash
-cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go build ./internal/sandbox/ 2>&1
+go build ./internal/sandbox/ 2>&1
 ```
 
 If there are unused import errors, remove them. The following imports should remain:
@@ -650,18 +650,18 @@ If there are unused import errors, remove them. The following imports should rem
 
 - [ ] **Step 2: Verify no references to old functions remain in the sandbox package**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && grep -n 'func SSH\|func SCP\|func SCPFrom\|func RsyncFrom\|func GetSSHConfig\|func SSHStream' internal/sandbox/sandbox.go`
+Run: `grep -n 'func SSH\|func SCP\|func SCPFrom\|func RsyncFrom\|func GetSSHConfig\|func SSHStream' internal/sandbox/sandbox.go`
 Expected: no output (all old functions removed).
 
 - [ ] **Step 3: Run sandbox tests**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go test ./internal/sandbox/ -v`
+Run: `go test ./internal/sandbox/ -v`
 Expected: all tests pass.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && git add internal/sandbox/sandbox.go && git commit -m "refactor(sandbox): remove dead imports and verify clean state"
+git add internal/sandbox/sandbox.go && git commit -m "refactor(sandbox): remove dead imports and verify clean state"
 ```
 
 ---
@@ -890,23 +890,23 @@ Update the comment on line 646:
 
 - [ ] **Step 11: Verify full project compiles**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go build ./...`
+Run: `go build ./...`
 Expected: success — no compilation errors.
 
 - [ ] **Step 12: Run all tests**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && go test ./... 2>&1 | tail -30`
+Run: `go test ./... 2>&1 | tail -30`
 Expected: all tests pass.
 
 - [ ] **Step 13: Run vet and lint**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && make lint`
+Run: `make lint`
 Expected: no issues.
 
 - [ ] **Step 14: Commit**
 
 ```bash
-cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && git add internal/cli/run.go && git commit -m "refactor(cli): migrate run.go from SSH/SCP to openshell exec/upload/download
+git add internal/cli/run.go && git commit -m "refactor(cli): migrate run.go from SSH/SCP to openshell exec/upload/download
 
 Remove sshConfigPath plumbing from all internal functions. Update 38
 call sites to use the new sandbox.Exec/Upload/Download/SafeDownload API.
@@ -924,7 +924,7 @@ SSH config temp file creation and cleanup are no longer needed."
 
 Run:
 ```bash
-cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && grep -rn 'sandbox\.SSH\b\|sandbox\.SCP\b\|sandbox\.SCPFrom\|sandbox\.RsyncFrom\|sandbox\.SSHStream\|sandbox\.GetSSHConfig\|sshConfigPath' internal/ --include='*.go'
+grep -rn 'sandbox\.SSH\b\|sandbox\.SCP\b\|sandbox\.SCPFrom\|sandbox\.RsyncFrom\|sandbox\.SSHStream\|sandbox\.GetSSHConfig\|sshConfigPath' internal/ --include='*.go'
 ```
 Expected: no output.
 
@@ -932,21 +932,21 @@ Expected: no output.
 
 Run:
 ```bash
-cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && grep -n '"ssh"\|"scp"\|"rsync"' internal/sandbox/sandbox.go
+grep -n '"ssh"\|"scp"\|"rsync"' internal/sandbox/sandbox.go
 ```
 Expected: no output.
 
 - [ ] **Step 3: Run full test suite**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && make go-test`
+Run: `make go-test`
 Expected: all tests pass.
 
 - [ ] **Step 4: Run vet**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && make go-vet`
+Run: `make go-vet`
 Expected: clean.
 
 - [ ] **Step 5: Run lint**
 
-Run: `cd /home/manon/Workspace/fullsend/fullsend--261-go-native-ssh && make lint`
+Run: `make lint`
 Expected: clean.
