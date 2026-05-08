@@ -4,7 +4,7 @@ This directory holds the **admin installation UI**: a **Svelte 5 + Vite** single
 
 **Hardening (CORS + config model):** for review and security context, see [`docs/admin-oauth-worker.md`](../../docs/admin-oauth-worker.md) — **`GET /api/github/user`** when `Origin` is missing (Sec-Fetch-Site + Referer, path-limited), and **why there is no `ADMIN_OAUTH_ENABLED` flag** (Turnstile + 503 `missing_turnstile_keys`, etc.).
 
-Production packaging of this app for the public site is tracked in the repo-wide implementation plan (`docs/superpowers/plans/2026-04-12-fullsend-admin-spa.md`). Layout follows [ADR 0019](../../ADRs/0019-web-source-and-cloudflare-site-layout.md) (`web/` + root `package.json` + `cloudflare_site/`).
+Production packaging of this app for the public site is tracked in the repo-wide implementation plan (`docs/superpowers/plans/2026-04-12-fullsend-admin-spa.md`). Layout follows [ADR 0019](../../docs/ADRs/0019-web-source-and-cloudflare-site-layout.md) (`web/` + root `package.json` + `cloudflare_site/`).
 
 ## Tooling with mise
 

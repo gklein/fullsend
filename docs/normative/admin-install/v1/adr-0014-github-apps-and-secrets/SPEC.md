@@ -5,7 +5,7 @@
 
 **Normative references (code):** `internal/appsetup`, `internal/layers/secrets.go`, `internal/cli/admin.go`, `internal/config`, `internal/forge/github/types.go`, `internal/forge/forge.go` (`ConfigRepoName`).
 
-**Related decisions:** This spec is the detailed surface for credentials and app lifecycle; it assumes the org config repository name and layout are decided elsewhere ([ADR 0012](../../../../ADRs/0012-admin-install-fullsend-repo-files-v1.md) when accepted) and that repository enrollment is covered by [ADR 0013](../../../../ADRs/0013-admin-install-enrollment-v1.md) when accepted.
+**Related decisions:** This spec is the detailed surface for credentials and app lifecycle; it assumes the org config repository name and layout are decided elsewhere ([ADR 0012](../../../../ADRs/0012-admin-install-fullsend-repo-files-v1.md) when accepted) and that repository enrollment is covered by [ADR 0013](../../../../ADRs/0013-admin-install-repo-enrollment-v1.md) when accepted.
 
 ---
 
