@@ -463,7 +463,7 @@ jobs:
         run: |
           gh label create "fullsend-no-fix" --repo "$REPO" \
             --description "Skip bot-triggered fix agent runs" --color "FBCA04" \
-            --force 2>/dev/null || true
+            2>/dev/null || true
           gh pr edit "$PR_NUMBER" --repo "$REPO" \
             --add-label "fullsend-no-fix"
           gh pr comment "$PR_NUMBER" --repo "$REPO" \
