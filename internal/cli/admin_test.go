@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -333,6 +334,9 @@ func setupTestConfig(repos map[string]bool) *config.OrgConfig {
 			enabledRepos = append(enabledRepos, name)
 		}
 	}
+	// Sort to ensure deterministic order despite map iteration being non-deterministic.
+	sort.Strings(repoNames)
+	sort.Strings(enabledRepos)
 	return config.NewOrgConfig(repoNames, enabledRepos, []string{"triage"}, nil, "")
 }
 

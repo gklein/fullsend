@@ -1108,6 +1108,8 @@ func newDisableReposCmd() *cobra.Command {
 }
 
 // runEnableRepos enables the specified repositories for fullsend enrollment.
+// The yolo parameter is accepted for signature compatibility with reposRunFunc but is unused
+// since enable has no destructive operations that require confirmation.
 func runEnableRepos(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool, yolo bool) error {
 	printer.Banner()
 	printer.Blank()
@@ -1143,23 +1145,33 @@ func runEnableRepos(ctx context.Context, client forge.Client, printer *ui.Printe
 		sort.Strings(reposToEnable)
 		printer.StepDone(fmt.Sprintf("Found %d repositories to enable", len(reposToEnable)))
 	} else {
-		// Validate provided repo names.
+		// Validate provided repo names against org repos.
+		// Fetch org repos once and validate against the list instead of making
+		// one API call per repo (O(n) → O(1) API calls).
 		printer.StepStart("Validating repository names")
+
+		allOrgRepos, err := client.ListOrgRepos(ctx, org)
+		if err != nil {
+			printer.StepFail("Failed to list organization repositories")
+			printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
+			return fmt.Errorf("listing org repos: %w", err)
+		}
+
+		// Build a set of valid repo names for O(1) lookup.
+		validRepos := make(map[string]bool, len(allOrgRepos))
+		for _, r := range allOrgRepos {
+			validRepos[r.Name] = true
+		}
+
+		// Validate each requested repo.
 		for _, repo := range repos {
 			if repo == forge.ConfigRepoName {
 				printer.StepFail("Cannot enable .fullsend repository")
 				return fmt.Errorf("cannot enable .fullsend repository itself")
 			}
-			// Check if repo exists in org.
-			_, err := client.GetRepo(ctx, org, repo)
-			if err != nil {
-				if forge.IsNotFound(err) {
-					printer.StepFail(fmt.Sprintf("Repository %s not found", repo))
-					return fmt.Errorf("repository %s not found in %s", repo, org)
-				}
-				printer.StepFail(fmt.Sprintf("Failed to check repository %s", repo))
-				printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
-				return fmt.Errorf("checking repository %s: %w", repo, err)
+			if !validRepos[repo] {
+				printer.StepFail(fmt.Sprintf("Repository %s not found", repo))
+				return fmt.Errorf("repository %s not found in %s", repo, org)
 			}
 		}
 		reposToEnable = repos
