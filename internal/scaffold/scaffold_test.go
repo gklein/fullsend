@@ -3,12 +3,15 @@ package scaffold
 import (
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"github.com/fullsend-ai/fullsend/internal/harness"
 )
@@ -499,6 +502,70 @@ func TestPrioritizeSchedulerWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "RICE Score")
 	assert.Contains(t, s, "prioritize.yml")
 	assert.Contains(t, s, "FULLSEND_PROJECT_NUMBER")
+	assert.Contains(t, s, "FULLSEND_PROJECT_NUMBER is not set; skipping prioritize scheduler")
+	guardIndex := strings.Index(s, `if [[ -z "${PROJECT_NUMBER}" ]]; then`)
+	projectViewIndex := strings.Index(s, `gh project view "${PROJECT_NUMBER}"`)
+	require.NotEqual(t, -1, guardIndex)
+	require.NotEqual(t, -1, projectViewIndex)
+	assert.Less(t, guardIndex, projectViewIndex, "PROJECT_NUMBER must be checked before gh project view")
+}
+
+func TestPrioritizeSchedulerSkipsWhenProjectNumberUnset(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/prioritize-scheduler.yml")
+	require.NoError(t, err)
+
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(content, &workflow))
+
+	dispatchJob, ok := workflow.Jobs["dispatch"]
+	require.True(t, ok, "dispatch job should exist")
+
+	var runScript string
+	for _, step := range dispatchJob.Steps {
+		if step.Name == "Find issues and dispatch prioritize runs" {
+			runScript = step.Run
+			break
+		}
+	}
+	require.NotEmpty(t, runScript, "prioritize scheduler dispatch script should exist")
+
+	tmpDir := t.TempDir()
+	binDir := filepath.Join(tmpDir, "bin")
+	require.NoError(t, os.Mkdir(binDir, 0o755))
+
+	ghLog := filepath.Join(tmpDir, "gh-calls.log")
+	fakeGH := "#!/usr/bin/env bash\n" +
+		"printf 'gh called: %s\\n' \"$*\" >> " + strconv.Quote(ghLog) + "\n" +
+		"exit 99\n"
+	ghPath := filepath.Join(binDir, "gh")
+	require.NoError(t, os.WriteFile(ghPath, []byte(fakeGH), 0o755))
+
+	scriptPath := filepath.Join(tmpDir, "prioritize-scheduler-run.sh")
+	require.NoError(t, os.WriteFile(scriptPath, []byte(runScript), 0o755))
+
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Env = []string{
+		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PROJECT_NUMBER=",
+		"ORG=test-org",
+		"GH_TOKEN=test-token",
+		"WIP_LIMIT=5",
+		"STALE_THRESHOLD=7d",
+		"GITHUB_REPOSITORY=test-org/.fullsend",
+	}
+
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	assert.Contains(t, string(output), "FULLSEND_PROJECT_NUMBER is not set; skipping prioritize scheduler")
+	_, statErr := os.Stat(ghLog)
+	assert.True(t, os.IsNotExist(statErr), "gh should not be called when PROJECT_NUMBER is unset")
 }
 
 func TestPrioritizeAgentPromptContent(t *testing.T) {
