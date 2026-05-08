@@ -579,7 +579,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		findingsDir := filepath.Join(runDir, "security")
 		if err := os.MkdirAll(findingsDir, 0o755); err == nil {
 			remoteFindingsDir := sandbox.SandboxWorkspace + "/.security/"
-			if scpErr := sandbox.Download(sandboxName, remoteFindingsDir, findingsDir); scpErr != nil {
+			if dlErr := sandbox.Download(sandboxName, remoteFindingsDir, findingsDir); dlErr != nil {
 				printer.StepInfo("No sandbox security findings to extract")
 			} else {
 				printer.StepDone("Security findings extracted")

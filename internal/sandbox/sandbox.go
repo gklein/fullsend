@@ -377,8 +377,8 @@ func ExtractTranscripts(sandboxName, agentName, outputDir string) error {
 
 		localPath := filepath.Join(outputDir, localName)
 		os.Remove(localPath)
-		if scpErr := DownloadFile(sandboxName, remotePath, localPath); scpErr != nil {
-			fmt.Fprintf(os.Stderr, "  [%s] Failed to copy transcript: %v\n", agentName, scpErr)
+		if dlErr := DownloadFile(sandboxName, remotePath, localPath); dlErr != nil {
+			fmt.Fprintf(os.Stderr, "  [%s] Failed to copy transcript: %v\n", agentName, dlErr)
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "  [%s] Saved transcript: %s\n", agentName, localName)
