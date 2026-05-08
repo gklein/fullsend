@@ -297,6 +297,8 @@ func Upload(sandboxName, localPath, remotePath string) error {
 }
 
 // Download copies a file or directory from a sandbox to the local machine.
+// The localPath is always treated as a directory by openshell — for single-file
+// downloads use DownloadFile instead.
 func Download(sandboxName, remotePath, localPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), transferTimeout)
 	defer cancel()
@@ -312,6 +314,24 @@ func Download(sandboxName, remotePath, localPath string) error {
 			return fmt.Errorf("download from sandbox %q timed out after %s", sandboxName, transferTimeout)
 		}
 		return fmt.Errorf("download from sandbox %q failed: %s: %w", sandboxName, string(out), err)
+	}
+	return nil
+}
+
+// DownloadFile copies a single file from a sandbox to a specific local path.
+// openshell sandbox download always treats the destination as a directory, so
+// this downloads to the parent directory and renames if the resulting filename
+// differs from the desired local name.
+func DownloadFile(sandboxName, remotePath, localPath string) error {
+	destDir := filepath.Dir(localPath)
+	downloadedPath := filepath.Join(destDir, filepath.Base(remotePath))
+
+	os.Remove(downloadedPath)
+	if err := Download(sandboxName, remotePath, destDir); err != nil {
+		return err
+	}
+	if downloadedPath != localPath {
+		return os.Rename(downloadedPath, localPath)
 	}
 	return nil
 }
@@ -387,7 +407,7 @@ func ExtractTranscripts(sandboxName, agentName, outputDir string) error {
 
 		localPath := filepath.Join(outputDir, localName)
 		os.Remove(localPath)
-		if scpErr := Download(sandboxName, remotePath, localPath); scpErr != nil {
+		if scpErr := DownloadFile(sandboxName, remotePath, localPath); scpErr != nil {
 			fmt.Fprintf(os.Stderr, "  [%s] Failed to copy transcript: %v\n", agentName, scpErr)
 			continue
 		}
@@ -450,7 +470,7 @@ func ExtractOutputFiles(sandboxName, remoteDir, localDir string) ([]string, erro
 		localPath := filepath.Join(localDir, relPath)
 		os.Remove(localPath)
 
-		if dlErr := Download(sandboxName, remotePath, localPath); dlErr != nil {
+		if dlErr := DownloadFile(sandboxName, remotePath, localPath); dlErr != nil {
 			fmt.Fprintf(os.Stderr, "  Failed to copy %s: %v\n", relPath, dlErr)
 			continue
 		}
