@@ -159,18 +159,20 @@ This applies to all resource types: agents can reference skills, skills can refe
 
 ### Content-Addressed Caching
 
-Fetched resources are cached locally using content addressing:
+Fetched resources are cached in the repository's workspace using content addressing:
 
 ```
-~/.cache/fullsend/resources/
+.fullsend-cache/resources/
   sha256/
     abc123.../
       metadata.json       # {url, fetch_time, content_type, headers}
       content             # the actual fetched content
 ```
 
+**Cache location:** The cache is stored in the repository's workspace (`.fullsend-cache/` directory). In ephemeral CI/CD environments like GitHub Actions, the cache is rebuilt on each run unless the platform's native caching mechanisms (e.g., GitHub Actions cache, GitLab CI cache) are used to persist it across workflow runs.
+
 Cache key: `SHA256(content)`
-Lookup: `SHA256(URL) → cache_manifest.db → SHA256(content) → cached file`
+Lookup: `SHA256(URL + hash) → cache_manifest.db → SHA256(content) → cached file`
 
 **Why content-addressed?** If two different URLs serve identical content, they share a cache entry. This deduplicates storage and makes integrity verification uniform.
 
@@ -192,9 +194,7 @@ When present, the runner:
 3. Compares to the declared hash
 4. Rejects if mismatch
 
-If no hash is provided, the resource is fetched and used (after validation), but the runner logs a warning: "Resource fetched without integrity pin."
-
-**Recommendation:** Org-level policy should require integrity hashes for all production harnesses. Dev/experimental harnesses can omit hashes for rapid iteration.
+**Mandatory hash pinning:** All remote resources must include a SHA256 integrity hash in the URL fragment (`#sha256=...`). URLs without hashes are rejected with an error. This requirement applies uniformly to all remote resources regardless of source (fullsend-ai repositories, community sources, or external URLs).
 
 ### SSRF Protection
 
@@ -514,12 +514,12 @@ import (
     "strings"
 )
 
-// IsURL returns true if s is an HTTP(S) URL.
-// Note: This intentionally accepts both http:// and https:// for classification purposes.
-// FetchURL enforces the HTTPS-only requirement at fetch time.
+// IsURL returns true if s is an HTTPS URL.
+// Only https:// URLs are accepted for remote resources. http:// URLs are rejected
+// to avoid confusion and provide clear error messages.
 func IsURL(s string) bool {
     u, err := url.Parse(s)
-    return err == nil && (u.Scheme == "http" || u.Scheme == "https")
+    return err == nil && u.Scheme == "https"
 }
 
 // isAbsPath returns true if s is an absolute file path.
@@ -567,6 +567,7 @@ import (
     "net"
     "net/http"
     "net/url"
+    "strings"
     "time"
 )
 
@@ -689,15 +690,16 @@ type CacheEntry struct {
     SHA256      string    `json:"sha256"`
 }
 
-// CachePath returns ~/.cache/fullsend/resources/sha256/<hash>/
-func CachePath(hash string) string {
-    home, _ := os.UserHomeDir()
-    return filepath.Join(home, ".cache", "fullsend", "resources", "sha256", hash)
+// CachePath returns .fullsend-cache/resources/sha256/<hash>/ relative to workspace root
+func CachePath(workspaceRoot, hash string) string {
+    return filepath.Join(workspaceRoot, ".fullsend-cache", "resources", "sha256", hash)
 }
 
 // CacheGet retrieves cached content by hash. Returns nil if not cached.
+// Note: Actual implementation would accept workspaceRoot parameter.
 func CacheGet(hash string) ([]byte, *CacheEntry, error) {
-    dir := CachePath(hash)
+    workspaceRoot := "." // illustrative: would be passed as parameter
+    dir := CachePath(workspaceRoot, hash)
     metaPath := filepath.Join(dir, "metadata.json")
     contentPath := filepath.Join(dir, "content")
 
@@ -723,9 +725,11 @@ func CacheGet(hash string) ([]byte, *CacheEntry, error) {
 }
 
 // CachePut stores content in the cache.
+// Note: Actual implementation would accept workspaceRoot parameter.
 func CachePut(url string, content []byte) error {
     hash := ComputeSHA256(content)
-    dir := CachePath(hash)
+    workspaceRoot := "." // illustrative: would be passed as parameter
+    dir := CachePath(workspaceRoot, hash)
 
     if err := os.MkdirAll(dir, 0755); err != nil {
         return err
@@ -736,7 +740,10 @@ func CachePut(url string, content []byte) error {
         FetchTime: time.Now(),
         SHA256:    hash,
     }
-    metaData, _ := json.MarshalIndent(entry, "", "  ")
+    metaData, err := json.MarshalIndent(entry, "", "  ")
+    if err != nil {
+        return fmt.Errorf("marshaling cache metadata: %w", err)
+    }
     if err := os.WriteFile(filepath.Join(dir, "metadata.json"), metaData, 0644); err != nil {
         return err
     }
@@ -963,12 +970,18 @@ type FetchLog struct {
     AllowedBy  string    `json:"allowed_by"`  // which allowed_remote_resources entry matched
 }
 
+// LogFetch appends a fetch record to the audit log.
+// Note: Audit logs are kept in user home directory for persistence across workspaces.
+// This is configurable via FULLSEND_AUDIT_DIR environment variable.
 func LogFetch(log FetchLog) error {
-    home, err := os.UserHomeDir()
-    if err != nil {
-        return fmt.Errorf("getting home directory: %w", err)
+    logDir := os.Getenv("FULLSEND_AUDIT_DIR")
+    if logDir == "" {
+        home, err := os.UserHomeDir()
+        if err != nil {
+            return fmt.Errorf("getting home directory for audit logs: %w", err)
+        }
+        logDir = filepath.Join(home, ".cache", "fullsend", "audit")
     }
-    logDir := filepath.Join(home, ".cache", "fullsend", "audit")
     if err := os.MkdirAll(logDir, 0755); err != nil {
         return fmt.Errorf("creating audit log directory: %w", err)
     }
