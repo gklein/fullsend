@@ -41,6 +41,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [[ -z "${PROJECT_NUMBER}" ]]; then
+            echo "::notice::FULLSEND_PROJECT_NUMBER is not set; skipping prioritize scheduler."
+            exit 0
+          fi
+
           # --- Parse stale threshold into seconds ---
           parse_threshold() {
             local val="${1%[dh]}"
