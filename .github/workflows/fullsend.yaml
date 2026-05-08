@@ -399,6 +399,61 @@ jobs:
             -f source_repo="$SOURCE_REPO" \
             -f event_payload="$EVENT_PAYLOAD"
 
+  dispatch-prioritize:
+    runs-on: ubuntu-latest
+    outputs:
+      agent: ${{ steps.dispatch.outputs.agent }}
+    concurrency:
+      group: prioritize-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    if: >-
+      github.event_name == 'issue_comment'
+        && !github.event.issue.pull_request
+        && github.event.comment.user.type != 'Bot'
+        && (
+          github.event.comment.body == '/prioritize'
+          || startsWith(github.event.comment.body, '/prioritize ')
+          || startsWith(github.event.comment.body, format('{0}{1}', '/prioritize', fromJSON('"\n"')))
+        )
+        && (
+          github.event.comment.author_association == 'OWNER'
+          || github.event.comment.author_association == 'MEMBER'
+          || github.event.comment.author_association == 'COLLABORATOR'
+        )
+    steps:
+      - name: Build minimal payload
+        id: payload
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_HTML_URL: ${{ github.event.issue.html_url }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          PAYLOAD=$(jq -cn \
+            --arg in "${ISSUE_NUMBER}" \
+            --arg iu "${ISSUE_HTML_URL}" \
+            --arg cb "${COMMENT_BODY:-}" \
+            '{issue: {number: ($in | tonumber), html_url: $iu},
+              comment: {body: $cb}}')
+          echo "json=$PAYLOAD" >> "$GITHUB_OUTPUT"
+      - name: Dispatch prioritize stage
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.FULLSEND_DISPATCH_TOKEN }}
+          EVENT_PAYLOAD: ${{ steps.payload.outputs.json }}
+          EVENT_TYPE: ${{ github.event_name }}
+          SOURCE_REPO: ${{ github.repository }}
+          DISPATCH_REPO: ${{ github.repository_owner }}/.fullsend
+        run: |
+          DISPATCH_URL=$(gh workflow run dispatch.yml \
+            --repo "$DISPATCH_REPO" \
+            -f stage=prioritize \
+            -f event_type="$EVENT_TYPE" \
+            -f source_repo="$SOURCE_REPO" \
+            -f event_payload="$EVENT_PAYLOAD")
+          echo "::notice::Dispatched prioritize → ${DISPATCH_URL}"
+          echo "agent=prioritize" >> "$GITHUB_OUTPUT"
+
   dispatch-gh-classify:
     runs-on: ubuntu-latest
     if: >-
@@ -482,6 +537,7 @@ jobs:
         dispatch-review,
         dispatch-fix-bot,
         dispatch-fix-human,
+        dispatch-prioritize,
       ]
     env:
       GH_TOKEN: ${{ github.token }}
@@ -493,7 +549,8 @@ jobs:
              || needs.dispatch-code.outputs.agent
              || needs.dispatch-review.outputs.agent
              || needs.dispatch-fix-bot.outputs.agent
-             || needs.dispatch-fix-human.outputs.agent }}
+             || needs.dispatch-fix-human.outputs.agent
+             || needs.dispatch-prioritize.outputs.agent }}
           SHIM_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ITEM_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
         run: |
