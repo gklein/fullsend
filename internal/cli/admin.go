@@ -186,8 +186,35 @@ func newInstallCmd() *cobra.Command {
 				inferenceProviderName = loadExistingInferenceProvider(ctx, client, org)
 			}
 
+			// Prompt for enrollment choice: all or none.
+			enrollAll, err := promptEnrollment(printer, os.Stdin)
+			if err != nil {
+				return err
+			}
+
+			var repos []string
+			var allRepos []forge.Repository
+			if enrollAll {
+				// Discover repos and filter out .fullsend.
+				discovered, err := client.ListOrgRepos(ctx, org)
+				if err != nil {
+					return fmt.Errorf("listing org repos: %w", err)
+				}
+				allRepos = discovered
+				for _, r := range allRepos {
+					if r.Name != forge.ConfigRepoName {
+						repos = append(repos, r.Name)
+					}
+				}
+				printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
+			} else {
+				printer.StepInfo("No repositories will be enrolled during install")
+				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use: fullsend admin enable repos %s <repo-name> or --all", org))
+			}
+			printer.Blank()
+
 			if dryRun {
-				return runDryRun(ctx, client, printer, org, nil, roles, inferenceProvider, inferenceProviderName)
+				return runDryRun(ctx, client, printer, org, repos, roles, inferenceProvider, inferenceProviderName)
 			}
 
 			// Collect agent credentials via app setup.
@@ -203,32 +230,7 @@ func newInstallCmd() *cobra.Command {
 				agentCreds = creds
 			}
 
-			// Prompt for enrollment choice: all or none.
-			enrollAll, err := promptEnrollment(printer, os.Stdin)
-			if err != nil {
-				return err
-			}
-
-			var repos []string
-			if enrollAll {
-				// Discover repos and filter out .fullsend.
-				allRepos, err := client.ListOrgRepos(ctx, org)
-				if err != nil {
-					return fmt.Errorf("listing org repos: %w", err)
-				}
-				for _, r := range allRepos {
-					if r.Name != forge.ConfigRepoName {
-						repos = append(repos, r.Name)
-					}
-				}
-				printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
-			} else {
-				printer.StepInfo("No repositories will be enrolled during install")
-				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use: fullsend admin enable repos %s <repo-name> or --all", org))
-			}
-			printer.Blank()
-
-			return runInstall(ctx, client, printer, org, repos, roles, agentCreds, inferenceProvider, inferenceProviderName, vendorBinary)
+			return runInstall(ctx, client, printer, org, repos, roles, agentCreds, inferenceProvider, inferenceProviderName, vendorBinary, allRepos)
 		},
 	}
 
@@ -522,18 +524,26 @@ func validateEnabledRepos(enabledRepos, discoveredNames []string) error {
 }
 
 // runInstall performs the full installation.
-func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, agentCreds []layers.AgentCredentials, inferenceProvider inference.Provider, inferenceProviderName string, vendorBinary bool) error {
-	printer.Header("Discovering repositories")
+// If discoveredRepos is non-nil, it will be used instead of calling ListOrgRepos.
+func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, agentCreds []layers.AgentCredentials, inferenceProvider inference.Provider, inferenceProviderName string, vendorBinary bool, discoveredRepos []forge.Repository) error {
+	var allRepos []forge.Repository
+	var err error
 
-	allRepos, err := client.ListOrgRepos(ctx, org)
-	if err != nil {
-		return fmt.Errorf("listing org repos: %w", err)
+	if discoveredRepos != nil {
+		allRepos = discoveredRepos
+		printer.Header("Using discovered repositories")
+		printer.StepDone(fmt.Sprintf("Found %d repositories", len(allRepos)))
+	} else {
+		printer.Header("Discovering repositories")
+		allRepos, err = client.ListOrgRepos(ctx, org)
+		if err != nil {
+			return fmt.Errorf("listing org repos: %w", err)
+		}
+		printer.StepDone(fmt.Sprintf("Found %d repositories", len(allRepos)))
 	}
 
 	repoNames := repoNameList(allRepos)
 	hasPrivate := hasPrivateRepos(allRepos)
-
-	printer.StepDone(fmt.Sprintf("Found %d repositories", len(allRepos)))
 	printer.Blank()
 
 	// Validate that every enabled repository matches a discovered repo.
