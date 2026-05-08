@@ -291,27 +291,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	}()
 	printer.StepDone(fmt.Sprintf("Sandbox created (%.1fs)", time.Since(createStart).Seconds()))
 
-	// 4. Get SSH config.
-	sshConfig, err := sandbox.GetSSHConfig(sandboxName)
-	if err != nil {
-		printer.StepFail("Failed to get SSH config")
-		return err
-	}
-
-	sshConfigFile, err := os.CreateTemp("", "openshell-ssh-*.config")
-	if err != nil {
-		return fmt.Errorf("creating SSH config temp file: %w", err)
-	}
-	sshConfigPath := sshConfigFile.Name()
-	if _, err := sshConfigFile.WriteString(sshConfig); err != nil {
-		sshConfigFile.Close()
-		os.Remove(sshConfigPath)
-		return fmt.Errorf("writing SSH config: %w", err)
-	}
-	sshConfigFile.Close()
-	defer os.Remove(sshConfigPath)
-
-	// 6. Resolve target repo path (needed by bootstrap for env vars).
+	// 4. Resolve target repo path (needed by bootstrap for env vars).
 	repoSrc, err := filepath.Abs(targetRepo)
 	if err != nil {
 		return fmt.Errorf("resolving target repo path: %w", err)
@@ -322,7 +302,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	// 7. Bootstrap sandbox.
 	bootstrapStart := time.Now()
 	printer.StepStart("Bootstrapping sandbox")
-	if err := bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary, h); err != nil {
+	if err := bootstrapSandbox(sandboxName, repoDir, fullsendBinary, h); err != nil {
 		printer.StepFail("Failed to bootstrap sandbox")
 		return err
 	}
@@ -332,10 +312,10 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	copyStart := time.Now()
 	printer.StepStart("Copying project code into sandbox")
 	mkRepoCmd := fmt.Sprintf("mkdir -p %s", repoDir)
-	if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, mkRepoCmd, 10*time.Second); err != nil {
+	if _, _, _, err := sandbox.Exec(sandboxName, mkRepoCmd, 10*time.Second); err != nil {
 		return fmt.Errorf("creating repo dir in sandbox: %w", err)
 	}
-	if err := sandbox.SCP(sshConfigPath, sandboxName, repoSrc+"/.", repoDir+"/"); err != nil {
+	if err := sandbox.Upload(sandboxName, repoSrc+"/.", repoDir+"/"); err != nil {
 		printer.StepFail("Failed to copy project code")
 		return fmt.Errorf("copying project code: %w", err)
 	}
@@ -349,12 +329,12 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	if !hasAgentsMD(repoSrc) {
 		orgAgentsMD := filepath.Join(absFullsendDir, "AGENTS.md")
 		if _, err := os.Stat(orgAgentsMD); err == nil {
-			if err := sandbox.SCP(sshConfigPath, sandboxName, orgAgentsMD, repoDir+"/AGENTS.md"); err != nil {
+			if err := sandbox.Upload(sandboxName, orgAgentsMD, repoDir+"/AGENTS.md"); err != nil {
 				printer.StepWarn("Could not inject org AGENTS.md: " + err.Error())
 			} else {
 				// Hide the injected file from git status so agents don't stage it.
 				excludeCmd := fmt.Sprintf("echo 'AGENTS.md' >> %s/.git/info/exclude", repoDir)
-				if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, excludeCmd, 5*time.Second); err != nil {
+				if _, _, _, err := sandbox.Exec(sandboxName, excludeCmd, 5*time.Second); err != nil {
 					printer.StepWarn("Could not add AGENTS.md to git exclude: " + err.Error())
 				}
 				printer.StepDone("Injected org-level AGENTS.md (target repo has none)")
@@ -368,10 +348,10 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		printer.StepStart("Copying agent-input files into sandbox")
 		remoteInput := fmt.Sprintf("%s/agent-input", sandbox.SandboxWorkspace)
 		mkInputCmd := fmt.Sprintf("mkdir -p %s", remoteInput)
-		if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, mkInputCmd, 10*time.Second); err != nil {
+		if _, _, _, err := sandbox.Exec(sandboxName, mkInputCmd, 10*time.Second); err != nil {
 			return fmt.Errorf("creating agent-input dir in sandbox: %w", err)
 		}
-		if err := sandbox.SCP(sshConfigPath, sandboxName, h.AgentInput+"/.", remoteInput+"/"); err != nil {
+		if err := sandbox.Upload(sandboxName, h.AgentInput+"/.", remoteInput+"/"); err != nil {
 			printer.StepFail("Failed to copy agent-input files")
 			return fmt.Errorf("copying agent-input files: %w", err)
 		}
@@ -400,7 +380,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	// 9a. Generate trace ID for security finding correlation.
 	traceID := security.GenerateTraceID()
 	printer.KeyValue("Trace ID", traceID)
-	if err := injectTraceID(sshConfigPath, sandboxName, traceID); err != nil {
+	if err := injectTraceID(sandboxName, traceID); err != nil {
 		printer.StepWarn("Could not inject trace ID into sandbox: " + err.Error())
 	}
 
@@ -410,11 +390,11 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	if h.SecurityEnabled() {
 		printer.StepStart("Running pre-agent security scan")
 		scanCmd := buildScanContextCommand(repoDir, traceID)
-		stdout, stderr, exitCode, sshErr := sandbox.SSH(sshConfigPath, sandboxName, scanCmd, 60*time.Second)
-		if sshErr != nil {
-			printer.StepFail("Security scan SSH failed: " + sshErr.Error())
+		stdout, stderr, exitCode, execErr := sandbox.Exec(sandboxName, scanCmd, 60*time.Second)
+		if execErr != nil {
+			printer.StepFail("Security scan failed: " + execErr.Error())
 			if h.FailModeClosed() {
-				return fmt.Errorf("pre-agent security scan failed: %w", sshErr)
+				return fmt.Errorf("pre-agent security scan failed: %w", execErr)
 			}
 			printer.StepWarn("Continuing despite scan failure (fail_mode: open)")
 		} else if exitCode != 0 {
@@ -461,7 +441,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 			oidcWg.Add(1)
 			go func() {
 				defer oidcWg.Done()
-				runOIDCRefresh(oidcCtx, sshConfigPath, sandboxName, oidcURL, oidcAuth, printer)
+				runOIDCRefresh(oidcCtx, sandboxName, oidcURL, oidcAuth, printer)
 			}()
 		}
 	}
@@ -493,7 +473,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		if iteration > 1 {
 			clearCmd := fmt.Sprintf("rm -rf %s/output/* %s/*.jsonl",
 				sandbox.SandboxWorkspace, sandbox.SandboxClaudeConfig)
-			if _, _, _, clearErr := sandbox.SSH(sshConfigPath, sandboxName, clearCmd, 10*time.Second); clearErr != nil {
+			if _, _, _, clearErr := sandbox.Exec(sandboxName, clearCmd, 10*time.Second); clearErr != nil {
 				printer.StepWarn("Failed to clear sandbox output: " + clearErr.Error())
 			}
 		}
@@ -507,7 +487,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		go runHeartbeat(printer, agentStart, timeout, heartbeatDone)
 
 		var metrics RunMetrics
-		exitCode, runErr := runAgentWithProgress(sshConfigPath, sandboxName, claudeCmd, timeout, printer, agentStart, &metrics)
+		exitCode, runErr := runAgentWithProgress(sandboxName, claudeCmd, timeout, printer, agentStart, &metrics)
 		close(heartbeatDone)
 
 		if runErr != nil {
@@ -528,7 +508,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		extractStart := time.Now()
 		printer.StepStart("Extracting output files")
 		remoteSrc := fmt.Sprintf("%s/output", sandbox.SandboxWorkspace)
-		extracted, extractErr := sandbox.ExtractOutputFiles(sshConfigPath, sandboxName, remoteSrc, iterOutputDir)
+		extracted, extractErr := sandbox.ExtractOutputFiles(sandboxName, remoteSrc, iterOutputDir)
 		if extractErr != nil {
 			printer.StepWarn("Failed to extract output files: " + extractErr.Error())
 		} else if len(extracted) == 0 {
@@ -543,18 +523,17 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		// 9c. Extract transcripts for this iteration.
 		transcriptStart := time.Now()
 		printer.StepStart("Extracting transcripts")
-		if err := sandbox.ExtractTranscripts(sshConfigPath, sandboxName, agentName, iterTranscriptDir); err != nil {
+		if err := sandbox.ExtractTranscripts(sandboxName, agentName, iterTranscriptDir); err != nil {
 			printer.StepWarn("Failed to extract transcripts: " + err.Error())
 		} else {
 			printer.StepDone(fmt.Sprintf("Transcripts extracted (%.1fs)", time.Since(transcriptStart).Seconds()))
 		}
 
-		// 9d. Extract target repo back to host. Uses rsync with --no-links
-		// and --exclude .git/hooks/ to prevent sandbox escape via symlinks
-		// or injected git hooks.
+		// 9d. Extract target repo back to host. SafeDownload removes symlinks
+		// and .git/hooks/ after download to prevent sandbox escape.
 		repoExtractStart := time.Now()
 		printer.StepStart("Extracting target repo")
-		if err := sandbox.RsyncFrom(sshConfigPath, sandboxName, repoDir, repoSrc); err != nil {
+		if err := sandbox.SafeDownload(sandboxName, repoDir, repoSrc); err != nil {
 			printer.StepWarn("Failed to extract target repo: " + err.Error())
 		} else {
 			printer.StepDone(fmt.Sprintf("Target repo extracted to %s (%.1fs)", repoSrc, time.Since(repoExtractStart).Seconds()))
@@ -600,7 +579,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		findingsDir := filepath.Join(runDir, "security")
 		if err := os.MkdirAll(findingsDir, 0o755); err == nil {
 			remoteFindingsDir := sandbox.SandboxWorkspace + "/.security/"
-			if scpErr := sandbox.SCPFrom(sshConfigPath, sandboxName, remoteFindingsDir, findingsDir); scpErr != nil {
+			if dlErr := sandbox.Download(sandboxName, remoteFindingsDir, findingsDir); dlErr != nil {
 				printer.StepInfo("No sandbox security findings to extract")
 			} else {
 				printer.StepDone("Security findings extracted")
@@ -631,14 +610,14 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	return nil
 }
 
-func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string, h *harness.Harness) error {
+func bootstrapSandbox(sandboxName, repoDir, fullsendBinary string, h *harness.Harness) error {
 	// Create workspace structure and Claude config dir for transcripts.
 	// Agent and skill definitions go in CLAUDE_CONFIG_DIR so `claude --agent`
 	// finds them regardless of the repo's own .claude/ directory. When
 	// CLAUDE_CONFIG_DIR is set, Claude uses it instead of ~/.claude/.
 	mkdirCmd := fmt.Sprintf("mkdir -p %s/agents %s/skills %s/hooks %s/bin %s/.env.d %s/.security %s %s/.claude/hooks",
 		sandbox.SandboxClaudeConfig, sandbox.SandboxClaudeConfig, sandbox.SandboxClaudeConfig, sandbox.SandboxWorkspace, sandbox.SandboxWorkspace, sandbox.SandboxWorkspace, sandbox.SandboxClaudeConfig, sandbox.SandboxWorkspace)
-	if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, mkdirCmd, 10*time.Second); err != nil {
+	if _, _, _, err := sandbox.Exec(sandboxName, mkdirCmd, 10*time.Second); err != nil {
 		return fmt.Errorf("creating workspace dirs: %w", err)
 	}
 
@@ -678,11 +657,11 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string
 			return fmt.Errorf("fullsend binary %q is not valid for the sandbox: %w", localBinary, err)
 		}
 		remoteBinary := fmt.Sprintf("%s/bin/fullsend", sandbox.SandboxWorkspace)
-		if err := sandbox.SCP(sshConfigPath, sandboxName, localBinary, remoteBinary); err != nil {
+		if err := sandbox.Upload(sandboxName, localBinary, remoteBinary); err != nil {
 			return fmt.Errorf("copying fullsend binary to sandbox: %w", err)
 		}
 		chmodCmd := fmt.Sprintf("chmod +x %s", remoteBinary)
-		if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, chmodCmd, 10*time.Second); err != nil {
+		if _, _, _, err := sandbox.Exec(sandboxName, chmodCmd, 10*time.Second); err != nil {
 			return fmt.Errorf("chmod fullsend binary: %w", err)
 		}
 	}
@@ -716,12 +695,12 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string
 	}
 
 	// Copy agent definition to $CLAUDE_CONFIG_DIR/agents/.
-	if err := sandbox.SCP(sshConfigPath, sandboxName, h.Agent,
+	if err := sandbox.Upload(sandboxName, h.Agent,
 		fmt.Sprintf("%s/agents/", sandbox.SandboxClaudeConfig)); err != nil {
 		return fmt.Errorf("copying agent definition: %w", err)
 	}
 
-	// Copy skills (SCP -r copies the entire directory tree, including any
+	// Copy skills (Upload copies the entire directory tree, including any
 	// scripts/, references/, and assets/ bundled with the skill per the
 	// agentskills.io specification).
 	for _, skillPath := range h.Skills {
@@ -754,20 +733,20 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string
 			}
 		}
 
-		if err := sandbox.SCP(sshConfigPath, sandboxName, skillPath,
+		if err := sandbox.Upload(sandboxName, skillPath,
 			fmt.Sprintf("%s/skills/", sandbox.SandboxClaudeConfig)); err != nil {
 			return fmt.Errorf("copying skill %q: %w", skillPath, err)
 		}
 	}
 
 	// Write .env file (infrastructure vars) and copy host files.
-	if err := bootstrapEnv(sshConfigPath, sandboxName, repoDir, h); err != nil {
+	if err := bootstrapEnv(sandboxName, repoDir, h); err != nil {
 		return fmt.Errorf("bootstrapping environment: %w", err)
 	}
 
 	// Install security hooks if enabled.
 	if h.SecurityEnabled() {
-		if err := bootstrapSecurityHooks(sshConfigPath, sandboxName, h); err != nil {
+		if err := bootstrapSecurityHooks(sandboxName, h); err != nil {
 			return fmt.Errorf("bootstrapping security hooks: %w", err)
 		}
 	}
@@ -786,7 +765,7 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string
 // host_files entries copy files from the host into the sandbox at specified
 // destination paths. Src values may contain ${VAR} references expanded from
 // the host environment. When expand is true, file content is also expanded.
-func bootstrapEnv(sshConfigPath, sandboxName, repoDir string, h *harness.Harness) error {
+func bootstrapEnv(sandboxName, repoDir string, h *harness.Harness) error {
 	remoteEnvFile := sandbox.SandboxWorkspace + "/.env"
 	outputDir := sandbox.SandboxWorkspace + "/output"
 
@@ -815,7 +794,7 @@ func bootstrapEnv(sshConfigPath, sandboxName, repoDir string, h *harness.Harness
 	}
 	tmpFile.Close()
 
-	if err := sandbox.SCP(sshConfigPath, sandboxName, tmpFile.Name(), remoteEnvFile); err != nil {
+	if err := sandbox.Upload(sandboxName, tmpFile.Name(), remoteEnvFile); err != nil {
 		return fmt.Errorf("copying .env file to sandbox: %w", err)
 	}
 
@@ -853,13 +832,13 @@ func bootstrapEnv(sshConfigPath, sandboxName, repoDir string, h *harness.Harness
 			}
 			tmp.Close()
 
-			if err := sandbox.SCP(sshConfigPath, sandboxName, tmp.Name(), hf.Dest); err != nil {
+			if err := sandbox.Upload(sandboxName, tmp.Name(), hf.Dest); err != nil {
 				os.Remove(tmp.Name())
 				return fmt.Errorf("copying expanded file %s to %s: %w", hf.Src, hf.Dest, err)
 			}
 			os.Remove(tmp.Name())
 		} else {
-			if err := sandbox.SCP(sshConfigPath, sandboxName, hostPath, hf.Dest); err != nil {
+			if err := sandbox.Upload(sandboxName, hostPath, hf.Dest); err != nil {
 				return fmt.Errorf("copying host file %s to %s: %w", hf.Src, hf.Dest, err)
 			}
 		}
@@ -871,8 +850,8 @@ func bootstrapEnv(sshConfigPath, sandboxName, repoDir string, h *harness.Harness
 		// https://github.com/fullsend-ai/fullsend/issues/345#issuecomment-4300740512
 		if strings.Contains(hf.Dest, "/bin/") {
 			chmodCmd := fmt.Sprintf("chmod +x %s", hf.Dest)
-			if _, _, _, sshErr := sandbox.SSH(sshConfigPath, sandboxName, chmodCmd, 10*time.Second); sshErr != nil {
-				return fmt.Errorf("chmod host file %s in sandbox: %w", hf.Dest, sshErr)
+			if _, _, _, execErr := sandbox.Exec(sandboxName, chmodCmd, 10*time.Second); execErr != nil {
+				return fmt.Errorf("chmod host file %s in sandbox: %w", hf.Dest, execErr)
 			}
 		}
 	}
@@ -894,8 +873,8 @@ func envToList(env map[string]string) []string {
 	return list
 }
 
-func runAgentWithProgress(sshConfigPath, sandboxName, claudeCmd string, timeout time.Duration, printer *ui.Printer, start time.Time, metrics *RunMetrics) (int, error) {
-	stdout, cmd, cancel, err := sandbox.SSHStreamReader(sshConfigPath, sandboxName, claudeCmd, timeout, os.Stderr)
+func runAgentWithProgress(sandboxName, claudeCmd string, timeout time.Duration, printer *ui.Printer, start time.Time, metrics *RunMetrics) (int, error) {
+	stdout, cmd, cancel, err := sandbox.ExecStreamReader(sandboxName, claudeCmd, timeout, os.Stderr)
 	if err != nil {
 		return -1, err
 	}
@@ -914,7 +893,7 @@ func runAgentWithProgress(sshConfigPath, sandboxName, claudeCmd string, timeout 
 	}
 
 	if waitErr != nil && cmd.ProcessState == nil {
-		return exitCode, fmt.Errorf("ssh failed: %w", waitErr)
+		return exitCode, fmt.Errorf("openshell exec failed: %w", waitErr)
 	}
 
 	return exitCode, nil
@@ -961,7 +940,7 @@ func readOIDCAuthFile(path string) (string, error) {
 
 var oidcRefreshInterval = 4 * time.Minute
 
-func runOIDCRefresh(ctx context.Context, sshConfigPath, sandboxName, oidcURL, oidcAuth string, printer *ui.Printer) {
+func runOIDCRefresh(ctx context.Context, sandboxName, oidcURL, oidcAuth string, printer *ui.Printer) {
 	ticker := time.NewTicker(oidcRefreshInterval)
 	defer ticker.Stop()
 
@@ -970,7 +949,7 @@ func runOIDCRefresh(ctx context.Context, sshConfigPath, sandboxName, oidcURL, oi
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := refreshOIDCToken(ctx, sshConfigPath, sandboxName, oidcURL, oidcAuth); err != nil {
+			if err := refreshOIDCToken(ctx, sandboxName, oidcURL, oidcAuth); err != nil {
 				if ctx.Err() != nil {
 					return
 				}
@@ -982,7 +961,7 @@ func runOIDCRefresh(ctx context.Context, sshConfigPath, sandboxName, oidcURL, oi
 	}
 }
 
-func refreshOIDCToken(ctx context.Context, sshConfigPath, sandboxName, oidcURL, oidcAuth string) error {
+func refreshOIDCToken(ctx context.Context, sandboxName, oidcURL, oidcAuth string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", oidcURL, nil)
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)
@@ -1023,7 +1002,7 @@ func refreshOIDCToken(ctx context.Context, sshConfigPath, sandboxName, oidcURL, 
 	tmpFile.Close()
 
 	remotePath := sandbox.SandboxWorkspace + "/.gcp-oidc-token"
-	if err := sandbox.SCP(sshConfigPath, sandboxName, tmpFile.Name(), remotePath); err != nil {
+	if err := sandbox.Upload(sandboxName, tmpFile.Name(), remotePath); err != nil {
 		return fmt.Errorf("copying token to sandbox: %w", err)
 	}
 
@@ -1045,7 +1024,7 @@ func buildClaudeCommand(agentName, model, repoDir string) string {
 		// --verbose increases log output in the job log. If artifact upload is
 		// added to this workflow, consider whether verbose output should be
 		// redacted or made conditional via an env var.
-		"cd %s && source %s && claude --print --verbose --output-format stream-json %s--agent '%s' --dangerously-skip-permissions 'Run the agent task'",
+		"cd %s && . %s && claude --print --verbose --output-format stream-json %s--agent '%s' --dangerously-skip-permissions 'Run the agent task'",
 		repoDir, envFile, modelFlag, safe,
 	)
 }
@@ -1055,7 +1034,7 @@ func buildClaudeCommand(agentName, model, repoDir string) string {
 // (buildScanContextCommand) scans to ensure parity.
 const maxContextScanDepth = 5
 
-// buildScanContextCommand builds the SSH command to run `fullsend scan context`
+// buildScanContextCommand builds the command to run `fullsend scan context`
 // inside the sandbox. It finds known context files (including SKILL.md in
 // skill directories) in the repo directory and passes them as arguments.
 func buildScanContextCommand(repoDir, traceID string) string {
@@ -1094,7 +1073,7 @@ func buildScanContextCommand(repoDir, traceID string) string {
 	envFile := sandbox.SandboxWorkspace + "/.env"
 
 	return fmt.Sprintf(
-		"source %s && FULLSEND_TRACE_ID='%s' find '%s' -maxdepth %d -type f \\( %s \\) -exec fullsend scan context {} +",
+		". %s && FULLSEND_TRACE_ID='%s' find '%s' -maxdepth %d -type f \\( %s \\) -exec fullsend scan context {} +",
 		envFile, traceID, escapedDir, maxContextScanDepth, inameExpr,
 	)
 }
@@ -1326,7 +1305,7 @@ func scanOutputFiles(outputDir, traceID string, printer *ui.Printer) error {
 
 // bootstrapSecurityHooks installs Claude Code hook scripts and settings.json
 // inside the sandbox. Hook scripts are embedded in the binary via go:embed.
-func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harness) error {
+func bootstrapSecurityHooks(sandboxName string, h *harness.Harness) error {
 	// Write hook scripts.
 	hookFiles := security.HookFiles(h)
 	for name, content := range hookFiles {
@@ -1342,7 +1321,7 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 		tmpFile.Close()
 
 		remotePath := fmt.Sprintf("%s/.claude/hooks/%s", sandbox.SandboxWorkspace, name)
-		if err := sandbox.SCP(sshConfigPath, sandboxName, tmpFile.Name(), remotePath); err != nil {
+		if err := sandbox.Upload(sandboxName, tmpFile.Name(), remotePath); err != nil {
 			os.Remove(tmpFile.Name())
 			return fmt.Errorf("copying hook %s to sandbox: %w", name, err)
 		}
@@ -1350,7 +1329,7 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 
 		// Make executable.
 		chmodCmd := fmt.Sprintf("chmod +x %s", remotePath)
-		if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, chmodCmd, 10*time.Second); err != nil {
+		if _, _, _, err := sandbox.Exec(sandboxName, chmodCmd, 10*time.Second); err != nil {
 			return fmt.Errorf("chmod hook %s: %w", name, err)
 		}
 	}
@@ -1373,7 +1352,7 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 	tmpSettings.Close()
 
 	remoteSettings := fmt.Sprintf("%s/.claude/settings.json", sandbox.SandboxWorkspace)
-	if err := sandbox.SCP(sshConfigPath, sandboxName, tmpSettings.Name(), remoteSettings); err != nil {
+	if err := sandbox.Upload(sandboxName, tmpSettings.Name(), remoteSettings); err != nil {
 		os.Remove(tmpSettings.Name())
 		return fmt.Errorf("copying settings.json to sandbox: %w", err)
 	}
@@ -1390,7 +1369,7 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 			escapedFailOn := strings.ReplaceAll(tirithCfg.FailOn, "'", "'\\''")
 			envCmd := fmt.Sprintf("echo 'export TIRITH_FAIL_ON=%s' >> %s/.env",
 				escapedFailOn, sandbox.SandboxWorkspace)
-			if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, envCmd, 10*time.Second); err != nil {
+			if _, _, _, err := sandbox.Exec(sandboxName, envCmd, 10*time.Second); err != nil {
 				return fmt.Errorf("setting TIRITH_FAIL_ON: %w", err)
 			}
 		}
@@ -1399,7 +1378,7 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 		// fails closed if the binary is missing from the sandbox image.
 		if harness.BoolDefault(tirithCfg.Enabled, true) {
 			envCmd := fmt.Sprintf("echo 'export TIRITH_REQUIRED=1' >> %s/.env", sandbox.SandboxWorkspace)
-			if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, envCmd, 10*time.Second); err != nil {
+			if _, _, _, err := sandbox.Exec(sandboxName, envCmd, 10*time.Second); err != nil {
 				return fmt.Errorf("setting TIRITH_REQUIRED: %w", err)
 			}
 		}
@@ -1409,13 +1388,13 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 }
 
 // injectTraceID appends the FULLSEND_TRACE_ID to the sandbox .env file.
-func injectTraceID(sshConfigPath, sandboxName, traceID string) error {
+func injectTraceID(sandboxName, traceID string) error {
 	if !security.IsValidTraceID(traceID) {
 		return fmt.Errorf("invalid trace ID format: %q", traceID)
 	}
 	// Safe: IsValidTraceID() above ensures traceID matches UUID v4 format only.
 	cmd := fmt.Sprintf("echo 'export FULLSEND_TRACE_ID=%s' >> %s/.env", traceID, sandbox.SandboxWorkspace)
-	_, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, cmd, 10*time.Second)
+	_, _, _, err := sandbox.Exec(sandboxName, cmd, 10*time.Second)
 	return err
 }
 

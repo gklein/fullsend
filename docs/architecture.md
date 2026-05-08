@@ -526,7 +526,7 @@ GitHub event ──► SHIM WORKFLOW (fullsend.yml in enrolled repo)
                  ║ │ │ OPENSHELL SANDBOX                                     │ │ ║
                  ║ │ │                                                       │ │ ║
                  ║ │ │ Created with --from image, --policy code.yaml.        │ │ ║
-                 ║ │ │ Bootstrapped via SCP/SSH:                             │ │ ║
+                 ║ │ │ Bootstrapped via openshell upload/exec:               │ │ ║
                  ║ │ │   agent def    → /tmp/claude-config/agents/           │ │ ║
                  ║ │ │   skills       → /tmp/claude-config/skills/           │ │ ║
                  ║ │ │   .env, host files (GCP creds), security hooks        │ │ ║

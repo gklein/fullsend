@@ -100,7 +100,7 @@ func TestBuildClaudeCommand_EscapesQuotes(t *testing.T) {
 func TestBuildScanContextCommand_SourcesEnv(t *testing.T) {
 	traceID := "aabbccdd-1122-4334-8556-aabbccddeeff"
 	cmd := buildScanContextCommand("/tmp/workspace/repo", traceID)
-	assert.Contains(t, cmd, "source /tmp/workspace/.env &&")
+	assert.Contains(t, cmd, ". /tmp/workspace/.env &&")
 	assert.Contains(t, cmd, "FULLSEND_TRACE_ID='"+traceID+"'")
 	assert.Contains(t, cmd, "-exec fullsend scan context")
 }
@@ -386,7 +386,7 @@ func TestRefreshOIDCToken_FetchSucceedsSCPFails(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := refreshOIDCToken(context.Background(), "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth")
+	err := refreshOIDCToken(context.Background(), "nonexistent-sandbox", srv.URL, "bearer test-auth")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "copying token to sandbox")
 }
@@ -397,7 +397,7 @@ func TestRefreshOIDCToken_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := refreshOIDCToken(context.Background(), "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth")
+	err := refreshOIDCToken(context.Background(), "nonexistent-sandbox", srv.URL, "bearer test-auth")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "403")
 }
@@ -408,7 +408,7 @@ func TestRefreshOIDCToken_EmptyResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := refreshOIDCToken(context.Background(), "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth")
+	err := refreshOIDCToken(context.Background(), "nonexistent-sandbox", srv.URL, "bearer test-auth")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty token")
 }
@@ -419,7 +419,7 @@ func TestRefreshOIDCToken_NonJSONResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := refreshOIDCToken(context.Background(), "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth")
+	err := refreshOIDCToken(context.Background(), "nonexistent-sandbox", srv.URL, "bearer test-auth")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "non-JSON response")
 }
@@ -433,7 +433,7 @@ func TestRefreshOIDCToken_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := refreshOIDCToken(ctx, "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth")
+	err := refreshOIDCToken(ctx, "nonexistent-sandbox", srv.URL, "bearer test-auth")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fetching OIDC token")
 }
@@ -455,7 +455,7 @@ func TestRunOIDCRefresh_TicksAndStops(t *testing.T) {
 
 	finished := make(chan struct{})
 	go func() {
-		runOIDCRefresh(ctx, "nonexistent-ssh-config", "nonexistent-sandbox", srv.URL, "bearer test-auth", printer)
+		runOIDCRefresh(ctx, "nonexistent-sandbox", srv.URL, "bearer test-auth", printer)
 		close(finished)
 	}()
 
