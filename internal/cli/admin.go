@@ -90,6 +90,8 @@ func newInstallCmd() *cobra.Command {
 	var dryRun bool
 	var skipAppSetup bool
 	var vendorBinary bool
+	var enrollAllFlag bool
+	var enrollNoneFlag bool
 	var gcpProject string
 	var gcpRegion string
 	var gcpServiceAccount string
@@ -186,10 +188,23 @@ func newInstallCmd() *cobra.Command {
 				inferenceProviderName = loadExistingInferenceProvider(ctx, client, org)
 			}
 
-			// Prompt for enrollment choice: all or none.
-			enrollAll, err := promptEnrollment(printer, os.Stdin)
-			if err != nil {
-				return err
+			// Validate enrollment flags.
+			if enrollAllFlag && enrollNoneFlag {
+				return fmt.Errorf("--enroll-all and --enroll-none are mutually exclusive")
+			}
+
+			// Determine enrollment choice: use flag if set, otherwise prompt.
+			var enrollAll bool
+			if enrollAllFlag {
+				enrollAll = true
+			} else if enrollNoneFlag {
+				enrollAll = false
+			} else {
+				// Prompt for enrollment choice: all or none.
+				enrollAll, err = promptEnrollment(printer, os.Stdin)
+				if err != nil {
+					return err
+				}
 			}
 
 			var repos []string
@@ -209,7 +224,7 @@ func newInstallCmd() *cobra.Command {
 				printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
 			} else {
 				printer.StepInfo("No repositories will be enrolled during install")
-				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use:"))
+				printer.StepInfo("To enroll repositories later, use:")
 				printer.StepInfo(fmt.Sprintf("  fullsend admin enable repos %s <repo-name> [repo-name...]", org))
 				printer.StepInfo(fmt.Sprintf("  fullsend admin enable repos %s --all", org))
 			}
@@ -240,6 +255,8 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without making them")
 	cmd.Flags().BoolVar(&skipAppSetup, "skip-app-setup", false, "skip GitHub App creation/setup")
 	cmd.Flags().BoolVar(&vendorBinary, "vendor-fullsend-binary", false, "cross-compile and upload the fullsend binary into .fullsend/bin/ for development iteration")
+	cmd.Flags().BoolVar(&enrollAllFlag, "enroll-all", false, "enroll all repositories without prompting")
+	cmd.Flags().BoolVar(&enrollNoneFlag, "enroll-none", false, "skip repository enrollment without prompting")
 	cmd.Flags().StringVar(&gcpProject, "gcp-project", "", "GCP project ID for Vertex AI inference")
 	cmd.Flags().StringVar(&gcpRegion, "gcp-region", "", "GCP region for Vertex AI (e.g. global, required with --gcp-project)")
 	cmd.Flags().StringVar(&gcpServiceAccount, "gcp-service-account", "", "existing GCP service account name (optional, used with --gcp-project)")
@@ -508,7 +525,7 @@ func ensureConfigRepoExists(ctx context.Context, client forge.Client, printer *u
 // validateEnabledRepos checks that every enabled repository exists in the
 // discovered (eligible) repo list. Repos filtered out by ListOrgRepos
 // (forks, archived) will not appear in discoveredNames, so this catches
-// the case where a user targets a fork or archived repo.
+// the case where an enabled repo is a fork or archived.
 //
 // This validation exists because fullsend's trust model is org-centric:
 // forks may live outside the org's permission boundary or lack the same
