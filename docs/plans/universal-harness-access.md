@@ -176,7 +176,7 @@ Lookup: `SHA256(URL + hash) → cache_manifest.db → SHA256(content) → cached
 
 **Why content-addressed?** If two different URLs serve identical content, they share a cache entry. This deduplicates storage and makes integrity verification uniform.
 
-**Cache TTL:** Configurable per organization. Default: 24 hours for mutable URLs, indefinite for pinned URLs (those with `#sha256=...` fragment).
+**Cache TTL:** Since all remote resources require hash pinning (line 197), all cached entries are content-addressed and immutable. Cache entries never expire based on time. To update a remote resource, the upstream maintainer must change the content (which produces a new SHA256 hash) and update harness references to use the new hash.
 
 **Offline mode:** `fullsend run --offline <harness>` disables network fetches. If any required resource is not in cache, the run fails. Useful for CI environments with no internet access.
 
@@ -221,7 +221,14 @@ The URL fetch mechanism must prevent Server-Side Request Forgery attacks.
    - `169.254.0.0/16` (link-local)
    - `fc00::/7` (IPv6 ULA)
    - `::1` (IPv6 loopback)
-5. **DNS rebinding protection:** Resolve the domain to an IP, check the IP against the blocklist, then fetch. If DNS resolves to an internal IP, reject.
+5. **DNS rebinding protection (REQUIRED):** To prevent DNS rebinding attacks, the implementation MUST:
+   - Resolve the domain to IP addresses before making the HTTP request
+   - Validate all returned IPs against the internal IP blocklist
+   - Use a custom `http.Transport` with `DialContext` that pins the connection to the pre-validated IP, preventing re-resolution during the request
+   - Reject if any resolved IP is internal
+   
+   **Rationale:** Without connection pinning, an attacker-controlled DNS server can return a public IP during initial validation, then return an internal IP when the HTTP client re-resolves the hostname during connection establishment. The custom `DialContext` eliminates this TOCTOU vulnerability by using only the pre-validated IP.
+
 6. **Timeout:** 30-second timeout on all fetches. No long-lived connections.
 7. **Size limit:** Reject responses larger than 10 MB. Agents, skills, and policies should be small.
 
@@ -445,7 +452,7 @@ The resolution order remains: fullsend defaults → org `.fullsend` → per-repo
 **Mitigations:**
 
 1. **Content-addressed caching:** Once fetched, the resource is cached immutably. The cache key is the content hash. The runner never re-fetches during a single run.
-2. **Cache TTL:** For development, the cache can expire after 24 hours. For production, use integrity-pinned URLs (which never expire from cache).
+2. **Mandatory hash pinning:** All remote resources must include integrity hashes (line 197). Since the hash is part of the URL, any content change requires updating the harness to reference the new hash, making TOCTOU attacks ineffective.
 
 ### Threat: Malicious Script Execution
 
