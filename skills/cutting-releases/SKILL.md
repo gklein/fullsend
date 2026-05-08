@@ -4,7 +4,7 @@ description: >
   Use when the user wants to tag a release, cut a release candidate, or ship a
   new version. Also use when asking about release process, versioning, or how
   GoReleaser is configured.
-allowed-tools: Read, Grep, Glob, Bash(git tag:*), Bash(git log:*), Bash(git diff:*), Bash(gh release:*), Bash(git checkout:*), Bash(bash scripts/install-binary.sh:*)
+allowed-tools: Read, Grep, Glob, AskUserQuestion, Bash(git tag:*), Bash(git log:*), Bash(git diff:*), Bash(git pull:*), Bash(git push:*), Bash(gh release:*), Bash(gh run:*), Bash(git checkout:*), Bash(bash scripts/install-binary.sh:*)
 ---
 
 # Cutting Releases

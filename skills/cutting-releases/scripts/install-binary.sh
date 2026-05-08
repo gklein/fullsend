@@ -11,6 +11,10 @@
 set -euo pipefail
 
 TAG="${1:?Usage: install-binary.sh <tag> [install-dir]}"
+if [[ ! "$TAG" =~ ^v[0-9] ]]; then
+  echo "ERROR: Tag must start with 'v' followed by a digit (e.g. v0.5.0)" >&2
+  exit 1
+fi
 INSTALL_DIR="${2:-$HOME/.local/bin}"
 
 # macOS returns arm64 natively; Linux returns aarch64 which we map to arm64.
