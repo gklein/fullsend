@@ -589,7 +589,20 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		}
 	}
 
-	// 9e. Post-agent output scan — redact secrets from extracted output.
+	// 9e-bis. Surface transcript errors in workflow logs (GitHub Actions).
+	// When the agent exits non-zero, parse transcript JSONL files and emit
+	// ::error:: annotations so operators can diagnose failures without
+	// downloading artifacts. See #704.
+	if lastExitCode != 0 {
+		lastIterDir := filepath.Join(runDir, fmt.Sprintf("iteration-%d", runCount))
+		lastTranscriptDir := filepath.Join(lastIterDir, "transcripts")
+		if errorSummaries := extractTranscriptErrors(lastTranscriptDir); len(errorSummaries) > 0 {
+			printer.StepWarn(fmt.Sprintf("Found %d transcript error(s) — emitting to workflow log", len(errorSummaries)))
+			emitTranscriptErrors(os.Stderr, errorSummaries)
+		}
+	}
+
+	// 9f. Post-agent output scan — redact secrets from extracted output.
 	if h.SecurityEnabled() {
 		printer.StepStart("Running post-agent output scan")
 		if err := scanOutputFiles(runDir, traceID, printer); err != nil {
