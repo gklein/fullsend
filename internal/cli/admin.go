@@ -8,9 +8,11 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/fullsend-ai/fullsend/internal/appsetup"
 	"github.com/fullsend-ai/fullsend/internal/config"
@@ -31,6 +33,8 @@ func newAdminCmd() *cobra.Command {
 	cmd.AddCommand(newInstallCmd())
 	cmd.AddCommand(newUninstallCmd())
 	cmd.AddCommand(newAnalyzeCmd())
+	cmd.AddCommand(newEnableCmd())
+	cmd.AddCommand(newDisableCmd())
 	return cmd
 }
 
@@ -1004,6 +1008,394 @@ func promptDispatchToken(ctx context.Context, client forge.Client, printer *ui.P
 
 	printer.Blank()
 	return token, nil
+}
+
+func newEnableCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "enable",
+		Short: "Enable fullsend features",
+		Long:  "Commands for enabling fullsend features such as repository enrollment.",
+	}
+	cmd.AddCommand(newEnableReposCmd())
+	return cmd
+}
+
+func newDisableCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "disable",
+		Short: "Disable fullsend features",
+		Long:  "Commands for disabling fullsend features such as repository enrollment.",
+	}
+	cmd.AddCommand(newDisableReposCmd())
+	return cmd
+}
+
+// reposRunFunc is the signature for repo enable/disable operations.
+type reposRunFunc func(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool, yolo bool) error
+
+// newReposSubcommand creates a repos enable or disable subcommand with shared setup logic.
+// If withYolo is true, the --yolo flag is added to skip confirmation prompts.
+func newReposSubcommand(use, short, long, allFlagHelp string, runFn reposRunFunc, withYolo bool) *cobra.Command {
+	var all bool
+	var yolo bool
+
+	cmd := &cobra.Command{
+		Use:   use,
+		Short: short,
+		Long:  long,
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			org := args[0]
+			if err := validateOrgName(org); err != nil {
+				return err
+			}
+
+			// When --all is set, ignore positional repo arguments.
+			// Otherwise, require at least one repo name.
+			var repos []string
+			if all {
+				// Ignore positional args; repos will be discovered from org
+				repos = nil
+			} else {
+				hasRepos := len(args) > 1
+				if !hasRepos {
+					return fmt.Errorf("must specify repository names or use --all flag")
+				}
+				repos = args[1:]
+			}
+
+			token, err := resolveToken()
+			if err != nil {
+				return err
+			}
+
+			client := gh.New(token)
+			printer := ui.New(os.Stdout)
+			ctx := cmd.Context()
+
+			return runFn(ctx, client, printer, org, repos, all, yolo)
+		},
+	}
+
+	cmd.Flags().BoolVar(&all, "all", false, allFlagHelp)
+	if withYolo {
+		cmd.Flags().BoolVar(&yolo, "yolo", false, "skip confirmation prompt")
+	}
+
+	return cmd
+}
+
+func newEnableReposCmd() *cobra.Command {
+	return newReposSubcommand(
+		"repos <org> [repo...]",
+		"Enable repositories for fullsend enrollment",
+		"Enables the specified repositories for fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to enable all repositories (excluding .fullsend).",
+		"enable all repositories (excluding .fullsend)",
+		runEnableRepos,
+		false, // no confirmation prompt, so no --yolo flag
+	)
+}
+
+func newDisableReposCmd() *cobra.Command {
+	return newReposSubcommand(
+		"repos <org> [repo...]",
+		"Disable repositories from fullsend enrollment",
+		"Disables the specified repositories from fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to disable all repositories.",
+		"disable all repositories",
+		runDisableRepos,
+		true, // has confirmation prompt for --all, so include --yolo flag
+	)
+}
+
+// runEnableRepos enables the specified repositories for fullsend enrollment.
+// The yolo parameter is accepted for signature compatibility with reposRunFunc but is unused
+// since enable has no destructive operations that require confirmation.
+func runEnableRepos(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool, yolo bool) error {
+	printer.Banner()
+	printer.Blank()
+	printer.Header("Enabling repositories for " + org)
+	printer.Blank()
+
+	// Load current config.
+	cfg, err := loadRepoConfig(ctx, client, printer, org)
+	if err != nil {
+		return err
+	}
+
+	// Determine which repos to enable.
+	var reposToEnable []string
+	if all {
+		// Get all org repos by calling ListOrgRepos.
+		// Note: disable --all iterates cfg.Repos instead of calling ListOrgRepos.
+		// This asymmetry is intentional: enable --all discovers all current org repos,
+		// while disable --all operates on previously configured repos (which may have
+		// been deleted from the org but still need unenrollment PRs for cleanup).
+		printer.StepStart("Discovering all organization repositories")
+		allRepos, err := client.ListOrgRepos(ctx, org)
+		if err != nil {
+			printer.StepFail("Failed to list organization repositories")
+			printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
+			return fmt.Errorf("listing org repos: %w", err)
+		}
+		for _, r := range allRepos {
+			if r.Name != forge.ConfigRepoName {
+				reposToEnable = append(reposToEnable, r.Name)
+			}
+		}
+		sort.Strings(reposToEnable)
+		printer.StepDone(fmt.Sprintf("Found %d repositories to enable", len(reposToEnable)))
+	} else {
+		// Validate provided repo names against org repos.
+		// Fetch org repos once and validate against the list instead of making
+		// one API call per repo (O(n) → O(1) API calls).
+		printer.StepStart("Validating repository names")
+
+		allOrgRepos, err := client.ListOrgRepos(ctx, org)
+		if err != nil {
+			printer.StepFail("Failed to list organization repositories")
+			printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
+			return fmt.Errorf("listing org repos: %w", err)
+		}
+
+		// Build a set of valid repo names for O(1) lookup.
+		validRepos := make(map[string]bool, len(allOrgRepos))
+		for _, r := range allOrgRepos {
+			validRepos[r.Name] = true
+		}
+
+		// Validate each requested repo.
+		for _, repo := range repos {
+			if repo == forge.ConfigRepoName {
+				printer.StepFail("Cannot enable .fullsend repository")
+				return fmt.Errorf("cannot enable .fullsend repository itself")
+			}
+			if !validRepos[repo] {
+				printer.StepFail(fmt.Sprintf("Repository %s not found", repo))
+				return fmt.Errorf("repository %s not found in %s", repo, org)
+			}
+		}
+		reposToEnable = repos
+		printer.StepDone("Repository names validated")
+	}
+
+	if len(reposToEnable) == 0 {
+		printer.StepInfo("No repositories to enable")
+		return nil
+	}
+
+	// Update config.
+	printer.StepStart("Updating config.yaml")
+	changed := 0
+	for _, repo := range reposToEnable {
+		rc, exists := cfg.Repos[repo]
+		if !exists {
+			// Add new repo entry.
+			cfg.Repos[repo] = config.RepoConfig{Enabled: true}
+			changed++
+		} else if !rc.Enabled {
+			// Update existing entry.
+			rc.Enabled = true
+			cfg.Repos[repo] = rc
+			changed++
+		}
+	}
+
+	if changed == 0 {
+		printer.StepInfo("All specified repositories are already enabled")
+		return nil
+	}
+	printer.StepDone(fmt.Sprintf("Updated %d repositories in config.yaml", changed))
+
+	// Save updated config.
+	commitMsg := fmt.Sprintf("chore: enable %d repositories for fullsend enrollment", changed)
+	if err := saveRepoConfig(ctx, client, printer, org, cfg, commitMsg); err != nil {
+		return err
+	}
+
+	printer.Blank()
+	printer.Summary("Repositories enabled", []string{
+		fmt.Sprintf("Organization: %s", org),
+		fmt.Sprintf("Enabled: %d repositories", changed),
+		"The repo-maintenance workflow will create enrollment PRs",
+	})
+
+	return nil
+}
+
+// runDisableRepos disables the specified repositories from fullsend enrollment.
+func runDisableRepos(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool, yolo bool) error {
+	printer.Banner()
+	printer.Blank()
+	printer.Header("Disabling repositories for " + org)
+	printer.Blank()
+
+	// Load current config.
+	cfg, err := loadRepoConfig(ctx, client, printer, org)
+	if err != nil {
+		return err
+	}
+
+	// Determine which repos to disable.
+	var reposToDisable []string
+	if all {
+		// Disable all repos currently in config.
+		printer.StepStart("Collecting all configured repositories")
+		for repo := range cfg.Repos {
+			reposToDisable = append(reposToDisable, repo)
+		}
+		sort.Strings(reposToDisable)
+		printer.StepDone(fmt.Sprintf("Found %d repositories to disable", len(reposToDisable)))
+
+		// Prompt for confirmation when disabling all repos.
+		if !yolo && len(reposToDisable) > 0 {
+			printer.Blank()
+			printer.StepWarn(fmt.Sprintf("This will disable all %d repositories in %s.", len(reposToDisable), org))
+			printer.StepInfo(fmt.Sprintf("Type the organization name (%s) to confirm:", org))
+
+			// Check if stdin is a terminal before prompting for input.
+			if !term.IsTerminal(int(os.Stdin.Fd())) {
+				return fmt.Errorf("stdin is not a terminal; use --yolo to skip confirmation in non-interactive environments")
+			}
+
+			var confirmation string
+			if _, err := fmt.Scanln(&confirmation); err != nil {
+				return fmt.Errorf("reading confirmation: %w", err)
+			}
+			if confirmation != org {
+				return fmt.Errorf("confirmation did not match; aborting disable")
+			}
+			printer.Blank()
+		}
+	} else {
+		// Validate provided repo names against config (not GitHub).
+		// Unlike enable, disable is cleanup and must handle repos deleted from GitHub.
+		printer.StepStart("Validating repository names")
+		for _, repo := range repos {
+			if repo == forge.ConfigRepoName {
+				printer.StepFail("Cannot disable .fullsend repository")
+				return fmt.Errorf("cannot disable .fullsend repository itself")
+			}
+			// Check if repo exists in config (don't require GitHub existence for cleanup).
+			if _, exists := cfg.Repos[repo]; !exists {
+				printer.StepWarn(fmt.Sprintf("Repository %s not in config (skipping)", repo))
+				continue
+			}
+			reposToDisable = append(reposToDisable, repo)
+		}
+		printer.StepDone("Repository names validated")
+	}
+
+	if len(reposToDisable) == 0 {
+		printer.StepInfo("No repositories to disable")
+		return nil
+	}
+
+	// Update config.
+	printer.StepStart("Updating config.yaml")
+	changed := 0
+	for _, repo := range reposToDisable {
+		rc, exists := cfg.Repos[repo]
+		if exists && rc.Enabled {
+			// Update existing entry to disabled.
+			rc.Enabled = false
+			cfg.Repos[repo] = rc
+			changed++
+		}
+	}
+
+	if changed == 0 {
+		printer.StepInfo("All specified repositories are already disabled")
+		return nil
+	}
+	printer.StepDone(fmt.Sprintf("Updated %d repositories in config.yaml", changed))
+
+	// Save updated config.
+	commitMsg := fmt.Sprintf("chore: disable %d repositories from fullsend enrollment", changed)
+	if err := saveRepoConfig(ctx, client, printer, org, cfg, commitMsg); err != nil {
+		return err
+	}
+
+	printer.Blank()
+	printer.Summary("Repositories disabled", []string{
+		fmt.Sprintf("Organization: %s", org),
+		fmt.Sprintf("Disabled: %d repositories", changed),
+		"The repo-maintenance workflow will create unenrollment PRs",
+	})
+
+	return nil
+}
+
+// loadRepoConfig verifies the .fullsend repository exists and loads config.yaml.
+//
+// Note: The read-modify-write pattern used by enable/disable (loadRepoConfig →
+// modify → saveRepoConfig) has no optimistic concurrency control. Concurrent
+// admin CLI invocations could race, with the last write winning. This is
+// acceptable for an admin CLI where concurrent usage is rare, and the state
+// is recoverable (just re-run the command). Production systems would use
+// conditional writes (e.g., if-match headers with ETags).
+func loadRepoConfig(ctx context.Context, client forge.Client, printer *ui.Printer, org string) (*config.OrgConfig, error) {
+	// Verify .fullsend repository exists.
+	printer.StepStart("Checking .fullsend repository")
+	_, err := client.GetRepo(ctx, org, forge.ConfigRepoName)
+	if err != nil {
+		if forge.IsNotFound(err) {
+			printer.StepFail(".fullsend repository not found")
+			return nil, fmt.Errorf(".fullsend repository not found: run 'fullsend admin install %s' first", org)
+		}
+		printer.StepFail("Failed to check .fullsend repository")
+		printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
+		return nil, fmt.Errorf("checking .fullsend repository: %w", err)
+	}
+	printer.StepDone(".fullsend repository exists")
+
+	// Get current config.yaml.
+	printer.StepStart("Reading config.yaml")
+	configData, err := client.GetFileContent(ctx, org, forge.ConfigRepoName, "config.yaml")
+	if err != nil {
+		printer.StepFail("Failed to read config.yaml")
+		printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
+		return nil, fmt.Errorf("reading config.yaml: %w", err)
+	}
+
+	cfg, err := config.ParseOrgConfig(configData)
+	if err != nil {
+		printer.StepFail("Failed to parse config.yaml")
+		return nil, fmt.Errorf("parsing config.yaml: %w", err)
+	}
+	printer.StepDone("Read config.yaml")
+
+	return cfg, nil
+}
+
+// saveRepoConfig marshals and commits the updated config, then triggers the repo-maintenance workflow.
+func saveRepoConfig(ctx context.Context, client forge.Client, printer *ui.Printer, org string, cfg *config.OrgConfig, commitMsg string) error {
+	// Marshal updated config.
+	updatedConfigData, err := cfg.Marshal()
+	if err != nil {
+		printer.StepFail("Failed to marshal config.yaml")
+		return fmt.Errorf("marshaling config.yaml: %w", err)
+	}
+
+	// Commit and push changes.
+	printer.StepStart("Committing changes to .fullsend")
+	if err := client.CreateOrUpdateFile(ctx, org, forge.ConfigRepoName, "config.yaml", commitMsg, updatedConfigData); err != nil {
+		printer.StepFail("Failed to commit changes")
+		printer.StepInfo("Hint: verify your token has 'repo' scope with: gh auth refresh -s repo")
+		return fmt.Errorf("committing config.yaml: %w", err)
+	}
+	printer.StepDone("Changes committed to .fullsend")
+
+	// Trigger repo-maintenance workflow.
+	printer.StepStart("Triggering repo-maintenance workflow")
+	if err := client.DispatchWorkflow(ctx, org, forge.ConfigRepoName, "repo-maintenance.yml", "main", nil); err != nil {
+		printer.StepWarn(fmt.Sprintf("Failed to trigger repo-maintenance: %v", err))
+		printer.StepInfo("Hint: verify your token has 'workflow' scope with: gh auth refresh -s workflow")
+		printer.StepInfo("Changes committed successfully, but you may need to manually trigger the workflow")
+	} else {
+		printer.StepDone("Triggered repo-maintenance workflow")
+	}
+
+	return nil
 }
 
 // Helper functions.

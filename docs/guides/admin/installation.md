@@ -187,7 +187,56 @@ After install completes, the installer dispatches a workflow that creates an enr
 
 Review and merge each enrollment PR to complete enrollment.
 
-## 4. Test the pipeline
+## 4. Managing repository enrollment
+
+After installation, you can enroll or unenroll repositories at any time using the `repos` subcommands.
+
+### Enable repositories
+
+To enroll specific repositories:
+
+```bash
+fullsend admin enable repos "$ORG_NAME" <repo-name> [repo-name...]
+```
+
+To enroll all repositories:
+
+```bash
+fullsend admin enable repos "$ORG_NAME" --all
+```
+
+The enable command:
+- Updates `config.yaml` in the `.fullsend` repository
+- Triggers the `repo-maintenance` workflow to create enrollment PRs
+- Validates that repositories exist in the organization before making changes
+
+### Disable repositories
+
+To unenroll specific repositories:
+
+```bash
+fullsend admin disable repos "$ORG_NAME" <repo-name> [repo-name...]
+```
+
+To unenroll all repositories:
+
+```bash
+fullsend admin disable repos "$ORG_NAME" --all
+```
+
+The `--all` flag prompts for confirmation — you must type the exact organization name when prompted. To skip the confirmation prompt (e.g., in automated scripts):
+
+```bash
+fullsend admin disable repos "$ORG_NAME" --all --yolo
+```
+
+The disable command:
+- Updates `config.yaml` to mark repositories as disabled
+- Triggers the `repo-maintenance` workflow to create unenrollment PRs
+- Warns (but does not reject) repository names not found in the config, allowing safe cleanup of deleted repos
+- Does not delete existing shim workflows (merge the unenrollment PR to remove them)
+
+## 5. Test the pipeline
 
 Once a repo is enrolled (enrollment PR merged):
 
