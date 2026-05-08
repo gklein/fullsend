@@ -527,18 +527,15 @@ def main():
         description="Analyze fullsend agent JSONL transcripts",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--json", dest="json_output", action="store_true", help="output as JSON")
-    parser.add_argument(
-        "--lines", dest="line_range_spec", help="restrict to line range (N-M, N-, or N)"
-    )
-
     sub = parser.add_subparsers(dest="command", required=True)
 
     lines_help = "restrict to line range (N-M, N-, or N)"
     width_help = "truncate text to N chars (0=unlimited)"
+    json_help = "output as JSON"
 
     p_summary = sub.add_parser("summary", help="high-level run overview")
     p_summary.add_argument("file", help="path to .jsonl file (or - for stdin)")
+    p_summary.add_argument("--json", dest="json_output", action="store_true", help=json_help)
     p_summary.add_argument("--lines", dest="line_range_spec", help=lines_help)
 
     p_conv = sub.add_parser(
@@ -550,6 +547,7 @@ def main():
 
     p_tools = sub.add_parser("tools", help="tool usage table")
     p_tools.add_argument("file", help="path to .jsonl file (or - for stdin)")
+    p_tools.add_argument("--json", dest="json_output", action="store_true", help=json_help)
     p_tools.add_argument("--lines", dest="line_range_spec", help=lines_help)
 
     p_errors = sub.add_parser("errors", help="extract errors and failures")
@@ -565,6 +563,7 @@ def main():
 
     p_network = sub.add_parser("network", aliases=["net"], help="sandbox network activity summary")
     p_network.add_argument("file", help="path to sandbox .log file")
+    p_network.add_argument("--json", dest="json_output", action="store_true", help=json_help)
     p_network.add_argument("--http", action="store_true", help="list individual HTTP requests")
 
     p_netsearch = sub.add_parser(
@@ -574,11 +573,14 @@ def main():
     p_netsearch.add_argument("file", help="path to sandbox .log file")
 
     args = parser.parse_args()
-    args.line_range = (
-        parse_line_range(args.line_range_spec)
-        if hasattr(args, "line_range_spec") and args.line_range_spec
-        else None
-    )
+
+    if hasattr(args, "line_range_spec") and args.line_range_spec:
+        args.line_range = parse_line_range(args.line_range_spec)
+    else:
+        args.line_range = None
+
+    if not hasattr(args, "json_output"):
+        args.json_output = False
 
     if not hasattr(args, "max_width"):
         args.max_width = 400
