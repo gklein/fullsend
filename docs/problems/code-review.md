@@ -170,6 +170,8 @@ The human sees coherent framings and can pick the one that matches their underst
 
 This pattern is most valuable at escalation boundaries — where the system has already decided it can't resolve something autonomously. It doesn't replace confidence scores or explicit uncertainty signals; it complements them by making the *nature* of the uncertainty actionable. It applies wherever agents interact with humans: tier classification (see [intent-representation.md](intent-representation.md#the-tier-escalation-problem)), the exploration phase for proposed features (see [intent-representation.md](intent-representation.md#the-try-it-phase)), and deadlock resolution between review sub-agents (see [agent-architecture.md](agent-architecture.md#how-deadlocks-are-resolved)).
 
+[Forge-sdlc/forge](../landscape.md#forge-sdlcforge) has a concrete version of this idea in its `implement_review` flow: review comments are treated as their own task type, classified as actionable or contested before the agent acts, and contested comments trigger a structured response rather than silent compliance. That is a useful precedent for fullsend's review loops, especially when an agent should push back on incorrect feedback while still respecting the reviewer's blocking authority.
+
 ## Review as salvage
 
 The sub-agent model above assumes a binary outcome: approve or reject. But when reviewing external contributions (especially AI-generated ones), a third outcome becomes important: *salvage* — extracting the valuable idea from a poor implementation and having a project agent rewrite it properly.

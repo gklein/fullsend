@@ -106,6 +106,68 @@ Launched November 2025. The closest thing in the industry to autonomous merging.
 
 While the tools above focus on code review, a separate category of systems addresses end-to-end agent orchestration — from task intake through coding and merge. These are closer to the fullsend vision than review-only tools.
 
+### Forge-sdlc/forge
+
+[GitHub](https://github.com/forge-sdlc/forge) | [README](https://github.com/forge-sdlc/forge/blob/main/README.md) | [Container sandbox](https://github.com/forge-sdlc/forge/blob/main/containers/README.md) | [Skills](https://github.com/forge-sdlc/forge/blob/main/skills/README.md) | [implement_review proposal](https://github.com/forge-sdlc/forge/blob/main/proposals/007-implement-review-node.md)
+
+Forge is an open-source SDLC orchestrator that connects Jira, GitHub, and Claude/Gemini-backed agents. It takes Jira features or bugs through planning artifacts, implementation, pull requests, CI repair, AI review, and human review.
+
+**Bottom line:** Forge is worth studying, not adopting wholesale.
+
+It validates several fullsend assumptions: issue-to-PR automation needs event-driven execution, sandboxed code agents, pre-PR review, CI repair loops, human-visible state, and layered agent instructions. Its strongest ideas are staged intent artifacts, Q&A at approval gates, resumable webhook workflows, project-specific skills, and audited manual overrides.
+
+The mismatch is the authority model. Forge centralizes workflow truth in a FastAPI/Redis/LangGraph worker and treats Jira labels/comments as approval signals. Fullsend is trying to keep authority in repository-visible mechanisms: CODEOWNERS, branch protection, required checks, per-role forge identity, and auditable PR/issue state.
+
+**Workflow:** Forge's feature path is:
+
+`Jira Feature -> PRD -> approval/Q&A -> spec -> approval/Q&A -> epics -> approval/Q&A -> tasks -> approval/Q&A -> implementation -> local review -> PR -> CI/fix loop -> AI review -> human review`
+
+The bug path is shorter:
+
+`Jira Bug -> RCA -> approval/Q&A -> implementation -> PR -> CI/fix loop -> review`
+
+**Architecture:** FastAPI receives Jira and GitHub webhooks, Redis Streams queue events for workers, and LangGraph checkpoints workflow state so later webhooks can resume the graph. A host orchestrator handles planning and Jira/GitHub interaction. Ephemeral Podman containers run implementation agents. Markdown skills resolve from `skills/default` plus per-Jira-project overrides. Prometheus and Langfuse provide metrics and tracing.
+
+**Comparison to fullsend:**
+
+| Area | Forge | Fullsend direction |
+|---|---|---|
+| Coordination | Central checkpointed workflow | Repository as coordinator |
+| Authority | Jira labels/comments, GitHub reviews | CODEOWNERS, branch protection, required checks |
+| Intent | Jira elaborated into PRD/spec/tasks | Tiered intent with stronger strategic authorization |
+| Review | Local review, AI review, human gate | Independent zero-trust review sub-agents |
+| Sandbox | Productive Podman runner | Stricter credential isolation and egress policy |
+| Portability | GitHub/Jira-centric | Forge-neutral `forge.Client` abstraction |
+
+**Feature delta:** Forge has several shipped or proposed product features fullsend does not yet have in comparable form:
+
+- PRD/spec/epic/task generation from a single feature ticket.
+- Q&A mode at planning approval gates.
+- LangGraph checkpointing for long-lived workflow state.
+- Per-Jira-project skill overrides.
+- A first-class `/forge skip-gate` command for audited CI bypasses.
+- An implemented `implement_review` node for addressing or contesting PR feedback.
+
+Fullsend has design commitments that Forge does not appear to cover:
+
+- Repo-as-coordinator semantics for agent interaction.
+- Zero-trust review decomposition across independent review sub-agents.
+- Per-role forge identity and permission boundaries.
+- Credential isolation and egress policy as first-class architecture concerns.
+- Harness-level output schema enforcement.
+- Multi-forge portability through `forge.Client`.
+
+**Ideas to borrow:**
+
+- *Staged intent artifacts.* Forge's PRD -> spec -> epics -> tasks sequence is a useful model for Tier 2+ work. Fullsend should borrow the artifact progression, not the Jira-label authority.
+- *Q&A without approval.* Humans can ask questions at a gate without approving or rejecting. This fits fullsend's ambiguous-intent and dual-interpretation escalation problems.
+- *Checkpointed pause/resume.* Forge waits for humans through durable workflow state, not idle implementation containers. Fullsend should keep this operational pattern while keeping authoritative state repo-visible.
+- *Skill override resolution.* `skills/default` plus `skills/{project}` is a simple precedent for fullsend's harness layering.
+- *Review feedback as a task type.* Forge's `implement_review` flow classifies review comments as actionable or contested before acting. That is relevant to fullsend's review loop and salvage/rewrite questions.
+- *Audited CI gate skips.* `/forge skip-gate` is dangerous unless governed, but the UX is useful: constrained command, named check, PR confirmation, audit comment, and re-evaluation.
+
+**Cautions:** Jira label approval is too weak for high-tier intent. A workflow engine can dispatch work, but should not become merge authority. Forge's Podman runner is a productivity sandbox, not a full zero-trust boundary. A single AI review stage is not enough for autonomous merge confidence. CI skip mechanisms need permission checks, policy, and auditability from day one.
+
 ### Stripe Minions
 
 [Architecture blog post](https://stripe.dev/blog/minions-stripes-one-shot-end-to-end-coding-agents) | [Part 2](https://stripe.dev/blog/minions-stripes-one-shot-end-to-end-coding-agents-part-2)
