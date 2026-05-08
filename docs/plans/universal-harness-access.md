@@ -84,6 +84,23 @@ pre_script: scripts/pre-code.sh  # scripts must be local (security)
 
 **Principle:** Declarative resources (agent definitions, skills, policies, schemas) can be remote. Executable resources (scripts, binaries) must be local to preserve auditability and prevent direct code execution from untrusted sources.
 
+**Trade-off:** This means the `.fullsend` repository will still contain local copies of pre/post scripts, validation scripts, and other executable resources. For organizations with many scripts, updates to upstream scripts will still produce "wall of text" diffs when the local copies are updated.
+
+**Mitigations:**
+- **Minimal wrapper pattern:** Local scripts can be thin wrappers that download and verify a URL-sourced script at runtime, then execute it in a restricted sandbox. The wrapper is small and rarely changes; the actual script logic lives at a URL. Example:
+  ```bash
+  #!/bin/bash
+  # pre-code-wrapper.sh (local, version-controlled)
+  fullsend fetch-and-run \
+    --url https://github.com/fullsend-ai/scripts/pre-code.sh \
+    --sha256 abc123... \
+    --sandbox restricted
+  ```
+- **Vendoring with lock files:** Use a lock file (similar to `package-lock.json`) to pin script URLs and hashes. A `fullsend vendor` command updates local copies and the lock file. Diffs show only the lock file changes (URL and hash updates) rather than the full script content.
+- **Future:** If URL-sourced scripts are permitted in the future, they would run in a heavily restricted sandbox with no access to secrets, no network access, and no filesystem writes outside `/tmp`. This shifts the security boundary from "local = trusted" to "sandboxed = constrained regardless of source."
+
+For now, the recommended approach is the minimal wrapper pattern for scripts that change frequently, and direct local scripts for those that are stable.
+
 ### Relative Path Resolution for URL-Referenced Resources
 
 When a harness or resource is fetched from a URL, relative paths within that resource are resolved relative to the URL's base path, not the local `.fullsend` directory:
