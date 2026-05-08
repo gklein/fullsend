@@ -214,7 +214,7 @@ func newInstallCmd() *cobra.Command {
 			printer.Blank()
 
 			if dryRun {
-				return runDryRun(ctx, client, printer, org, repos, roles, inferenceProvider, inferenceProviderName)
+				return runDryRun(ctx, client, printer, org, repos, roles, inferenceProvider, inferenceProviderName, allRepos)
 			}
 
 			// Collect agent credentials via app setup.
@@ -372,13 +372,23 @@ func newAnalyzeCmd() *cobra.Command {
 }
 
 // runDryRun builds a layer stack with empty credentials and analyzes.
-func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, inferenceProvider inference.Provider, inferenceProviderName string) error {
+// If discoveredRepos is non-nil, it will be used instead of calling ListOrgRepos.
+func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, inferenceProvider inference.Provider, inferenceProviderName string, discoveredRepos []forge.Repository) error {
 	printer.Header("Dry run - analyzing what install would do")
 	printer.Blank()
 
-	allRepos, err := client.ListOrgRepos(ctx, org)
-	if err != nil {
-		return fmt.Errorf("listing org repos: %w", err)
+	var allRepos []forge.Repository
+	var err error
+
+	if discoveredRepos != nil {
+		allRepos = discoveredRepos
+		printer.StepDone(fmt.Sprintf("Using %d discovered repositories", len(allRepos)))
+	} else {
+		allRepos, err = client.ListOrgRepos(ctx, org)
+		if err != nil {
+			return fmt.Errorf("listing org repos: %w", err)
+		}
+		printer.StepDone(fmt.Sprintf("Found %d repositories", len(allRepos)))
 	}
 
 	repoNames := repoNameList(allRepos)
