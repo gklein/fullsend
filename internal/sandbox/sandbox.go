@@ -386,6 +386,7 @@ func ExtractTranscripts(sandboxName, agentName, outputDir string) error {
 		f.Close()
 
 		localPath := filepath.Join(outputDir, localName)
+		os.Remove(localPath)
 		if scpErr := Download(sandboxName, remotePath, localPath); scpErr != nil {
 			fmt.Fprintf(os.Stderr, "  [%s] Failed to copy transcript: %v\n", agentName, scpErr)
 			continue
@@ -432,6 +433,13 @@ func ExtractOutputFiles(sandboxName, remoteDir, localDir string) ([]string, erro
 		relPath := strings.TrimPrefix(remotePath, remoteDir)
 		relPath = strings.TrimPrefix(relPath, "/")
 
+		if dir := filepath.Dir(relPath); dir != "." {
+			if mkErr := root.MkdirAll(dir, 0o755); mkErr != nil {
+				fmt.Fprintf(os.Stderr, "  Skipping (dir rejected): %s: %v\n", relPath, mkErr)
+				continue
+			}
+		}
+
 		f, createErr := root.Create(relPath)
 		if createErr != nil {
 			fmt.Fprintf(os.Stderr, "  Skipping (path rejected): %s: %v\n", relPath, createErr)
@@ -440,10 +448,7 @@ func ExtractOutputFiles(sandboxName, remoteDir, localDir string) ([]string, erro
 		f.Close()
 
 		localPath := filepath.Join(localDir, relPath)
-		if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "  Failed to create dir for %s: %v\n", relPath, err)
-			continue
-		}
+		os.Remove(localPath)
 
 		if dlErr := Download(sandboxName, remotePath, localPath); dlErr != nil {
 			fmt.Fprintf(os.Stderr, "  Failed to copy %s: %v\n", relPath, dlErr)

@@ -1024,7 +1024,7 @@ func buildClaudeCommand(agentName, model, repoDir string) string {
 		// --verbose increases log output in the job log. If artifact upload is
 		// added to this workflow, consider whether verbose output should be
 		// redacted or made conditional via an env var.
-		"cd %s && source %s && claude --print --verbose --output-format stream-json %s--agent '%s' --dangerously-skip-permissions 'Run the agent task'",
+		"cd %s && . %s && claude --print --verbose --output-format stream-json %s--agent '%s' --dangerously-skip-permissions 'Run the agent task'",
 		repoDir, envFile, modelFlag, safe,
 	)
 }
@@ -1073,7 +1073,7 @@ func buildScanContextCommand(repoDir, traceID string) string {
 	envFile := sandbox.SandboxWorkspace + "/.env"
 
 	return fmt.Sprintf(
-		"source %s && FULLSEND_TRACE_ID='%s' find '%s' -maxdepth %d -type f \\( %s \\) -exec fullsend scan context {} +",
+		". %s && FULLSEND_TRACE_ID='%s' find '%s' -maxdepth %d -type f \\( %s \\) -exec fullsend scan context {} +",
 		envFile, traceID, escapedDir, maxContextScanDepth, inameExpr,
 	)
 }
