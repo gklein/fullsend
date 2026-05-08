@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -85,11 +86,12 @@ func validateOrgName(org string) error {
 }
 
 func newInstallCmd() *cobra.Command {
-	var repos []string
 	var agents string
 	var dryRun bool
 	var skipAppSetup bool
 	var vendorBinary bool
+	var enrollAllFlag bool
+	var enrollNoneFlag bool
 	var gcpProject string
 	var gcpRegion string
 	var gcpServiceAccount string
@@ -186,8 +188,50 @@ func newInstallCmd() *cobra.Command {
 				inferenceProviderName = loadExistingInferenceProvider(ctx, client, org)
 			}
 
+			// Validate enrollment flags.
+			if enrollAllFlag && enrollNoneFlag {
+				return fmt.Errorf("--enroll-all and --enroll-none are mutually exclusive")
+			}
+
+			// Determine enrollment choice: use flag if set, otherwise prompt.
+			var enrollAll bool
+			if enrollAllFlag {
+				enrollAll = true
+			} else if enrollNoneFlag {
+				enrollAll = false
+			} else {
+				// Prompt for enrollment choice: all or none.
+				enrollAll, err = promptEnrollment(printer, os.Stdin)
+				if err != nil {
+					return err
+				}
+			}
+
+			// Discover all org repos upfront to avoid redundant API calls in runDryRun/runInstall.
+			allRepos, err := client.ListOrgRepos(ctx, org)
+			if err != nil {
+				return fmt.Errorf("listing org repos: %w", err)
+			}
+
+			var repos []string
+			if enrollAll {
+				// Filter out .fullsend from enrollment.
+				for _, r := range allRepos {
+					if r.Name != forge.ConfigRepoName {
+						repos = append(repos, r.Name)
+					}
+				}
+				printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
+			} else {
+				printer.StepInfo("No repositories will be enrolled during install")
+				printer.StepInfo("To enroll repositories later, use:")
+				printer.StepInfo(fmt.Sprintf("  fullsend admin enable repos %s <repo-name> [repo-name...]", org))
+				printer.StepInfo(fmt.Sprintf("  fullsend admin enable repos %s --all", org))
+			}
+			printer.Blank()
+
 			if dryRun {
-				return runDryRun(ctx, client, printer, org, repos, roles, inferenceProvider, inferenceProviderName)
+				return runDryRun(ctx, client, printer, org, repos, roles, inferenceProvider, inferenceProviderName, allRepos)
 			}
 
 			// Collect agent credentials via app setup.
@@ -203,15 +247,16 @@ func newInstallCmd() *cobra.Command {
 				agentCreds = creds
 			}
 
-			return runInstall(ctx, client, printer, org, repos, roles, agentCreds, inferenceProvider, inferenceProviderName, vendorBinary)
+			return runInstall(ctx, client, printer, org, repos, roles, agentCreds, inferenceProvider, inferenceProviderName, vendorBinary, allRepos)
 		},
 	}
 
-	cmd.Flags().StringSliceVar(&repos, "repo", nil, "repositories to enable (repeatable)")
 	cmd.Flags().StringVar(&agents, "agents", "fullsend,triage,coder,review", "comma-separated agent roles")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without making them")
 	cmd.Flags().BoolVar(&skipAppSetup, "skip-app-setup", false, "skip GitHub App creation/setup")
 	cmd.Flags().BoolVar(&vendorBinary, "vendor-fullsend-binary", false, "cross-compile and upload the fullsend binary into .fullsend/bin/ for development iteration")
+	cmd.Flags().BoolVar(&enrollAllFlag, "enroll-all", false, "enroll all repositories without prompting")
+	cmd.Flags().BoolVar(&enrollNoneFlag, "enroll-none", false, "skip repository enrollment without prompting")
 	cmd.Flags().StringVar(&gcpProject, "gcp-project", "", "GCP project ID for Vertex AI inference")
 	cmd.Flags().StringVar(&gcpRegion, "gcp-region", "", "GCP region for Vertex AI (e.g. global, required with --gcp-project)")
 	cmd.Flags().StringVar(&gcpServiceAccount, "gcp-service-account", "", "existing GCP service account name (optional, used with --gcp-project)")
@@ -346,19 +391,29 @@ func newAnalyzeCmd() *cobra.Command {
 }
 
 // runDryRun builds a layer stack with empty credentials and analyzes.
-func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, inferenceProvider inference.Provider, inferenceProviderName string) error {
+// If discoveredRepos is non-nil, it will be used instead of calling ListOrgRepos.
+func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, inferenceProvider inference.Provider, inferenceProviderName string, discoveredRepos []forge.Repository) error {
 	printer.Header("Dry run - analyzing what install would do")
 	printer.Blank()
 
-	allRepos, err := client.ListOrgRepos(ctx, org)
-	if err != nil {
-		return fmt.Errorf("listing org repos: %w", err)
+	var allRepos []forge.Repository
+	var err error
+
+	if discoveredRepos != nil {
+		allRepos = discoveredRepos
+		printer.StepDone(fmt.Sprintf("Using %d discovered repositories", len(allRepos)))
+	} else {
+		allRepos, err = client.ListOrgRepos(ctx, org)
+		if err != nil {
+			return fmt.Errorf("listing org repos: %w", err)
+		}
+		printer.StepDone(fmt.Sprintf("Found %d repositories", len(allRepos)))
 	}
 
 	repoNames := repoNameList(allRepos)
 	hasPrivate := hasPrivateRepos(allRepos)
 
-	// Validate that every --repo value matches a discovered repo.
+	// Validate that every enabled repository matches a discovered repo.
 	if err := validateEnabledRepos(enabledRepos, repoNames); err != nil {
 		return err
 	}
@@ -467,10 +522,10 @@ func ensureConfigRepoExists(ctx context.Context, client forge.Client, printer *u
 	return nil
 }
 
-// validateEnabledRepos checks that every --repo value exists in the
+// validateEnabledRepos checks that every enabled repository exists in the
 // discovered (eligible) repo list. Repos filtered out by ListOrgRepos
 // (forks, archived) will not appear in discoveredNames, so this catches
-// the case where a user targets a fork or archived repo.
+// the case where an enabled repo is a fork or archived.
 //
 // This validation exists because fullsend's trust model is org-centric:
 // forks may live outside the org's permission boundary or lack the same
@@ -498,21 +553,29 @@ func validateEnabledRepos(enabledRepos, discoveredNames []string) error {
 }
 
 // runInstall performs the full installation.
-func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, agentCreds []layers.AgentCredentials, inferenceProvider inference.Provider, inferenceProviderName string, vendorBinary bool) error {
-	printer.Header("Discovering repositories")
+// If discoveredRepos is non-nil, it will be used instead of calling ListOrgRepos.
+func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, agentCreds []layers.AgentCredentials, inferenceProvider inference.Provider, inferenceProviderName string, vendorBinary bool, discoveredRepos []forge.Repository) error {
+	var allRepos []forge.Repository
+	var err error
 
-	allRepos, err := client.ListOrgRepos(ctx, org)
-	if err != nil {
-		return fmt.Errorf("listing org repos: %w", err)
+	if discoveredRepos != nil {
+		allRepos = discoveredRepos
+		printer.Header("Using discovered repositories")
+		printer.StepDone(fmt.Sprintf("Found %d repositories", len(allRepos)))
+	} else {
+		printer.Header("Discovering repositories")
+		allRepos, err = client.ListOrgRepos(ctx, org)
+		if err != nil {
+			return fmt.Errorf("listing org repos: %w", err)
+		}
+		printer.StepDone(fmt.Sprintf("Found %d repositories", len(allRepos)))
 	}
 
 	repoNames := repoNameList(allRepos)
 	hasPrivate := hasPrivateRepos(allRepos)
-
-	printer.StepDone(fmt.Sprintf("Found %d repositories", len(allRepos)))
 	printer.Blank()
 
-	// Validate that every --repo value matches a discovered repo.
+	// Validate that every enabled repository matches a discovered repo.
 	if err := validateEnabledRepos(enabledRepos, repoNames); err != nil {
 		return err
 	}
@@ -888,6 +951,37 @@ func collectEnrolledRepoIDs(allRepos []forge.Repository, enabledRepos []string) 
 		}
 	}
 	return ids
+}
+
+// promptEnrollment asks the user whether to enroll all repositories or none.
+// Returns true if the user chooses to enroll all, false if none.
+// Accepts an io.Reader to enable testing without os.Stdin.
+func promptEnrollment(printer *ui.Printer, in io.Reader) (bool, error) {
+	printer.Header("Repository Enrollment")
+	printer.Blank()
+	printer.StepInfo("Choose repository enrollment:")
+	printer.StepInfo("  [a] Enroll all repositories (excluding .fullsend)")
+	printer.StepInfo("  [n] Enroll no repositories (configure later with 'fullsend admin enable repos')")
+	printer.Blank()
+
+	reader := bufio.NewReader(in)
+	for {
+		printer.StepInfo("Enter choice (a/n): ")
+		choice, err := reader.ReadString('\n')
+		if err != nil {
+			return false, fmt.Errorf("reading enrollment choice: %w", err)
+		}
+		choice = strings.TrimSpace(strings.ToLower(choice))
+
+		switch choice {
+		case "a", "all":
+			return true, nil
+		case "n", "none":
+			return false, nil
+		default:
+			printer.StepWarn(fmt.Sprintf("Invalid choice: %q (expected 'a' or 'n')", choice))
+		}
+	}
 }
 
 // promptDispatchToken checks whether the dispatch token org secret already
