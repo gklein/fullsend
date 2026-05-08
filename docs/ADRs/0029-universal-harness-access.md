@@ -1,6 +1,6 @@
 ---
 title: "29. Universal harness access via URLs and paths"
-status: Proposed
+status: Deferred
 relates_to:
   - agent-architecture
   - security-threat-model
@@ -18,7 +18,7 @@ Date: 2026-05-07
 
 ## Status
 
-Proposed
+Deferred
 
 ## Context
 

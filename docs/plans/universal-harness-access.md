@@ -1126,8 +1126,8 @@ If `--offline` is set and a harness references a URL, should the runner:
 - **[ADR-0024: Harness Definitions](../ADRs/0024-harness-definitions.md)** — Current harness schema and resolution logic
 - **[ADR-0022: Output Schema Enforcement](../ADRs/0022-harness-level-output-schema-enforcement.md)** — Security validation of agent output
 - **[ADR-0017: Credential Isolation](../ADRs/0017-credential-isolation-for-sandboxed-agents.md)** — Sandbox security model
-- **[Security Threat Model](./security-threat-model.md)** — Threat priority and attack vectors
-- **[Agent Architecture](./agent-architecture.md)** — Agent composition and interaction patterns
+- **[Security Threat Model](../problems/security-threat-model.md)** — Threat priority and attack vectors
+- **[Agent Architecture](../problems/agent-architecture.md)** — Agent composition and interaction patterns
 
 ## Conclusion
 
