@@ -4,6 +4,7 @@ description: >
   Use when the user wants to tag a release, cut a release candidate, or ship a
   new version. Also use when asking about release process, versioning, or how
   GoReleaser is configured.
+allowed-tools: Read, Grep, Glob, AskUserQuestion, Bash(git tag:*), Bash(git log:*), Bash(git diff:*), Bash(git pull:*), Bash(git push:*), Bash(gh release:*), Bash(gh run:*), Bash(git checkout:*), Bash(bash scripts/install-binary.sh:*)
 ---
 
 # Cutting Releases
@@ -112,6 +113,19 @@ gh release view <tag>
 ```
 
 Check that the title, changelog, and binary assets look correct.
+
+### 9. Install the binary locally
+
+Ask the user where to install (default: `~/.local/bin/`), then run
+[scripts/install-binary.sh](scripts/install-binary.sh):
+
+```bash
+bash scripts/install-binary.sh <tag> [install-dir]
+```
+
+The script downloads the release archive, verifies its SHA-256 checksum
+against the release's `checksums.txt`, and installs the binary as
+`fullsend-<tag>` so multiple versions can coexist.
 
 ## Notes
 
