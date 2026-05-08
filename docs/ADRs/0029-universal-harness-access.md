@@ -148,22 +148,27 @@ If Option A (URL support everywhere with security extensions) is accepted:
 
 - **Harness schema:** Every path field (`agent`, `policy`, `skills[]`, `host_files[].src`, `pre_script`, `post_script`, etc.) accepts URLs.
 - **Resolution logic:** The runner resolves URLs by fetching, caching (content-addressed), and validating before use.
-- **Transitive closure:** Referenced resources (skills, policies) are parsed to extract their own references, which are recursively fetched.
+- **Transitive closure:** Referenced resources (skills, policies) are parsed to extract their own references, which are recursively fetched. To prevent infinite recursion and circular dependencies:
+  - **Visited node tracking:** The resolver maintains a set of already-visited URLs. If a URL is encountered twice in the same dependency chain, the resolver returns an error indicating a circular dependency.
+  - **Max depth limit:** Dependency resolution is bounded by a configurable maximum depth (default: 10 levels). This prevents both cycles and pathologically deep dependency trees from consuming excessive time or memory.
+  - **Breadth limits:** A maximum number of dependencies per resource (default: 50) prevents dependency explosion attacks.
 - **Access policies:** Runtime policies constrain what URL-referenced resources can do (e.g., URL-sourced scripts run with reduced privileges or not at all).
 
 ### Security implications (CRITICAL)
 
-1. **TOCTOU (Time-of-Check-Time-of-Use):** A remote resource could change between fetch and use. **Mitigation:** Content-addressed caching. Once fetched and validated, the cached version is immutable. The cache key is `SHA256(URL + content)`.
+1. **TOCTOU (Time-of-Check-Time-of-Use):** A remote resource could change between fetch and use. **Mitigation:** **Mandatory hash pinning for all remote resources.** All URLs must include a SHA256 integrity hash: `https://example.com/skill.md#sha256=abc123...`. The runner verifies the fetched content matches the declared hash before use. Content-addressed caching ensures that once fetched and validated, the cached version is immutable. The cache key is `SHA256(URL + hash)`.
 
 2. **Content injection via compromised URLs:** An attacker who controls a URL referenced by a harness can inject malicious agent instructions, skills, or policies. **Mitigations:**
+   - **Mandatory hash pinning** (see above): Even if an attacker compromises the source server, they cannot change the content without breaking the hash verification. This applies equally to fullsend-ai repositories and external URLs.
    - Schema validation (ADR-0022): All fetched resources are validated against their schema before use.
    - Output validation: Agent output is validated regardless of source.
-   - SSRF protection: Runner applies URL allowlists (e.g., only `https://github.com`, `https://gitlab.com`, `https://cdn.fullsend.ai`).
+   - SSRF protection: Runner applies URL allowlists configured in `config.yaml`.
    - Signature verification (future): Remote resources could be signed by their publisher, verified by the runner.
 
 3. **Dependency confusion:** An attacker publishes a malicious skill at `https://attacker.com/skills/common-name` and tricks a harness into referencing it instead of the legitimate `https://fullsend.ai/skills/common-name`. **Mitigations:**
    - Explicit URL references (no auto-resolution of names to URLs).
-   - URL allowlists per organization (configurable in `config.yaml`).
+   - User-controlled URL allowlists per organization (configurable in `config.yaml`). Fetches to URLs outside the allowlist are rejected.
+   - Mandatory hash pinning: The attacker cannot substitute content for an already-pinned URL.
    - Lock files (future): Pin exact URLs and hashes for all transitive dependencies.
 
 4. **Prompt injection via skills:** A URL-fetched skill contains adversarial instructions designed to manipulate the agent. **Mitigations:**
@@ -218,35 +223,50 @@ This granularity is intentional: the goal is to enable decentralized evolution o
 
 To support community sharing and provide a trusted source for harness components, fullsend-ai should maintain dedicated GitHub repositories for harness files and components. Suggested structure:
 
-- **`fullsend-ai/harnesses`** — First-class, fully supported harness definitions. These are rigorously evaluated, have test coverage, and are maintained by the fullsend team. Organizations can reference these with high confidence.
+- **`fullsend-ai/harnesses`** — Fully supported harness definitions. These are rigorously evaluated, have test coverage, and are maintained by the fullsend team. Organizations can reference these with high confidence.
 
 - **`fullsend-ai/community`** — Community-contributed harnesses, agents, skills, and policies. Lower evaluation bar, more experimental, and more likely to accept external contributions. Acts as a proving ground for components that may graduate to `harnesses`.
 
-- **Tiered trust model:**
-  - First-class components (from `harnesses`) could be referenced without explicit hash pinning (trust the repository).
-  - Community components (from `community`) should require explicit hash pinning or signature verification.
-  - External components (from arbitrary URLs) require both hash pinning and explicit allowlisting in `config.yaml`.
+### Uniform security with user-controlled trust
 
-This repository structure makes it easier for organizations to adopt shared components while understanding the trust boundaries.
+**Design decision (2026-05-08):** The initial draft proposed a tiered trust model where fullsend-ai components could skip hash pinning while community and external components required increasingly strict verification. This was rejected during review because it contradicts the goal of decentralized evolution — it creates gatekeeping that discourages independent sharing and pushes everything toward centralized fullsend-ai repositories.
+
+Instead, the model applies **uniform security to all remote resources:**
+
+- **All remote resources require hash pinning**, regardless of source. `https://github.com/fullsend-ai/harnesses/agents/code.md#sha256=abc123...` and `https://example.com/my-skill.md#sha256=def456...` have the same verification requirements.
+
+- **User-controlled allowlist with sensible defaults.** Organizations configure allowed URL prefixes in `config.yaml`:
+  ```yaml
+  allowed_remote_resources:
+    - https://github.com/fullsend-ai/harnesses/
+    - https://github.com/fullsend-ai/community/
+    # Users add their own trusted sources:
+    - https://github.com/example-org/agent-library/
+  ```
+  The default configuration (shipped with `.fullsend` repo creation) includes `fullsend-ai/harnesses` and `fullsend-ai/community`, but these are user-editable and carry no special privilege beyond being in the default allowlist.
+
+- **No special treatment for first-party resources.** A resource from `fullsend-ai/harnesses` must be hash-pinned and pass the same integrity checks as any other URL. This prevents silent substitution attacks even if the fullsend-ai GitHub organization is compromised.
+
+This approach follows the GitHub Actions model: you can use actions from anywhere, but best practice is SHA-pinning everywhere. There's no tier of "blessed" actions that skip security requirements.
 
 ### Open questions
 
-- **Signature verification:** Should remote resources be signed? By whom? Using what PKI?
-- **Namespace governance:** Who controls `https://cdn.fullsend.ai/skills/`? How do community contributors publish?
+- **Signature verification (optional enhancement):** Hash pinning prevents content substitution, but doesn't prove authorship. Should remote resources optionally support cryptographic signatures? What PKI model would we use?
+- **Namespace governance:** Who controls `https://cdn.fullsend.ai/skills/`? How do community contributors publish? (Note: This may not be needed — contributors can host on their own GitHub repos and users can allowlist them.)
 - **Version resolution:** If a skill references `policy: v2` but doesn't specify a URL, how is that resolved?
 - **Offline mode:** Should the runner support an offline mode where all resources must be pre-cached?
 - **Lock file format:** What does a dependency lock file look like for harnesses?
-- **Component graduation path:** How do community components graduate to first-class status? What evaluation criteria must they meet?
+- **Component quality tiers:** `fullsend-ai/harnesses` vs `fullsend-ai/community` distinguish maintenance commitment and test coverage, but both are in the default allowlist. Should these repositories have different merge criteria or governance?
 
 ## Related Work
 
 This pattern is well-established in other ecosystems:
 
-- **GitHub Actions:** Workflows reference actions via `uses: actions/checkout@v4` (a GitHub URL shorthand). Actions are fetched at runtime. SHA pinning is recommended: `uses: actions/checkout@8e5e7e5...`.
+- **GitHub Actions:** Workflows reference actions via `uses: actions/checkout@v4` (a GitHub URL shorthand). Actions are fetched at runtime. SHA pinning is recommended for security: `uses: actions/checkout@8e5e7e5...`. Actions from any source (including `actions/*`) are treated equally — there's no tier of "blessed" actions that skip hash pinning.
 - **Kubernetes:** Manifests reference container images by URL (`image: gcr.io/project/image:tag`). Digest pinning prevents tag mutation: `image: gcr.io/project/image@sha256:abc123...`.
 - **npm/pip/cargo:** Packages reference dependencies by name+version. Lock files pin exact versions and integrity hashes.
 
-The proposed model combines these patterns: URL-based references (like GitHub Actions) with content-addressed caching (like container images) and optional lock files (like npm).
+The proposed model follows the GitHub Actions approach: URL-based references with **mandatory** SHA256 pinning (stronger than GitHub's "recommended"), content-addressed caching (like container images), and optional lock files for transitive dependencies (like npm).
 
 ## Implementation Plan
 
