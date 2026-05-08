@@ -217,36 +217,6 @@ func Exec(sandboxName, command string, timeout time.Duration) (stdout, stderr st
 	return stdoutBuf.String(), stderrBuf.String(), exitCode, nil
 }
 
-// ExecStream runs a command inside a sandbox, streaming output to the given writers.
-func ExecStream(sandboxName, command string, timeout time.Duration, stdoutW, stderrW *os.File) (int, error) {
-	timeoutSecs := fmt.Sprintf("%d", int(timeout.Seconds()))
-
-	cmd := exec.Command("openshell", "sandbox", "exec",
-		"--name", sandboxName,
-		"--no-tty",
-		"--timeout", timeoutSecs,
-		"--", "sh", "-c", command,
-	)
-	cmd.Stdout = stdoutW
-	cmd.Stderr = stderrW
-
-	err := cmd.Run()
-	exitCode := -1
-	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
-	}
-
-	if err != nil && cmd.ProcessState == nil {
-		return exitCode, fmt.Errorf("openshell exec failed to start: %w", err)
-	}
-
-	if exitCode == 124 {
-		return exitCode, fmt.Errorf("command timed out after %s", timeout)
-	}
-
-	return exitCode, nil
-}
-
 // ExecStreamReader runs a command inside a sandbox, returning an io.ReadCloser for
 // stdout so the caller can parse structured output. Stderr is forwarded to the
 // given writer. The caller must read stdout to completion, then call cmd.Wait().
