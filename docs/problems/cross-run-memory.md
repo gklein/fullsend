@@ -4,72 +4,87 @@ How do agents learn from prior run outcomes on the same repository, and how shou
 
 ## The memory problem
 
-Agents are stateless — each run starts with zero knowledge of prior attempts on the same repository. The sandbox is ephemeral by design: "created per-run, destroyed after extraction. No state carries between runs" (architecture doc). This is a sound security and isolation decision, but it has a compounding cost: agents rediscover the same lessons on every run.
+Agents are stateless by default. Each run starts with no working knowledge of prior attempts on the same repository. The sandbox is ephemeral by design: "Created per-run, destroyed after extraction. No state carries between runs" ([architecture.md](../architecture.md#key-invariants-visible-in-this-layout)). This is a sound security and isolation decision, but it has a compounding cost: agents rediscover the same lessons on every run.
 
-If an agent repeatedly fails on a repo for a specific reason — "this repo requires running `make generate` after interface changes", "tests require a running database container", "the CI lint config enforces an import ordering the agent doesn't default to" — it burns through the same retry loops and escalates for the same reason across multiple issues. The knowledge exists (in transcripts, in retro agent proposals, in closed escalation issues) but is never automatically fed back to the next run.
+If an agent repeatedly fails on a repo for a specific reason — "this repo requires running `make generate` after interface changes", "tests require a running database container", "the CI lint config enforces an import ordering the agent doesn't default to" — it burns through the same retry loops and escalates for the same reason across multiple issues. The knowledge exists somewhere, but not in a form the next run can safely consume.
+
+This problem sits between two true statements:
+
+- **Stateless runs are safer.** They limit persistence, reduce cross-run contamination, and make agent behavior easier to reason about.
+- **Stateless runs are wasteful.** They throw away operational lessons that would make the next run faster, cheaper, and less frustrating.
+
+The hard question is not whether memory is useful. It is how to preserve useful lessons without creating a second, less-reviewed instruction channel for future agents.
 
 ## What exists today
 
 Two mechanisms partially address this:
 
-**Per-repo AGENTS.md / skills.** Humans (or the retro agent's proposals, once accepted) encode repo-specific knowledge as skills or agent instructions. This is the right long-term solution for stable, generalizable patterns. But it requires human intervention to convert a run outcome into a skill, and it doesn't capture transient or tactical information ("the last 3 runs on this repo all failed because the CI runner was misconfigured — don't retry lint failures until #142 is resolved").
+**Per-repo AGENTS.md / skills.** Humans, or accepted retro-agent proposals, encode repo-specific knowledge as skills or agent instructions. This is the right long-term solution for stable, generalizable patterns. But it requires human intervention to convert a run outcome into guidance, and it does not capture transient or tactical information such as "the last three runs on this repo all failed because the CI runner was misconfigured; do not retry lint failures until #142 is resolved."
 
-**Retro agent ([14 retro agent runtime](../architecture.md)).** Analyzes completed workflows and files improvement proposals as GitHub issues. Effective for systemic improvements, but the proposals enter the issue backlog and require human triage before they affect future runs. The latency is days to weeks, not run-to-run.
+**Retro agent ([14 retro agent runtime](../architecture.md#14-retro-agent-runtime)).** The retro agent analyzes completed workflows and files improvement proposals as GitHub issues. This is valuable for systemic learning, but it intentionally enters a human review and triage path before changing future agent behavior. That is slower than the run-to-run feedback loop this problem points at.
 
-Neither mechanism provides **automatic, immediate feedback** from one run's outcome to the next run's context.
+Neither mechanism provides automatic, immediate feedback from one run's outcome to the next run's context. That gap is the problem space.
 
-## A harness-mediated memory layer
+## The feedback-loop tension
 
-The key constraint: memory must live outside the sandbox, injected by the harness layer — the same way skills and agent definitions are assembled today. The sandbox remains ephemeral. No inner layer reads from or writes to persistent state directly. The harness mediates all cross-run information.
+There are at least three different kinds of memory, and they should not be treated the same way:
 
-### Record
+- **Stable repo guidance** — durable facts about how a repository works, such as test commands, generated files, or review conventions. This belongs in reviewed repo instructions or skills.
+- **Recent operational state** — temporary facts about the current environment, such as a broken runner, a flaky dependency, or a known upstream outage. This may be useful immediately but can become stale quickly.
+- **Agent self-assessment** — lessons an agent claims to have learned from its own failure, such as "the reviewer objected because X" or "the correct fix was Y." This is often useful, but it is also the least trustworthy because it is generated by the same class of system that made the mistake.
 
-After each run completes (success, failure, or escalation), the post-script writes a structured summary on the host. This runs after sandbox destruction, so no sandbox invariant is violated.
+The temptation is to collapse these into one memory stream. That would make memory easy to inject, but it would also blur review requirements. A stable build instruction, a transient CI observation, and an agent-authored interpretation of review feedback have different risk profiles.
 
-The summary includes:
-- Outcome (success / failure / escalation / no-op)
-- Failure reason, if any (lint failure, test failure, review rejection, timeout)
-- Review feedback received (from the coordinator merge algorithm)
-- Repo-specific patterns discovered ("had to run `make generate`", "test suite requires `docker compose up`")
-- Issue number and agent role
+## Memory as an attack surface
 
-### Store
+Cross-run memory creates a new prompt-injection and governance problem: if memory influences future agents, then writing memory is a way to influence future agents.
 
-Summaries are stored per-repo in the `.fullsend` config repo (e.g., `memory/<org>/<repo>.jsonl`), governed by the org's CODEOWNERS. This follows the existing configuration layering model: org-wide configuration lives in `.fullsend`, scoped per-repo.
+The dangerous case is not just stale or inaccurate memory. It is adversarial memory poisoning. For example:
 
-Design constraints:
-- **Per-repo scoping** — patterns learned from one codebase must not leak into unrelated repos
-- **Bounded retention** — keep the last N runs (e.g., 20) to bound context size and prevent stale history from dominating
-- **Append-only from post-scripts** — the memory file is written by post-scripts on the host, never by the agent inside the sandbox
-- **Human-reviewable** — JSONL is human-readable and diffable, so CODEOWNERS can review what's being recorded
+1. An attacker opens an issue or pull request containing instructions aimed at the triage agent.
+2. The triage agent records a plausible-looking "lesson" from the run.
+3. A later review agent receives that lesson as trusted context.
+4. The review agent becomes more likely to approve a change it should reject.
 
-### Inject
+In that scenario, the attacker did not need direct access to the review agent's prompt or policy. They influenced an upstream agent that produced context for a downstream agent. This turns memory into an inter-agent communication channel, which connects directly to the agent-to-agent prompt injection concerns in the [security threat model](security-threat-model.md#threat-5-agent-to-agent-prompt-injection).
 
-On new runs, the pre-script fetches recent summaries for the target repo and injects them into the agent's context via the harness. Options:
-- Generated skill file (e.g., `memory-context.md` assembled from recent summaries, placed alongside other skills)
-- Environment variable (for short summaries)
-- Harness template variable (if harness definitions support dynamic templating)
+This is especially sensitive if memory is non-review-gated. A memory system that agents can write and other agents automatically trust would bypass the existing model where durable instructions flow through reviewed files, CODEOWNERS, and policy configuration.
 
-This follows the existing pattern: the harness assembles context on the host, the sandbox receives it read-only.
+## What must be separated
 
-## What this is NOT
+Any eventual design needs to split several concerns that are easy to conflate:
 
-- **Not persistent sandbox state.** The sandbox remains ephemeral. Memory lives in the harness layer.
-- **Not a replacement for skills/AGENTS.md.** Memory is tactical (recent run outcomes); skills are strategic (stable patterns). The retro agent should still propose skill additions for patterns that stabilize across multiple runs.
-- **Not cross-repo.** Memory is strictly scoped per-repo. An org-wide "agents are bad at Go interface changes" insight belongs in an org-level skill, not in memory.
-- **Not agent-writable during a run.** The agent cannot modify memory. Only post-scripts on the host can append to it.
+- **Observation vs. instruction.** "The last run failed with `make generate` missing" is different from "always run `make generate` before review." Observations can inform; instructions constrain.
+- **Agent-authored vs. system-derived.** A post-script can record exit codes, failing checks, and labels without trusting the agent's prose. Agent-written summaries need more skepticism.
+- **Tactical vs. durable.** Short-lived incident context should expire. Durable repo conventions should graduate into reviewed instructions.
+- **Same-role vs. cross-role.** A code agent learning from its own prior code failures has a different risk profile from a triage agent influencing a review agent.
+- **Human-reviewed vs. automatic.** Review-gated memory is slower but safer. Ungated memory is faster but opens the poisoning path above.
+
+These splits suggest that "memory" may not be one feature. It may be several feedback paths with different trust levels, retention windows, and promotion rules.
+
+## Constraints
+
+- **The sandbox should remain ephemeral.** Cross-run learning should not imply persistent sandbox state.
+- **Agents should not be able to rewrite their own guardrails.** Durable instructions still need the same review path as other policy or repo guidance.
+- **Memory must be scoped.** Lessons from one repository should not silently leak into another repository, and lessons from one organization should not leak into another organization.
+- **Memory must be attributable.** Future agents and human reviewers should be able to see where a remembered fact came from: which run, which role, which issue or PR, and whether it was system-derived or agent-authored.
+- **Memory must decay.** Some lessons become wrong. A useful memory system needs a way to expire, supersede, or promote entries.
 
 ## Relationship to other problem areas
 
-- **Codebase context** — memory is a fourth context source alongside code, per-repo instructions, and org-level architecture docs. It follows the same principle: structured, minimal, injected by the harness.
-- **Testing agents** — run outcomes are a form of eval signal. Memory recording could feed into the eval framework for measuring whether agents improve over time on a given repo.
-- **Operational observability** — hemory summaries are a structured subset of the observability data already being collected (transcripts, workflow logs). The question is packaging it for agent consumption.
-- **Agent architecture** — the retro agent and memory are complementary. Retro proposes systemic improvements requiring human approval. Memory provides immediate tactical context automatically. A mature system might have the retro agent *curate* the memory file, pruning stale entries and promoting stable patterns to skills.
+- **[Security Threat Model](security-threat-model.md)** — Memory is a persistence mechanism, so it expands the prompt-injection surface. The key risk is poisoned context moving from one agent run to another.
+- **[Codebase Context](codebase-context.md)** — Memory is a potential fourth context source alongside code, per-repo instructions, and org-level architecture docs. It needs the same discipline around scope, provenance, and structure.
+- **[Testing Agents](testing-agents.md)** — Run outcomes are eval signals. A memory mechanism could help measure whether agents improve over time on a given repo, but only if the signal is structured and auditable.
+- **[Operational Observability](operational-observability.md)** — Memory summaries overlap with observability data already being collected, such as transcripts, workflow logs, and review outcomes. The question is which subset is safe to feed back into agent context.
+- **[Agent Architecture](agent-architecture.md)** — The retro agent and memory are complementary. Retro proposes systemic improvements that humans can review. Memory raises the question of whether any lower-latency path can be safe enough.
 
 ## Open questions
 
-- What is the right retention window? Too short and agents lose useful history; too long and stale context dominates. Should retention be time-based (last 30 days), count-based (last 20 runs), or outcome-based (keep all failures, prune successes)?
-- Should the retro agent curate the memory file? It could prune resolved issues, promote stable patterns to skills, and flag contradictory entries.
-- How does memory interact with the output schema (ADR 0022)? If agent output includes a structured result field, the post-script can extract richer summaries. Should the output schema require a "lessons learned" field?
-- What is the privacy/security model? Memory summaries could contain information about code, test failures, or internal processes. Should they be encrypted, or is the `.fullsend` repo's access control sufficient?
-- How does this interact with the multi-org deployment model? Each org's memory is fully independent (consistent with the "no shared control plane" principle), but should upstream fullsend provide a default memory schema?
+- Which run outcomes are safe to feed forward automatically, and which require human review first?
+- Should memory entries be observations only, or can any of them become instructions?
+- How should future agents distinguish system-derived facts from agent-authored interpretations?
+- Can non-review-gated memory be made safe enough, or should all durable memory promotion go through reviewed repo instructions or skills?
+- How should memory interact with separate agent roles? Should triage memory ever influence review behavior directly?
+- What retention model prevents stale memory from dominating: time-based, count-based, outcome-based, or explicit supersession?
+- Should the retro agent curate memory by pruning stale entries and proposing durable skill additions, or would that give it too much influence over future runs?
+- How does memory interact with the output schema (ADR 0022)? Should agent output include a structured "observations" field that post-scripts can validate and classify?
