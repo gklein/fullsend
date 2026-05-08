@@ -4,7 +4,7 @@ How do agents learn from prior run outcomes on the same repository, and how shou
 
 ## The memory problem
 
-Agents are stateless by default. Each run starts with no working knowledge of prior attempts on the same repository. The sandbox is ephemeral by design: "Created per-run, destroyed after extraction. No state carries between runs" ([architecture.md](../architecture.md#key-invariants-visible-in-this-layout)). This is a sound security and isolation decision, but it has a compounding cost: agents rediscover the same lessons on every run.
+Agents are stateless by default. Each run starts with no working knowledge of prior attempts on the same repository. The sandbox is ephemeral by design: "Created per-run, destroyed after extraction. No state carries between runs" ([architecture.md](../architecture.md)). This is a sound security and isolation decision, but it has a compounding cost: agents rediscover the same lessons on every run.
 
 If an agent repeatedly fails on a repo for a specific reason — "this repo requires running `make generate` after interface changes", "tests require a running database container", "the CI lint config enforces an import ordering the agent doesn't default to" — it burns through the same retry loops and escalates for the same reason across multiple issues. The knowledge exists somewhere, but not in a form the next run can safely consume.
 
@@ -87,4 +87,4 @@ These splits suggest that "memory" may not be one feature. It may be several fee
 - How should memory interact with separate agent roles? Should triage memory ever influence review behavior directly?
 - What retention model prevents stale memory from dominating: time-based, count-based, outcome-based, or explicit supersession?
 - Should the retro agent curate memory by pruning stale entries and proposing durable skill additions, or would that give it too much influence over future runs?
-- How does memory interact with the output schema (ADR 0022)? Should agent output include a structured "observations" field that post-scripts can validate and classify?
+- How should memory interact with structured agent output? Should agent output include an "observations" field that post-scripts can validate and classify?
