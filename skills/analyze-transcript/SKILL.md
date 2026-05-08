@@ -105,6 +105,11 @@ Shows assistant text, tool calls, and results with line numbers. Use
 `| head -N` for the start or `| tail -N` for the end of large transcripts.
 Use `--max-width 0` for full untruncated output.
 
+**Context window caution:** Transcript output can be very large. When analyzing
+transcripts from within an agent session, dispatch a subagent to run analysis
+commands and summarize findings rather than running them in your main context.
+Use `| head -N` or `--lines` to limit output when running directly.
+
 **Tool usage breakdown:**
 ```bash
 python3 <base-dir>/analyze-transcript.py tools <path>
@@ -122,14 +127,14 @@ python3 <base-dir>/analyze-transcript.py search "yarn install" <path>
 ```
 Regex search across all tool results and assistant text.
 
-**Restrict to line range (works before or after subcommand):**
+**Restrict to line range (place after subcommand; transcript subcommands only):**
 ```bash
 python3 <base-dir>/analyze-transcript.py conversation <path> --lines 50-100
 ```
 
 **JSON output (for programmatic use):**
 ```bash
-python3 <base-dir>/analyze-transcript.py --json summary <path>
+python3 <base-dir>/analyze-transcript.py summary <path> --json
 ```
 
 ### 7. Sandbox network analysis
@@ -189,3 +194,8 @@ destination hosts, and HTTP URLs.
   tracebacks) separately from keyword mentions. For targeted searching, prefer
   `search "pattern"` over `errors` — it produces fewer false positives.
 - For visual interactive replay, use the `replay-session` skill instead.
+
+## Related skills
+
+- If you need to find the GitHub Actions run ID for an agent given an issue or PR number, use the `finding-agent-runs` skill if available.
+- For visual interactive replay of a session, use the `replay-session` skill if available.
