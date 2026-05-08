@@ -90,6 +90,5 @@ repos:
         name: lint markdown links
         entry: lychee --offline --no-progress --include-fragments '**/*.md'
         language: system
-        types: [markdown]
         pass_filenames: false
         always_run: true
