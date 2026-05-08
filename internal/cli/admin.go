@@ -209,7 +209,9 @@ func newInstallCmd() *cobra.Command {
 				printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
 			} else {
 				printer.StepInfo("No repositories will be enrolled during install")
-				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use: fullsend admin enable repos %s <repo-name> or --all", org))
+				printer.StepInfo(fmt.Sprintf("To enroll repositories later, use:"))
+				printer.StepInfo(fmt.Sprintf("  fullsend admin enable repos %s <repo-name> [repo-name...]", org))
+				printer.StepInfo(fmt.Sprintf("  fullsend admin enable repos %s --all", org))
 			}
 			printer.Blank()
 
@@ -394,7 +396,7 @@ func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, or
 	repoNames := repoNameList(allRepos)
 	hasPrivate := hasPrivateRepos(allRepos)
 
-	// Validate that every --repo value matches a discovered repo.
+	// Validate that every enabled repository matches a discovered repo.
 	if err := validateEnabledRepos(enabledRepos, repoNames); err != nil {
 		return err
 	}
