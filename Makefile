@@ -59,7 +59,7 @@ bootstrap:
 	@echo "==> Installing lychee (markdown link checker)..."
 	curl -sSfL "https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/lychee.tar.gz
 	echo "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a  /tmp/lychee.tar.gz" | sha256sum -c
-	tar xzf /tmp/lychee.tar.gz -C "$(BOOTSTRAP_BIN_DIR)" lychee
+	tar xzf /tmp/lychee.tar.gz -C "$(BOOTSTRAP_BIN_DIR)" --strip-components=1 lychee-x86_64-unknown-linux-gnu/lychee
 	@echo "==> Installing pre-commit hooks..."
 	PATH="$(BOOTSTRAP_BIN_DIR):$(PATH)" pre-commit install
 	@echo ""
