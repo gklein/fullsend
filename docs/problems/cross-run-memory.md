@@ -14,7 +14,7 @@ Two mechanisms partially address this:
 
 **Per-repo AGENTS.md / skills.** Humans (or the retro agent's proposals, once accepted) encode repo-specific knowledge as skills or agent instructions. This is the right long-term solution for stable, generalizable patterns. But it requires human intervention to convert a run outcome into a skill, and it doesn't capture transient or tactical information ("the last 3 runs on this repo all failed because the CI runner was misconfigured — don't retry lint failures until #142 is resolved").
 
-**Retro agent ([§14 retro agent runtime](../architecture.md)).** Analyzes completed workflows and files improvement proposals as GitHub issues. Effective for systemic improvements, but the proposals enter the issue backlog and require human triage before they affect future runs. The latency is days to weeks, not run-to-run.
+**Retro agent ([14 retro agent runtime](../architecture.md)).** Analyzes completed workflows and files improvement proposals as GitHub issues. Effective for systemic improvements, but the proposals enter the issue backlog and require human triage before they affect future runs. The latency is days to weeks, not run-to-run.
 
 Neither mechanism provides **automatic, immediate feedback** from one run's outcome to the next run's context.
 
