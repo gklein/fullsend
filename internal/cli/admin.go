@@ -234,6 +234,11 @@ func newInstallCmd() *cobra.Command {
 				return runDryRun(ctx, client, printer, org, repos, roles, inferenceProvider, inferenceProviderName, allRepos)
 			}
 
+			if err := checkInstallScopes(ctx, client, printer); err != nil {
+				return err
+			}
+			printer.Blank()
+
 			// Collect agent credentials via app setup.
 			var agentCreds []layers.AgentCredentials
 			if !skipAppSetup {
@@ -815,6 +820,52 @@ func buildLayerStack(
 		layers.NewDispatchTokenLayer(org, client, "", enrolledRepoIDs, printer, promptTokenFn),
 		layers.NewEnrollmentLayer(org, client, enabledRepos, cfg.DisabledRepos(), printer),
 	)
+}
+
+// checkInstallScopes verifies that the token has the scopes needed for
+// install before starting interactive app setup. This avoids wasting
+// time on browser-based app creation only to fail on missing scopes.
+func checkInstallScopes(ctx context.Context, client forge.Client, printer *ui.Printer) error {
+	printer.StepStart("Checking token permissions")
+
+	granted, err := client.GetTokenScopes(ctx)
+	if err != nil {
+		printer.StepFail("Could not verify token permissions")
+		return fmt.Errorf("checking token scopes: %w", err)
+	}
+
+	if granted == nil {
+		printer.StepWarn("Preflight skipped: fine-grained token detected (scopes cannot be verified)")
+		return nil
+	}
+
+	required := []string{"repo", "workflow", "admin:org"}
+	grantedSet := make(map[string]bool, len(granted))
+	for _, s := range granted {
+		grantedSet[s] = true
+	}
+
+	var missing []string
+	for _, scope := range required {
+		if !grantedSet[scope] {
+			missing = append(missing, scope)
+		}
+	}
+
+	if len(missing) > 0 {
+		printer.StepFail("Token is missing required scopes")
+		printer.Blank()
+		result := &layers.PreflightResult{
+			Required: required,
+			Granted:  granted,
+			Missing:  missing,
+		}
+		printer.ErrorBox("Missing token scopes", result.Error())
+		return fmt.Errorf("token is missing required scopes: %s", strings.Join(missing, ", "))
+	}
+
+	printer.StepDone("Token permissions verified")
+	return nil
 }
 
 // runPreflight checks that the token has all required scopes for the
