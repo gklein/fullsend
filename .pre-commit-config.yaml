@@ -74,7 +74,8 @@ repos:
       - id: lint-adr-frontmatter
         name: lint ADR frontmatter
         entry: ./hack/lint-adr-frontmatter
-        language: script
+        language: python
+        additional_dependencies: ["pyyaml>=6.0"]
         files: ^docs/ADRs/.*\.md$
         pass_filenames: false
 
