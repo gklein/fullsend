@@ -822,6 +822,11 @@ func buildLayerStack(
 	)
 }
 
+// installRequiredScopes is the set of OAuth scopes the install command
+// needs. Keep in sync with the union of RequiredScopes(OpInstall) across
+// all layers; TestCheckInstallScopes_SyncWithLayers asserts parity.
+var installRequiredScopes = []string{"repo", "workflow", "admin:org"}
+
 // checkInstallScopes verifies that the token has the scopes needed for
 // install before starting interactive app setup. This avoids wasting
 // time on browser-based app creation only to fail on missing scopes.
@@ -839,7 +844,7 @@ func checkInstallScopes(ctx context.Context, client forge.Client, printer *ui.Pr
 		return nil
 	}
 
-	required := []string{"repo", "workflow", "admin:org"}
+	required := installRequiredScopes
 	grantedSet := make(map[string]bool, len(granted))
 	for _, s := range granted {
 		grantedSet[s] = true

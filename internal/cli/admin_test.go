@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/forge"
+	"github.com/fullsend-ai/fullsend/internal/layers"
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
@@ -723,4 +725,65 @@ type errorReader struct{}
 
 func (e *errorReader) Read(p []byte) (n int, err error) {
 	return 0, fmt.Errorf("simulated read error")
+}
+
+func TestCheckInstallScopes_AllPresent(t *testing.T) {
+	client := &forge.FakeClient{
+		TokenScopes: []string{"repo", "workflow", "admin:org", "read:org"},
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := checkInstallScopes(context.Background(), client, printer)
+	require.NoError(t, err)
+}
+
+func TestCheckInstallScopes_Missing(t *testing.T) {
+	client := &forge.FakeClient{
+		TokenScopes: []string{"repo"},
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := checkInstallScopes(context.Background(), client, printer)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workflow")
+	assert.Contains(t, err.Error(), "admin:org")
+}
+
+func TestCheckInstallScopes_FineGrainedToken(t *testing.T) {
+	client := &forge.FakeClient{
+		TokenScopes: nil,
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := checkInstallScopes(context.Background(), client, printer)
+	require.NoError(t, err)
+}
+
+func TestCheckInstallScopes_GetTokenScopesError(t *testing.T) {
+	client := &forge.FakeClient{
+		Errors: map[string]error{"GetTokenScopes": errors.New("network error")},
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := checkInstallScopes(context.Background(), client, printer)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "checking token scopes")
+	assert.Contains(t, err.Error(), "network error")
+}
+
+func TestCheckInstallScopes_SyncWithLayers(t *testing.T) {
+	emptyCfg := &config.OrgConfig{}
+	stack := layers.NewStack(
+		layers.NewConfigRepoLayer("test-org", nil, emptyCfg, ui.New(&discardWriter{}), false),
+		layers.NewWorkflowsLayer("test-org", nil, ui.New(&discardWriter{}), "", ""),
+		layers.NewSecretsLayer("test-org", nil, nil, ui.New(&discardWriter{})),
+		layers.NewInferenceLayer("test-org", nil, nil, ui.New(&discardWriter{})),
+		layers.NewDispatchTokenLayer("test-org", nil, "", nil, ui.New(&discardWriter{}), nil),
+		layers.NewEnrollmentLayer("test-org", nil, nil, nil, ui.New(&discardWriter{})),
+		layers.NewVendorBinaryLayer("test-org", nil, ui.New(&discardWriter{}), false, nil),
+	)
+	layerScopes := stack.CollectRequiredScopes(layers.OpInstall)
+
+	assert.ElementsMatch(t, installRequiredScopes, layerScopes,
+		"installRequiredScopes must match the union of RequiredScopes(OpInstall) from all layers; update the variable if a layer's scopes change")
 }
