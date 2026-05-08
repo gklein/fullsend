@@ -224,7 +224,7 @@ To unenroll all repositories:
 fullsend admin disable repos "$ORG_NAME" --all
 ```
 
-The `--all` flag prompts for confirmation by requiring you to type the organization name. To skip the prompt (e.g., in scripts):
+The `--all` flag prompts for confirmation — you must type the exact organization name when prompted. To skip the confirmation prompt (e.g., in automated scripts):
 
 ```bash
 fullsend admin disable repos "$ORG_NAME" --all --yolo

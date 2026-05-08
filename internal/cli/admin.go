@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/fullsend-ai/fullsend/internal/appsetup"
 	"github.com/fullsend-ai/fullsend/internal/config"
@@ -1033,7 +1034,8 @@ func newDisableCmd() *cobra.Command {
 type reposRunFunc func(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool, yolo bool) error
 
 // newReposSubcommand creates a repos enable or disable subcommand with shared setup logic.
-func newReposSubcommand(use, short, long, allFlagHelp string, runFn reposRunFunc) *cobra.Command {
+// If withYolo is true, the --yolo flag is added to skip confirmation prompts.
+func newReposSubcommand(use, short, long, allFlagHelp string, runFn reposRunFunc, withYolo bool) *cobra.Command {
 	var all bool
 	var yolo bool
 
@@ -1076,7 +1078,9 @@ func newReposSubcommand(use, short, long, allFlagHelp string, runFn reposRunFunc
 	}
 
 	cmd.Flags().BoolVar(&all, "all", false, allFlagHelp)
-	cmd.Flags().BoolVar(&yolo, "yolo", false, "skip confirmation prompt")
+	if withYolo {
+		cmd.Flags().BoolVar(&yolo, "yolo", false, "skip confirmation prompt")
+	}
 
 	return cmd
 }
@@ -1088,6 +1092,7 @@ func newEnableReposCmd() *cobra.Command {
 		"Enables the specified repositories for fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to enable all repositories (excluding .fullsend).",
 		"enable all repositories (excluding .fullsend)",
 		runEnableRepos,
+		false, // no confirmation prompt, so no --yolo flag
 	)
 }
 
@@ -1098,6 +1103,7 @@ func newDisableReposCmd() *cobra.Command {
 		"Disables the specified repositories from fullsend enrollment by updating config.yaml in the .fullsend repository. Use --all to disable all repositories.",
 		"disable all repositories",
 		runDisableRepos,
+		true, // has confirmation prompt for --all, so include --yolo flag
 	)
 }
 
@@ -1233,6 +1239,12 @@ func runDisableRepos(ctx context.Context, client forge.Client, printer *ui.Print
 			printer.Blank()
 			printer.StepWarn(fmt.Sprintf("This will disable all %d repositories in %s.", len(reposToDisable), org))
 			printer.StepInfo(fmt.Sprintf("Type the organization name (%s) to confirm:", org))
+
+			// Check if stdin is a terminal before prompting for input.
+			if !term.IsTerminal(int(os.Stdin.Fd())) {
+				return fmt.Errorf("stdin is not a terminal; use --yolo to skip confirmation in non-interactive environments")
+			}
+
 			var confirmation string
 			if _, err := fmt.Scanln(&confirmation); err != nil {
 				return fmt.Errorf("reading confirmation: %w", err)
