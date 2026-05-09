@@ -143,3 +143,14 @@ The `stage` input to `dispatch.yml` becomes optional. When provided
   directly (label + comment), not via `.fullsend` dispatch.
 - This decision is sequenced after the token mint migration. The token mint
   provides `workflow_call`; this ADR uses it to simplify routing.
+- **Per-repo installation
+  ([ADR 0031](0031-per-repo-installation-mode.md))** needs the same routing
+  logic but published upstream as `reusable-fullsend.yml` in
+  `fullsend-ai/fullsend`. Per-repo repos have no `.fullsend/dispatch.yml` —
+  their thin `fullsend.yml` calls `reusable-fullsend.yml` directly, which
+  routes events to stages and fans out to per-stage reusable workflows. The
+  routing implementation should be shared: either `dispatch.yml` calls
+  `reusable-fullsend.yml` upstream (unifying both models), or both embed
+  the same routing script. Per-org shims could also adopt
+  `reusable-fullsend.yml` directly, eliminating `dispatch.yml` as a
+  routing layer entirely — see ADR 0031 Open Questions.
