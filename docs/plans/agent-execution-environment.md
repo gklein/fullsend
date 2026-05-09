@@ -52,13 +52,17 @@ RUN curl -L https://github.com/NVIDIA/OpenShell/releases/download/${OPENSHELL_VE
 
 # Language runtimes layer (can be cached independently)
 FROM base AS runtimes
+# Note: golang-1.23 is not available in default Ubuntu 22.04 repos.
+# Use official golang image for builder stage (as shown above) or add PPA/manual download for runtime.
+# Example: COPY --from=golang:1.23 /usr/local/go /usr/local/go
 RUN apt-get update && apt-get install -y \
-    golang-1.23 \
     python3.11 \
     python3-pip \
     nodejs \
     npm \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=golang:1.23 /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Tools layer
 FROM runtimes AS tools
@@ -84,8 +88,8 @@ FROM harness AS final
 COPY policies/ /opt/fullsend/policies/
 COPY providers/ /opt/fullsend/providers/
 
-# OpenShell gateway runs as PID 1
-ENTRYPOINT ["/usr/local/bin/openshell", "gateway"]
+# OpenShell gateway runs as PID 1 (per ADR-0030)
+ENTRYPOINT ["/usr/local/bin/openshell", "gateway", "start"]
 ```
 
 ### Build Pipeline (GitHub Actions)
@@ -178,7 +182,9 @@ Config repo templates reference explicit semver tags: `ghcr.io/fullsend-ai/agent
 
 ## OpenShell Configuration
 
-OpenShell runs as the container entrypoint (PID 1). When `fullsend run` is invoked, it communicates with the OpenShell gateway API to create nested sandboxes for individual agent processes.
+> **⚠️ Important:** The OpenShell interaction details in this section are illustrative and based on design-phase exploration. **[ADR-0030](../ADRs/0030-openshell-sandbox-interaction-model.md) (Accepted)** decides the actual interaction model: CLI-based sandbox creation (`openshell sandbox create`), SSH for command execution via HTTP CONNECT tunnels, SCP for file delivery during bootstrap, and provider-based credential delivery via `openshell provider create`. Files like agent definitions and skills are SCP'd during bootstrap, not baked into the image. **Implementation must follow ADR-0030's decisions.** The API endpoints, configuration file formats, and workflow described below may not match the actual OpenShell CLI/API.
+
+OpenShell runs as the container entrypoint (PID 1). When `fullsend run` is invoked, it communicates with the OpenShell gateway to create nested sandboxes for individual agent processes.
 
 ### Gateway Configuration
 
