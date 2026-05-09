@@ -92,3 +92,10 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+
+      - id: lint-workflow-size
+        name: lint workflow file size
+        entry: ./hack/lint-workflow-size
+        language: script
+        files: ^internal/scaffold/fullsend-repo/(\.github/workflows/|templates/)
+        pass_filenames: false
