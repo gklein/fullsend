@@ -192,6 +192,39 @@ func TestWorkflowsLayer_Install_ReinstallUpdatesVersion(t *testing.T) {
 		"re-install should update pinned version")
 }
 
+func TestWorkflowsLayer_Install_GitDescribeVersionFallsBackToLatest(t *testing.T) {
+	devVersions := []string{
+		"v0.7.0-58-g4273effb",
+		"v0.7.0-dirty",
+		"v0.7.0-3-g1234567-dirty",
+		"4273effb",
+	}
+	for _, ver := range devVersions {
+		t.Run(ver, func(t *testing.T) {
+			client := forge.NewFakeClient()
+			var buf bytes.Buffer
+			printer := ui.New(&buf)
+			layer := NewWorkflowsLayer("test-org", client, printer, "admin-user", ver)
+
+			err := layer.Install(context.Background())
+			require.NoError(t, err)
+
+			var actionContent string
+			for _, f := range client.CommittedFiles[0].Files {
+				if f.Path == actionYMLPath {
+					actionContent = string(f.Content)
+					break
+				}
+			}
+			require.NotEmpty(t, actionContent, "action.yml should have been written")
+			assert.Contains(t, actionContent, "default: latest",
+				"non-release version %q should fall back to latest", ver)
+			assert.Contains(t, buf.String(), "not a release",
+				"should warn about non-release version")
+		})
+	}
+}
+
 func TestWorkflowsLayer_Install_Error(t *testing.T) {
 	client := &forge.FakeClient{
 		Errors: map[string]error{

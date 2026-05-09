@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	"github.com/fullsend-ai/fullsend/internal/scaffold"
@@ -173,13 +174,19 @@ func (l *WorkflowsLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	return report, nil
 }
 
+// releaseVersionPattern matches a clean release tag: v1.2.3 or 1.2.3.
+// Dev builds from git describe (e.g. v0.7.0-58-g4273effb, v0.7.0-dirty)
+// will NOT match and are treated as non-release.
+var releaseVersionPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
+
 // pinVersionInAction replaces the "default: latest" line in the action.yml
-// version input with the concrete CLI version. If the version is "dev"
-// (local build), it falls back to "latest" and logs a warning.
+// version input with the concrete CLI version. Non-release versions (dev
+// builds, git-describe output like v0.7.0-58-gXXXXXXX) fall back to
+// "latest" so that workflows don't try to download a nonexistent release.
 func (l *WorkflowsLayer) pinVersionInAction(content []byte) []byte {
-	if l.cliVersion == "" || l.cliVersion == "dev" {
-		if l.cliVersion == "dev" {
-			l.ui.StepWarn("CLI version is \"dev\"; action.yml will use \"latest\" (unpinned)")
+	if !releaseVersionPattern.MatchString(l.cliVersion) {
+		if l.cliVersion != "" {
+			l.ui.StepWarn(fmt.Sprintf("CLI version %q is not a release; action.yml will use \"latest\" (unpinned)", l.cliVersion))
 		}
 		return content
 	}
