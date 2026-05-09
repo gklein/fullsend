@@ -28,9 +28,10 @@ Fullsend's installation model is per-org: `fullsend admin install` creates a ded
 Some users cannot or do not want to use the per-org model:
 
 1. **No org-wide setup desired** — teams who want fullsend on specific repos without the full `fullsend admin install` org setup (org admin is still needed to approve GitHub App installation on the repo).
-2. **No sharing desired** — teams who want isolated agent configs, credentials, and billing for a single repo.
-3. **Quick evaluation** — users who want to try fullsend on one repo without committing to org-wide setup.
-4. **Personal repos** — individual developers on personal GitHub accounts (no org at all).
+2. **Private repos** — private repos cannot call `workflow_call` into a separate `.fullsend` config repo unless that repo is also visible to the caller. Per-repo avoids cross-repo visibility constraints by calling upstream `fullsend-ai/fullsend` (public) directly.
+3. **No sharing desired** — teams who want isolated agent configs, credentials, and billing for a single repo.
+4. **Quick evaluation** — users who want to try fullsend on one repo without committing to org-wide setup.
+5. **Personal repos** — individual developers on personal GitHub accounts (no org at all).
 
 Two ADRs create the building blocks that make per-repo possible:
 
