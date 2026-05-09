@@ -200,7 +200,7 @@ Dynamic tool installation violates the zero-trust execution principle: agents sh
 
 ## Implementation Details
 
-Detailed implementation guidance has been moved to [docs/problems/agent-execution-environment.md](../problems/agent-execution-environment.md), including:
+Detailed implementation guidance has been moved to [docs/plans/agent-execution-environment.md](../plans/agent-execution-environment.md), including:
 
 - Container image build pipeline and versioning strategy
 - OpenShell configuration for nested sandbox creation
