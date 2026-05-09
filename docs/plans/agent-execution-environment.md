@@ -458,14 +458,28 @@ sudo apt-get install gitlab-runner
 ```
 
 **Register runner:**
+
+> **Note:** GitLab deprecated registration tokens in favor of runner authentication tokens (starting with `glrt-`) in GitLab 15.10. The `--registration-token` flag was removed in GitLab 17.0. For GitLab 15.10+, create a runner authentication token in the GitLab UI (Settings → CI/CD → Runners → New runner) and use `--token` instead.
+
 ```bash
+# For GitLab 15.10+ (recommended):
 sudo gitlab-runner register \
   --url https://gitlab.com \
-  --registration-token $REGISTRATION_TOKEN \
+  --token $RUNNER_AUTHENTICATION_TOKEN \
   --executor docker \
   --description "fullsend-agent-runner" \
   --docker-image "ghcr.io/fullsend-ai/agent-sandbox:v1.2.3" \
   --docker-privileged
+
+# For GitLab < 15.10 (legacy):
+# sudo gitlab-runner register \
+#   --url https://gitlab.com \
+#   --registration-token $REGISTRATION_TOKEN \
+#   --executor docker \
+#   --description "fullsend-agent-runner" \
+#   --docker-image "ghcr.io/fullsend-ai/agent-sandbox:v1.2.3" \
+#   --docker-privileged
+
 # Note: --docker-privileged is required for OpenShell network namespace manipulation.
 # Do NOT mount /var/run/docker.sock as this would bypass sandbox isolation.
 ```
