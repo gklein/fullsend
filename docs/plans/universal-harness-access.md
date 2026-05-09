@@ -680,7 +680,7 @@ func FetchURL(ctx context.Context, rawURL string, policy FetchPolicy) ([]byte, e
 // Default behavior is exact-domain matching; subdomain matching requires opt-in.
 func isAllowedDomain(hostname string, allowed []string) bool {
     for _, pattern := range allowed {
-        // Explicit wildcard: *.example.com matches any.example.com but not example.com
+        // Explicit wildcard: *.example.com matches both example.com and any.example.com
         if strings.HasPrefix(pattern, "*.") {
             domain := pattern[2:] // strip "*."
             if strings.HasSuffix(hostname, "."+domain) || hostname == domain {
@@ -881,8 +881,11 @@ func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, a
             return "", fmt.Errorf("URL %s does not match allowed_remote_resources", ref)
         }
 
-        // Parse integrity hash (if present)
+        // Parse integrity hash (mandatory for all remote resources)
         cleanURL, expectedHash, hasHash := harness.ParseIntegrityHash(ref)
+        if !hasHash {
+            return "", fmt.Errorf("remote resource %s must include integrity hash (#sha256=...)", ref)
+        }
 
         // Check cache first
         if hasHash {
