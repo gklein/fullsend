@@ -198,6 +198,8 @@ func TestWorkflowsLayer_Install_GitDescribeVersionFallsBackToLatest(t *testing.T
 		"v0.7.0-dirty",
 		"v0.7.0-3-g1234567-dirty",
 		"4273effb",
+		"dev",
+		"v1.0.0-rc.1",
 	}
 	for _, ver := range devVersions {
 		t.Run(ver, func(t *testing.T) {
