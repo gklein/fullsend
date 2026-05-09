@@ -226,7 +226,7 @@ The URL fetch mechanism must prevent Server-Side Request Forgery attacks.
    - Validate all returned IPs against the internal IP blocklist
    - Use a custom `http.Transport` with `DialContext` that pins the connection to the pre-validated IP, preventing re-resolution during the request
    - Reject if any resolved IP is internal
-   
+
    **Rationale:** Without connection pinning, an attacker-controlled DNS server can return a public IP during initial validation, then return an internal IP when the HTTP client re-resolves the hostname during connection establishment. The custom `DialContext` eliminates this TOCTOU vulnerability by using only the pre-validated IP.
 
 6. **Timeout:** 30-second timeout on all fetches. No long-lived connections.
