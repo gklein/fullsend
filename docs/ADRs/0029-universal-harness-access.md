@@ -1,6 +1,6 @@
 ---
 title: "29. Universal harness access via URLs and paths"
-status: Deferred
+status: Proposed
 relates_to:
   - agent-architecture
   - security-threat-model
@@ -18,7 +18,7 @@ Date: 2026-05-07
 
 ## Status
 
-Deferred
+Proposed
 
 ## Context
 
@@ -121,7 +121,7 @@ All resources remain local paths. Sharing requires manual copy-paste.
 
 ## Decision
 
-**Status: Deferred** — pending security review and consensus on trust model.
+**Status: Proposed** — pending security review and consensus on trust model.
 
 This ADR is **not accepted**. The proposed approach described below is presented for discussion only. Do not implement until:
 1. The implementation plan in `docs/plans/universal-harness-access.md` has been reviewed
