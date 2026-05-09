@@ -411,7 +411,7 @@ Document that fullsend agents require privileged containers and provide guidance
 For organizations using Kubernetes with PodSecurityPolicies (or Pod Security Standards in Kubernetes 1.25+):
 
 ```yaml
-# PodSecurityPolicy (deprecated in K8s 1.25, removed in 1.29)
+# PodSecurityPolicy (deprecated in K8s 1.21, removed in 1.25)
 apiVersion: policy/v1beta1
 kind: PodSecurityPolicy
 metadata:
@@ -502,13 +502,25 @@ sudo gitlab-runner register \
 ### Kubernetes Executor Setup
 
 **Install GitLab Runner as a Kubernetes deployment:**
+
+> **Note:** For GitLab 15.10+, create a runner authentication token in the GitLab UI (Settings → CI/CD → Runners → New runner) and use `runnerToken` instead of the deprecated `runnerRegistrationToken` (removed in GitLab 17.0).
+
 ```bash
 helm repo add gitlab https://charts.gitlab.io
+
+# For GitLab 15.10+ (recommended):
 helm install gitlab-runner gitlab/gitlab-runner \
   --namespace fullsend-agents \
-  --set runnerRegistrationToken=$REGISTRATION_TOKEN \
+  --set runnerToken=$RUNNER_AUTHENTICATION_TOKEN \
   --set rbac.create=true \
   --set runners.privileged=true
+
+# For GitLab < 15.10 (legacy):
+# helm install gitlab-runner gitlab/gitlab-runner \
+#   --namespace fullsend-agents \
+#   --set runnerRegistrationToken=$REGISTRATION_TOKEN \
+#   --set rbac.create=true \
+#   --set runners.privileged=true
 ```
 
 **Configure executor** (values.yaml):

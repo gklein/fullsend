@@ -78,7 +78,7 @@ run-agent:
 - GitLab shell executor cannot use this (no container runtime)
 
 **Image composition strategy:**
-- Base: OpenShell-enabled minimal Linux (Alpine or Ubuntu). Note: Fedora-based images may be considered when exploring rootless Podman support, though `fullsend run` would need compatibility testing for Fedora/RHEL environments.
+- Base: OpenShell-enabled minimal Linux (Alpine or Ubuntu)
 - Layer 1: Language runtimes (Go, Python, Node.js) — only what fullsend's built-in agents require, not arbitrary user code. Organizations implementing "Bring Your Own Agent" can build customized images with different runtime sets (see "Image Build and Distribution" in Open Questions).
 - Layer 2: Common tools (git, gh CLI, curl, jq)
 - Layer 3: Agent harness (`fullsend run` CLI) — provides the control plane for agent execution, sandbox initialization, and policy enforcement
@@ -257,7 +257,7 @@ The implementation document is structured for iterative evolution as the sandbox
 2. **OpenShell rootless mode**: Upstream feature request to support L7 policy enforcement without privileged containers (e.g., via eBPF or SECCOMP).
 3. **Platform exemption**: Document that fullsend requires privileged containers and provide guidance for organizations to create PodSecurityPolicy exemptions for agent workloads.
 
-**Status**: User namespace remapping is the most viable near-term path. Requires testing on GitHub Actions (Docker-in-VM) and GitLab Kubernetes executor (pod security contexts). OpenShell rootless mode is ideal long-term but depends on upstream.
+**Status**: User namespace remapping is the most viable near-term path. Requires testing on GitHub Actions (Docker-in-VM) and GitLab Kubernetes executor (pod security contexts). OpenShell rootless mode is ideal long-term but depends on upstream. Note: Fedora-based base images may be considered when exploring rootless Podman support, though `fullsend run` would need compatibility testing for Fedora/RHEL environments.
 
 ### Image Build and Distribution
 
