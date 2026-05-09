@@ -176,7 +176,7 @@ Lookup: `SHA256(URL + hash) → cache_manifest.db → SHA256(content) → cached
 
 **Why content-addressed?** If two different URLs serve identical content, they share a cache entry. This deduplicates storage and makes integrity verification uniform.
 
-**Cache TTL:** Since all remote resources require hash pinning (line 197), all cached entries are content-addressed and immutable. Cache entries never expire based on time. To update a remote resource, the upstream maintainer must change the content (which produces a new SHA256 hash) and update harness references to use the new hash.
+**Cache TTL:** Since all remote resources require hash pinning (see "Mandatory hash pinning" under Integrity Verification), all cached entries are content-addressed and immutable. Cache entries never expire based on time. To update a remote resource, the upstream maintainer must change the content (which produces a new SHA256 hash) and update harness references to use the new hash.
 
 **Offline mode:** `fullsend run --offline <harness>` disables network fetches. If any required resource is not in cache, the run fails. Useful for CI environments with no internet access.
 
@@ -214,6 +214,8 @@ The URL fetch mechanism must prevent Server-Side Request Forgery attacks.
        # Reject all others
    ```
    **Subdomain matching:** Adding `example.com` to the allowlist also permits all subdomains (`*.example.com`). This is intentional for domains like `github.com` (where users don't control subdomains), but creates risk for domains where users can register subdomains (e.g., some cloud hosting providers). **Only allowlist domains where subdomain control is restricted.** For user-controlled hosting platforms, allowlist the specific subdomain (e.g., `myorg.cloudprovider.com`, not `cloudprovider.com`).
+
+   **Enforcement:** The CLI SHOULD warn administrators when an `allowed_remote_resources` entry uses a known shared-hosting domain (e.g., `vercel.app`, `netlify.app`, `github.io`, `cloudflare-ipfs.com`) without a specific subdomain prefix. Maintain a list of such domains in the CLI configuration.
 3. **No redirects:** HTTP 3xx responses are rejected. The URL must return 200 OK directly.
 4. **Internal IP rejection:** Refuse to fetch from:
    - `127.0.0.0/8` (loopback)
@@ -452,7 +454,7 @@ The resolution order remains: fullsend defaults → org `.fullsend` → per-repo
 **Mitigations:**
 
 1. **Content-addressed caching:** Once fetched, the resource is cached immutably. The cache key is the content hash. The runner never re-fetches during a single run.
-2. **Mandatory hash pinning:** All remote resources must include integrity hashes (line 197). Since the hash is part of the URL, any content change requires updating the harness to reference the new hash, making TOCTOU attacks ineffective.
+2. **Mandatory hash pinning:** All remote resources must include integrity hashes (see "Mandatory hash pinning" under Integrity Verification). Since the hash is part of the URL, any content change requires updating the harness to reference the new hash, making TOCTOU attacks ineffective.
 
 ### Threat: Malicious Script Execution
 
@@ -490,11 +492,14 @@ type Harness struct {
 func (h *Harness) Validate() error {
     // existing validation...
 
-    // Validate allowed_remote_resources entries are HTTPS URLs
+    // Validate allowed_remote_resources entries are HTTPS URLs with trailing slashes
     for _, prefix := range h.AllowedRemoteResources {
         u, err := url.Parse(prefix)
         if err != nil || u.Scheme != "https" {
             return fmt.Errorf("allowed_remote_resources entry %q must be an HTTPS URL", prefix)
+        }
+        if !strings.HasSuffix(prefix, "/") {
+            return fmt.Errorf("allowed_remote_resources entry %q must end with / to prevent prefix confusion attacks", prefix)
         }
     }
 
@@ -1150,7 +1155,7 @@ The cache grows unbounded. When should cached resources be evicted?
 - **B: LRU.** Keep the N most recently used resources.
 - **C: Manual.** `fullsend cache clean` command to clear cache.
 
-**Recommendation:** A (TTL-based) for unpinned URLs, indefinite for pinned URLs. Add `fullsend cache clean` for manual eviction.
+**Recommendation:** C (Manual eviction). Since all remote resources require hash pinning, cached entries are content-addressed and immutable. Eviction should be storage-bounded (e.g., `fullsend cache clean --max-size 1GB`) rather than TTL-based. Add `fullsend cache clean` for manual eviction.
 
 ### 5. Offline mode semantics
 
