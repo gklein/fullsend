@@ -182,7 +182,7 @@ Lookup: `SHA256(URL + hash) → cache_manifest.db → SHA256(content) → cached
 
 ### Integrity Verification
 
-URLs can include an integrity hash as a fragment:
+All remote resource URLs must include an integrity hash as a fragment:
 
 ```yaml
 agent: https://github.com/fullsend-ai/library/agents/code.md#sha256=abc123...
@@ -208,14 +208,14 @@ The URL fetch mechanism must prevent Server-Side Request Forgery attacks.
    security:
      remote_resources:
        allowed_domains:
-         - github.com
-         - gitlab.com
-         - cdn.fullsend.ai
+         - github.com              # Exact match only
+         - "*.github.io"           # Explicit wildcard: matches any subdomain
+         - cdn.fullsend.ai         # Exact match only
        # Reject all others
    ```
-   **Subdomain matching:** Adding `example.com` to the allowlist also permits all subdomains (`*.example.com`). This is intentional for domains like `github.com` (where users don't control subdomains), but creates risk for domains where users can register subdomains (e.g., some cloud hosting providers). **Only allowlist domains where subdomain control is restricted.** For user-controlled hosting platforms, allowlist the specific subdomain (e.g., `myorg.cloudprovider.com`, not `cloudprovider.com`).
+   **Subdomain matching:** By default, domain entries match **exact hostnames only**. To allow subdomains, use explicit wildcard syntax: `*.example.com` permits `subdomain.example.com` but requires the wildcard prefix to make the security-sensitive behavior visible. This prevents accidental allowlisting of shared-hosting domains where users can register arbitrary subdomains.
 
-   **Enforcement:** The CLI SHOULD warn administrators when an `allowed_remote_resources` entry uses a known shared-hosting domain (e.g., `vercel.app`, `netlify.app`, `github.io`, `cloudflare-ipfs.com`) without a specific subdomain prefix. Maintain a list of such domains in the CLI configuration.
+   **Layered security model:** The domain allowlist is a **coarse first filter** (e.g., "allow anything from github.com"). The `allowed_remote_resources` URL prefix allowlist (per-harness) is the **fine-grained security boundary** (e.g., "allow only https://github.com/fullsend-ai/skills/"). Both layers must pass for a resource to be fetched.
 3. **No redirects:** HTTP 3xx responses are rejected. The URL must return 200 OK directly.
 4. **Internal IP rejection:** Refuse to fetch from:
    - `127.0.0.0/8` (loopback)
@@ -628,22 +628,28 @@ func FetchURL(ctx context.Context, rawURL string, policy FetchPolicy) ([]byte, e
     }
 
     // 4. Fetch with timeout and size limit
-    // NOTE: To prevent DNS rebinding attacks, the actual implementation must use a custom
-    // http.Transport with a DialContext that pins the connection to the pre-validated IP
-    // address. The illustrative code below will perform a second DNS lookup at fetch time,
-    // which could return a different IP. See: https://golang.org/pkg/net/http/#Transport
+    // Extract port from URL (default 443 for HTTPS)
+    port := u.Port()
+    if port == "" {
+        port = "443"
+    }
+
+    // DNS rebinding protection: pin connection to pre-validated IP
+    // Without this custom DialContext, client.Get() would perform a second DNS resolution,
+    // which could return a different (internal) IP if attacker controls the DNS server.
     client := &http.Client{
         Timeout: policy.Timeout,
         CheckRedirect: func(req *http.Request, via []*http.Request) error {
             return http.ErrUseLastResponse // No redirects
         },
-        // Production implementation would add:
-        // Transport: &http.Transport{
-        //     DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-        //         // Use first validated IP instead of re-resolving DNS
-        //         return net.Dial(network, net.JoinHostPort(ips[0].String(), port))
-        //     },
-        // },
+        Transport: &http.Transport{
+            DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+                // Use first validated IP instead of re-resolving DNS
+                return (&net.Dialer{
+                    Timeout: 10 * time.Second,
+                }).DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+            },
+        },
     }
 
     resp, err := client.Get(rawURL)
@@ -670,10 +676,21 @@ func FetchURL(ctx context.Context, rawURL string, policy FetchPolicy) ([]byte, e
 }
 
 // isAllowedDomain returns true if hostname matches any allowed domain.
+// Supports exact matches and explicit wildcard syntax (*.example.com).
+// Default behavior is exact-domain matching; subdomain matching requires opt-in.
 func isAllowedDomain(hostname string, allowed []string) bool {
-    for _, domain := range allowed {
-        if hostname == domain || strings.HasSuffix(hostname, "."+domain) {
-            return true
+    for _, pattern := range allowed {
+        // Explicit wildcard: *.example.com matches any.example.com but not example.com
+        if strings.HasPrefix(pattern, "*.") {
+            domain := pattern[2:] // strip "*."
+            if strings.HasSuffix(hostname, "."+domain) || hostname == domain {
+                return true
+            }
+        } else {
+            // Exact match only
+            if hostname == pattern {
+                return true
+            }
         }
     }
     return false
@@ -719,9 +736,7 @@ func CachePath(workspaceRoot, hash string) string {
 }
 
 // CacheGet retrieves cached content by hash. Returns nil if not cached.
-// Note: Actual implementation would accept workspaceRoot parameter.
-func CacheGet(hash string) ([]byte, *CacheEntry, error) {
-    workspaceRoot := "." // illustrative: would be passed as parameter
+func CacheGet(workspaceRoot, hash string) ([]byte, *CacheEntry, error) {
     dir := CachePath(workspaceRoot, hash)
     metaPath := filepath.Join(dir, "metadata.json")
     contentPath := filepath.Join(dir, "content")
@@ -748,10 +763,8 @@ func CacheGet(hash string) ([]byte, *CacheEntry, error) {
 }
 
 // CachePut stores content in the cache.
-// Note: Actual implementation would accept workspaceRoot parameter.
-func CachePut(url string, content []byte) error {
+func CachePut(workspaceRoot, url string, content []byte) error {
     hash := ComputeSHA256(content)
-    workspaceRoot := "." // illustrative: would be passed as parameter
     dir := CachePath(workspaceRoot, hash)
 
     if err := os.MkdirAll(dir, 0755); err != nil {
@@ -812,20 +825,20 @@ type Dependency struct {
 }
 
 // ResolveHarness resolves all resources (local and remote) and returns paths.
-func ResolveHarness(ctx context.Context, h *harness.Harness, policy fetch.FetchPolicy) (*ResolvedHarness, error) {
+func ResolveHarness(ctx context.Context, workspaceRoot string, h *harness.Harness, policy fetch.FetchPolicy) (*ResolvedHarness, error) {
     resolved := &ResolvedHarness{Harness: h}
     resourceCount := 0
 
     // Resolve agent
     var err error
-    resolved.AgentPath, err = resolveResourceWithLimits(ctx, h.Agent, h.AllowedRemoteResources, policy, 0, &resourceCount)
+    resolved.AgentPath, err = resolveResourceWithLimits(ctx, workspaceRoot, h.Agent, h.AllowedRemoteResources, policy, 0, &resourceCount)
     if err != nil {
         return nil, fmt.Errorf("resolving agent: %w", err)
     }
 
     // Resolve policy
     if h.Policy != "" {
-        resolved.PolicyPath, err = resolveResourceWithLimits(ctx, h.Policy, h.AllowedRemoteResources, policy, 0, &resourceCount)
+        resolved.PolicyPath, err = resolveResourceWithLimits(ctx, workspaceRoot, h.Policy, h.AllowedRemoteResources, policy, 0, &resourceCount)
         if err != nil {
             return nil, fmt.Errorf("resolving policy: %w", err)
         }
@@ -833,7 +846,7 @@ func ResolveHarness(ctx context.Context, h *harness.Harness, policy fetch.FetchP
 
     // Resolve skills (each skill may have transitive dependencies)
     for _, skill := range h.Skills {
-        skillPath, err := resolveResourceWithLimits(ctx, skill, h.AllowedRemoteResources, policy, 0, &resourceCount)
+        skillPath, err := resolveResourceWithLimits(ctx, workspaceRoot, skill, h.AllowedRemoteResources, policy, 0, &resourceCount)
         if err != nil {
             return nil, fmt.Errorf("resolving skill %s: %w", skill, err)
         }
@@ -848,7 +861,7 @@ func ResolveHarness(ctx context.Context, h *harness.Harness, policy fetch.FetchP
 }
 
 // resolveResourceWithLimits resolves a single resource with depth and count limits.
-func resolveResourceWithLimits(ctx context.Context, ref string, allowedPrefixes []string, policy fetch.FetchPolicy, depth int, resourceCount *int) (string, error) {
+func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, allowedPrefixes []string, policy fetch.FetchPolicy, depth int, resourceCount *int) (string, error) {
     // Check depth limit
     if depth > policy.MaxDepth {
         return "", fmt.Errorf("exceeded maximum dependency depth of %d", policy.MaxDepth)
@@ -873,13 +886,11 @@ func resolveResourceWithLimits(ctx context.Context, ref string, allowedPrefixes 
 
         // Check cache first
         if hasHash {
-            content, _, err := fetch.CacheGet(expectedHash)
+            content, _, err := fetch.CacheGet(workspaceRoot, expectedHash)
             if err != nil {
                 return "", fmt.Errorf("reading cache for %s: %w", cleanURL, err)
             }
             if content != nil {
-                // Note: actual implementation would pass workspaceRoot to CachePath
-                workspaceRoot := "." // illustrative
                 return filepath.Join(fetch.CachePath(workspaceRoot, expectedHash), "content"), nil
             }
         }
@@ -897,12 +908,10 @@ func resolveResourceWithLimits(ctx context.Context, ref string, allowedPrefixes 
         }
 
         // Store in cache
-        if err := fetch.CachePut(cleanURL, content); err != nil {
+        if err := fetch.CachePut(workspaceRoot, cleanURL, content); err != nil {
             return "", fmt.Errorf("caching %s: %w", cleanURL, err)
         }
 
-        // Note: actual implementation would pass workspaceRoot to CachePath
-        workspaceRoot := "." // illustrative
         return filepath.Join(fetch.CachePath(workspaceRoot, actualHash), "content"), nil
     }
 
