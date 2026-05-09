@@ -532,11 +532,9 @@ The agent sandbox image is public on ghcr.io, so no authentication is required f
 # .gitlab-ci.yml
 run-agent:
   image: registry.example.com/fullsend/agent-sandbox:v1.2.3
-  before_script:
-    # Registry authentication for pulling additional images during agent execution.
-    # The job's base image is already pulled by the runner before this script runs.
-    # This is only needed if agents pull additional images (e.g., for testing).
-    - echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  # Note: The job's base image is pulled by the runner using its configured credentials
+  # (CI_REGISTRY_USER/PASSWORD, image_pull_secrets, or runner config). Agents inside
+  # the sandbox do NOT have Docker daemon access - they are isolated by OpenShell.
   script:
     - fullsend run $AGENT_NAME
 ```

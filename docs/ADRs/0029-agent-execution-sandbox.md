@@ -81,7 +81,7 @@ run-agent:
 - Base: OpenShell-enabled minimal Linux (Alpine or Ubuntu)
 - Layer 1: Language runtimes (Go, Python, Node.js) — only what fullsend's built-in agents require, not arbitrary user code. Organizations implementing "Bring Your Own Agent" can build customized images with different runtime sets (see "Image Build and Distribution" in Open Questions).
 - Layer 2: Common tools (git, gh CLI, curl, jq)
-- Layer 3: Agent harness (`fullsend run` CLI) — provides the control plane for agent execution, sandbox initialization, and policy enforcement
+- Layer 3: Agent harness (`fullsend run` CLI)
 - Layer 4: Provider definitions and policy templates
 
 **OpenShell integration:**
