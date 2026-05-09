@@ -79,10 +79,10 @@ run-agent:
 - GitLab shell executor cannot use this (no container runtime)
 
 **Image composition strategy:**
-- Base: OpenShell-enabled minimal Linux (Alpine or Ubuntu)
-- Layer 1: Language runtimes (Go, Python, Node.js) — only what fullsend agents require, not arbitrary user code
+- Base: OpenShell-enabled minimal Linux (Alpine or Ubuntu). Note: Fedora-based images may be considered when exploring rootless Podman support, though `fullsend run` would need compatibility testing for Fedora/RHEL environments.
+- Layer 1: Language runtimes (Go, Python, Node.js) — only what fullsend's built-in agents require, not arbitrary user code. Organizations implementing "Bring Your Own Agent" can build customized images with different runtime sets (see "Image Build and Distribution" in Open Questions).
 - Layer 2: Common tools (git, gh CLI, curl, jq)
-- Layer 3: Agent harness (`fullsend run` CLI)
+- Layer 3: Agent harness (`fullsend run` CLI) — provides the control plane for agent execution, sandbox initialization, and policy enforcement
 - Layer 4: Provider definitions and policy templates
 
 **OpenShell integration:**
@@ -144,6 +144,7 @@ Similar `kubectl` calls from CI jobs.
 - Agent runs are asynchronous API calls (harder to stream logs to CI job output)
 - Kubernetes SIG Agent Sandbox evaluation (agent-infrastructure.md) notes poor fit for ephemeral task-scoped execution
 - Adds latency (API call + pod scheduling + image pull vs direct container start in CI executor)
+- OpenShell feature parity between Kubernetes pod networking and standard Docker networking needs validation — pod network namespaces, CNI plugins, and service mesh sidecars may interact differently with OpenShell's L7 proxy than direct container networking
 
 ### Option 4: Minimal Sandbox + Dynamic Tool Installation
 
@@ -209,6 +210,8 @@ Detailed implementation guidance has been moved to [docs/problems/agent-executio
 - Host-side REST server lifecycle in containerized environments
 - Image signing and verification (Sigstore, cosign)
 - Upgrade and rollback procedures
+
+**Note:** OpenShell configuration examples (version numbers, API endpoints, configuration syntax) are illustrative and based on design-phase exploration. These details should be validated against the actual OpenShell release used during implementation, as APIs and configuration formats may evolve.
 
 The implementation document is structured for iterative evolution as the sandbox architecture is validated in production.
 
