@@ -21,7 +21,7 @@ Proposed
 
 ## Context
 
-Fullsend agents execute within isolated sandboxes that enforce security boundaries: filesystem access control, network policy enforcement, and credential isolation (ADR-0017, ADR-0025). The current implementation uses OpenShell with per-agent L7 network policies and runs on GitHub Actions runners. With GitLab support decided (ADR-0028), the execution architecture needs to work on both GitHub Actions and GitLab CI runners.
+Fullsend agents execute within isolated sandboxes that enforce security boundaries: filesystem access control, network policy enforcement, and credential isolation (ADR-0017, ADR-0025). The current implementation uses OpenShell with per-agent L7 network policies and runs on GitHub Actions runners. With GitLab support proposed (ADR-0028), the execution architecture needs to work on both GitHub Actions and GitLab CI runners.
 
 The sandbox architecture has multiple concerns that need to be resolved together:
 

@@ -378,7 +378,7 @@ Run the container as a non-root user inside a user namespace. The user appears a
 - name: Run agent with rootless Docker
   run: |
     dockerd-rootless.sh &
-    sleep 5
+    until docker info >/dev/null 2>&1; do sleep 1; done
     docker run --rm \
       -e AGENT_NAME=triage \
       ghcr.io/fullsend-ai/agent-sandbox:v1.2.3
@@ -414,30 +414,9 @@ Document that fullsend agents require privileged containers and provide guidance
 
 ### Kubernetes PodSecurityPolicy Configuration
 
-For organizations using Kubernetes with PodSecurityPolicies (or Pod Security Standards in Kubernetes 1.25+):
+For organizations using Kubernetes, configure pod security via Pod Security Standards (Kubernetes 1.25+):
 
-```yaml
-# PodSecurityPolicy (deprecated in K8s 1.21, removed in 1.25)
-apiVersion: policy/v1beta1
-kind: PodSecurityPolicy
-metadata:
-  name: fullsend-agent-privileged
-spec:
-  privileged: true
-  allowPrivilegeEscalation: true
-  allowedCapabilities:
-    - CAP_NET_ADMIN
-  fsGroup:
-    rule: RunAsAny
-  runAsUser:
-    rule: RunAsAny
-  seLinux:
-    rule: RunAsAny
-  volumes:
-    - '*'
-```
-
-**Pod Security Standards (K8s 1.25+):**
+**Pod Security Standards (recommended - K8s 1.25+):**
 ```yaml
 apiVersion: v1
 kind: Namespace
