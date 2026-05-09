@@ -22,10 +22,11 @@ Proposed
 
 `fullsend admin install` copies ~60 files from the Go binary's embedded scaffold
 (`internal/scaffold/fullsend-repo/`) into each org's `.fullsend` repo. This
-includes agent workflows (78–305 lines each), a composite action, setup
-scripts, and a dispatcher. When a bug is fixed or a security patch lands in the
-scaffold, every org must re-run `fullsend admin install` to pick up the change.
-Workflow drift across orgs is the norm.
+includes agent workflows (78–305 lines each), four composite actions (`fullsend`,
+`mint-token`, `validate-enrollment`, `setup-gcp`), setup scripts, and a
+dispatcher. When a bug is fixed or a security patch lands in the scaffold, every
+org must re-run `fullsend admin install` to pick up the change. Workflow drift
+across orgs is the norm.
 
 The dispatch chain established in
 [ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md) —
@@ -39,16 +40,16 @@ workflows themselves change from full copies to thin callers.
 `fullsend admin install` writes full agent workflows into `.fullsend`. Each org
 gets its own copy. Updates require re-running install in every org.
 
-### Option B: Published composite action only
+### Option B: Published composite actions only
 
-Publish the composite action at `fullsend-ai/fullsend@v1`. Agent workflows in
-`.fullsend` replace `uses: ./.github/actions/fullsend` with the published
-reference. Infrastructure logic (checkout, token generation, GCP auth, sandbox
-setup) stays duplicated in each org's workflow files.
+Publish the four composite actions at `fullsend-ai/fullsend@v1`. Agent workflows
+in `.fullsend` replace `uses: ./.github/actions/*` with published references.
+Infrastructure logic (checkout, token minting, GCP auth, sandbox setup) stays
+duplicated in each org's workflow files.
 
-### Option C: Reusable workflows + published composite action
+### Option C: Reusable workflows + published composite actions
 
-Publish reusable workflows (`workflow_call`) and a root composite action from
+Publish reusable workflows (`workflow_call`) and composite actions from
 `fullsend-ai/fullsend`. Agent workflows in `.fullsend` shrink to ~20 line thin
 callers that delegate infrastructure logic upstream via `workflow_call` with
 `secrets: inherit`. Org-specific content (agents, harness, env, policies,
@@ -57,20 +58,26 @@ scripts) stays local.
 ## Decision
 
 Use Option C. Publish reusable workflows
-(`fullsend-ai/fullsend/.github/workflows/reusable-{agent}.yml`) and a root
-composite action (`fullsend-ai/fullsend@v1`).
+(`fullsend-ai/fullsend/.github/workflows/reusable-{agent}.yml`) and composite
+actions (`fullsend-ai/fullsend@v1`, plus `mint-token`, `validate-enrollment`,
+`setup-gcp` under `.github/actions/`).
 
 Thin callers in `.fullsend` use `workflow_call` to invoke upstream reusable
 workflows. Since `workflow_call` runs the callee in the caller's repo context,
 the reusable workflow has access to `.fullsend` secrets and checks out the
 config repo directly. Secrets pass via `secrets: inherit`. Org-specific `vars.*`
-values (client IDs, GCP region, auth mode) are automatically available in the
+values (mint URL, GCP region, auth mode) are automatically available in the
 reusable workflow from the caller's context, but thin callers pass them as
 explicit `inputs.*` to make the interface contract self-documenting, ensure
 missing variables surface visibly with org-appropriate defaults, and provide an
 auditable manifest of configuration flowing across the trust boundary. Each
 reusable workflow also declares agent-specific inputs (e.g., `trigger_source`,
 `pr_number`, `instruction` for the fix workflow) beyond the common set.
+
+Composite actions referenced via `uses: ./` in reusable workflows resolve to the
+upstream repo (`fullsend-ai/fullsend`), not the caller's repo. This is why the
+four composite actions must live upstream. `run:` steps execute in the caller's
+workspace, so scripts in `.fullsend/scripts/` remain accessible.
 
 `dispatch.yml` stays unchanged — thin callers retain `# fullsend-stage:`
 markers, so stage-based dispatch
@@ -88,9 +95,9 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
 
 ## Consequences
 
-- Infrastructure patches (checkout, token generation, GCP auth, sandbox setup)
-  ship once upstream and propagate to all orgs on next workflow run — no
-  re-install required.
+- Infrastructure patches (token minting, GCP auth, sandbox setup) ship once
+  upstream and propagate to all orgs on next workflow run — no re-install
+  required.
 - `fullsend-ai/fullsend` must remain public for `workflow_call` and `uses:`
   references to resolve (it already is).
 - Thin callers map `vars.*` to explicit `inputs.*` even though `vars` are
@@ -99,7 +106,8 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
   missing variables with explicit defaults instead of silent empty strings,
   and creates a natural review checkpoint when the upstream interface changes.
 - Thin callers pin upstream by tag (`@v1`) or SHA — orgs control when they
-  adopt upstream changes.
+  adopt upstream changes. SHA pinning recommended for production since tags
+  are mutable.
 - Stage-based dispatch ([ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md)),
   shim workflows, and org-specific content (agents, harness, policies, scripts)
   are unchanged.
