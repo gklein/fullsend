@@ -1,5 +1,5 @@
 ---
-title: "33. Centralized shim routing via dispatch.yml"
+title: "34. Centralized shim routing via dispatch.yml"
 status: Proposed
 relates_to:
   - agent-infrastructure
@@ -10,7 +10,7 @@ topics:
   - workflow-call
 ---
 
-# 33. Centralized shim routing via dispatch.yml
+# 34. Centralized shim routing via dispatch.yml
 
 Date: 2026-05-07
 
