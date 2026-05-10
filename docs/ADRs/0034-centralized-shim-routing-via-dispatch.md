@@ -23,7 +23,7 @@ Proposed
 The target-repo shim workflow (`fullsend.yaml`) routes GitHub events to agent
 stages by mapping events to `dispatch.yml` calls. Each stage requires its own
 job in the shim: an `if:` filter, a `jq` payload builder, and a `gh workflow
-run` dispatch step. The shim currently has 8 jobs and ~380 lines.
+run` dispatch step. The shim currently has 9 jobs (8 dispatch + `post-run-link`) and ~470 lines.
 
 Every time a new stage is added, every enrolled repo's shim must be updated.
 Adding the retro stage required 2 new jobs (~80 lines) in every target repo.
@@ -42,7 +42,7 @@ migrates the shim from `workflow_dispatch` + `gh workflow run` to native
 and the imperative dispatch boilerplate, creating the natural opportunity to
 also move routing into `dispatch.yml`.
 
-[ADR 0030](0030-reusable-workflows-for-action-installed-distribution.md)
+[ADR 0031](0031-reusable-workflows-for-action-installed-distribution.md)
 addresses `.fullsend` agent workflow drift via reusable workflows but
 explicitly leaves the shim unchanged. This ADR addresses the shim side.
 
@@ -52,7 +52,7 @@ explicitly leaves the shim unchanged. This ADR addresses the shim side.
 
 Each stage gets its own job in the shim with an `if:` filter, payload builder,
 and dispatch call. With `workflow_call` (token mint), the dispatch mechanism
-changes but the structure stays the same: 8 jobs, ~250 lines, routing in the
+changes but the structure stays the same: 9 jobs, ~350 lines, routing in the
 shim.
 
 New stages require updating every enrolled repo's shim.
@@ -80,16 +80,21 @@ changes to enrolled repos.
 Use Option C. Move event-to-stage routing into `dispatch.yml`. The shim
 forwards event context via `workflow_call` without determining the stage.
 
-The shim has two jobs:
+The shim has three jobs:
 
 1. **`dispatch`** — builds a universal minimal payload from safe GitHub context
    fields and calls `.fullsend/dispatch.yml` via `workflow_call` with
-   `event_type`, `event_action`, `source_repo`, and `event_payload` inputs.
-   Filters out bot comments via `if:` to avoid unnecessary invocations.
+   `event_type`, `event_action`, `source_repo`, `trigger_source`, and
+   `event_payload` inputs. Filters out bot comments via `if:` to avoid
+   unnecessary invocations.
 
 2. **`stop-fix`** — adds the `fullsend-no-fix` label and posts a comment.
    This job acts directly on the target repo and does not dispatch to
    `.fullsend`. It stays in the shim (~25 lines).
+
+3. **`post-run-link`** — posts a link to the dispatched workflow run as a
+   comment on the triggering issue or PR. This job runs after `dispatch`
+   completes and stays in the shim.
 
 `dispatch.yml` gains a routing step that maps `event_type` + payload fields to
 a stage name:
@@ -99,7 +104,7 @@ a stage name:
 - `issue_comment` on `needs-info` issue from non-bot → `triage`
 - `issues` + `labeled` with `ready-to-code` or `ready-for-review` → `code`
   or `review`
-- `pull_request_target` opened/synchronize/ready\_for\_review → `review`
+- `pull_request_target` opened/synchronize/ready_for_review → `review`
 - `pull_request_target` closed → `retro`
 - `pull_request_review` with bot `changes_requested` → `fix`
 
@@ -124,7 +129,7 @@ The `stage` input to `dispatch.yml` becomes optional. When provided
 - **Author association checks** for `/fix`, `/retro`, `/stop-fix` move to
   `dispatch.yml`'s routing step.
 - **`workflow_call` inputs stay under 10.** The current 5 inputs minus `stage`
-  plus `event_action` = 5 inputs.
+  plus `event_action` and `trigger_source` = 6 inputs.
 
 ## Consequences
 
@@ -132,7 +137,10 @@ The `stage` input to `dispatch.yml` becomes optional. When provided
   in `dispatch.yml` and a new agent workflow file. No enrolled repo changes.
 - Enrolled repos gain a single concurrency group
   (`fullsend-${{ github.event.pull_request.number || github.event.issue.number }}`).
-  In practice, only one agent should run per issue/PR at a time.
+  This is a behavioral change from the status quo, where stages run
+  independently: a new dispatch now cancels any in-progress run for the
+  same issue/PR. In practice, only one agent should run per issue/PR at a
+  time, and the latest event takes priority.
 - Events that don't match any stage still trigger a `workflow_call` to
   `dispatch.yml`, which exits early. Cost: one runner spin-up (~20s). The
   `if:` filter on the dispatch job eliminates bot comments, the
@@ -144,7 +152,7 @@ The `stage` input to `dispatch.yml` becomes optional. When provided
 - This decision is sequenced after the token mint migration. The token mint
   provides `workflow_call`; this ADR uses it to simplify routing.
 - **Per-repo installation
-  ([ADR 0031](0031-per-repo-installation-mode.md))** needs the same routing
+  ([ADR 0033](0033-per-repo-installation-mode.md))** needs the same routing
   logic but published upstream as `reusable-fullsend.yml` in
   `fullsend-ai/fullsend`. Per-repo repos have no `.fullsend/dispatch.yml` —
   their thin `fullsend.yml` calls `reusable-fullsend.yml` directly, which
@@ -153,4 +161,4 @@ The `stage` input to `dispatch.yml` becomes optional. When provided
   `reusable-fullsend.yml` upstream (unifying both models), or both embed
   the same routing script. Per-org shims could also adopt
   `reusable-fullsend.yml` directly, eliminating `dispatch.yml` as a
-  routing layer entirely — see ADR 0031 Open Questions.
+  routing layer entirely — see ADR 0033 Open Questions.
