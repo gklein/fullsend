@@ -1,5 +1,5 @@
 ---
-title: "0031. Per-repo installation mode"
+title: "33. Per-repo installation mode"
 status: Proposed
 relates_to:
   - agent-infrastructure
@@ -13,7 +13,7 @@ topics:
   - github-apps
 ---
 
-# 0031. Per-repo installation mode
+# 33. Per-repo installation mode
 
 Date: 2026-05-06
 
@@ -35,7 +35,7 @@ Some users cannot or do not want to use the per-org model:
 
 Two ADRs create the building blocks that make per-repo possible:
 
-- [ADR 0030](0030-reusable-workflows-for-action-installed-distribution.md) publishes reusable workflows and four composite actions (`fullsend`, `mint-token`, `validate-enrollment`, `setup-gcp`) from `fullsend-ai/fullsend`, enabling any repo to call fullsend infrastructure via `workflow_call` without copying workflow files.
+- [ADR 0031](0031-reusable-workflows-for-action-installed-distribution.md) publishes reusable workflows and four composite actions (`fullsend`, `mint-token`, `validate-enrollment`, `setup-gcp`) from `fullsend-ai/fullsend`, enabling any repo to call fullsend infrastructure via `workflow_call` without copying workflow files.
 - [ADR 0027](0027-central-token-mint-secretless-fullsend.md) replaces PEM secrets and dispatch PATs with OIDC-based credential issuance via a central token mint. The `mint-token` composite action takes a role name (triage, coder, review, fix) and returns a scoped GitHub App installation token — no PEMs or client IDs in the calling repo.
 
 Combined, these make per-repo installation viable: a single ~30-line workflow file in the target repo, calling upstream reusable workflows, with credentials issued by the token mint.
@@ -46,7 +46,7 @@ Combined, these make per-repo installation viable: a single ~30-line workflow fi
 
 Run `fullsend admin install` targeting a single repo instead of an org. Copy all scaffold files (agent workflows, composite action, dispatcher, scripts) into the target repo.
 
-**Rejected**: Same maintenance burden as per-org — the repo must re-run install to pick up upstream patches. Contradicts ADR 0030's motivation to eliminate workflow drift.
+**Rejected**: Same maintenance burden as per-org — the repo must re-run install to pick up upstream patches. Contradicts ADR 0031's motivation to eliminate workflow drift.
 
 ### Alternative 2: Single GitHub App for all roles
 
@@ -72,7 +72,7 @@ Reduce per-repo to two Apps instead of matching the full per-org app set.
 
 Add a **per-repo installation mode** where fullsend runs entirely within a single repository — no `.fullsend` config repo, no cross-repo dispatch, no org-level secrets. The target repo IS the config repo.
 
-Per-repo reuses the reusable workflows from ADR 0030, adding one new artifact: `reusable-fullsend.yml`, an all-in-one routing and dispatch workflow that combines event-to-stage routing (currently in the ~380-line shim) with per-stage dispatch into a single `workflow_call` entry point.
+Per-repo reuses the reusable workflows from ADR 0031, adding one new artifact: `reusable-fullsend.yml`, an all-in-one routing and dispatch workflow that combines event-to-stage routing (currently in the ~380-line shim) with per-stage dispatch into a single `workflow_call` entry point.
 
 ### 1. Architecture
 
@@ -84,7 +84,7 @@ ENROLLED REPO                    .FULLSEND CONFIG REPO
 fullsend.yml (shim)              dispatch.yml → thin caller stage workflows
   │ workflow_call                        │ workflow_call
   └──────────────────────────────────────┘
-                                         └──> reusable workflows (ADR 0030)
+                                         └──> reusable workflows (ADR 0031)
                                                uses: fullsend-ai/fullsend@v1
                                                uses: mint-token, validate-enrollment, setup-gcp
 
@@ -99,7 +99,7 @@ TARGET REPO (self-contained)
          ├── routes event to stage
          ├── skips enrollment validation (per-repo mode)
          ├──> reusable-triage.yml  ─┐
-         ├──> reusable-code.yml    ─┤── reusable workflows (ADR 0030)
+         ├──> reusable-code.yml    ─┤── reusable workflows (ADR 0031)
          ├──> reusable-review.yml  ─┤
          └──> reusable-fix.yml     ─┘
                    │
@@ -150,7 +150,7 @@ The routing logic maps:
 - `pull_request_target` → review (or retro on close)
 - `pull_request_review` + `changes_requested` from bot → fix
 
-This workflow serves both per-repo and per-org simplified shims. Per-org thin shims (from ADR 0030) can also use it to replace the ~380-line shim + dispatcher.
+This workflow serves both per-repo and per-org simplified shims. Per-org thin shims (from ADR 0031) can also use it to replace the ~380-line shim + dispatcher.
 
 **Nesting depth**: target-repo workflow → `reusable-fullsend.yml` → `reusable-code.yml` = 2 levels of `workflow_call` (GitHub limit is 4).
 
@@ -242,7 +242,7 @@ Migration between models is straightforward:
 
 - **No org admin required**: Repo admins can adopt fullsend without org-level access or coordination (though org admin is still needed to install the GitHub Apps on the repo).
 - **Self-contained**: Everything fullsend needs lives in one repo — simpler mental model, easier cleanup.
-- **Reuses ADR 0030 infrastructure**: Per-repo adds one workflow (`reusable-fullsend.yml`); all other reusable workflows and the four composite actions are shared with per-org.
+- **Reuses ADR 0031 infrastructure**: Per-repo adds one workflow (`reusable-fullsend.yml`); all other reusable workflows and the four composite actions are shared with per-org.
 - **Low entry barrier**: Copy one workflow file, install shared Apps, set mint URL — working fullsend in under 15 minutes. No PEMs or client IDs to manage.
 - **Reduced blast radius**: Token mint scopes tokens to the requesting repo via the `repository` OIDC claim. Credential compromise affects only the single repo.
 - **Same agent behavior**: Triage → Code → Review → Fix workflow is identical from the user's perspective.
@@ -277,7 +277,7 @@ This workflow is also useful as a per-org shim simplification (replacing the ~38
 
 ### Retro stage
 
-The routing logic includes a retro stage (PR closed). Reusable workflows for retro (`reusable-retro.yml`) are not yet defined in ADR 0030. This stage should be added to the reusable workflow set or explicitly deferred.
+The routing logic includes a retro stage (PR closed). Reusable workflows for retro (`reusable-retro.yml`) are not yet defined in ADR 0031. This stage should be added to the reusable workflow set or explicitly deferred.
 
 ### Concurrency groups
 
@@ -289,4 +289,4 @@ Concurrent fullsend runs for the same issue/PR should be prevented. Options: wor
 - [ADR 0008: workflow_dispatch for cross-repo dispatch](0008-workflow-dispatch-for-cross-repo-dispatch.md) — superseded by `workflow_call` (ADR 0027 removes the original constraint)
 - [ADR 0026: Stage-based dispatch](0026-stage-based-dispatch-for-agent-workflow-decoupling.md) — routing logic extracted into `reusable-fullsend.yml`
 - [ADR 0027: Central token mint](0027-central-token-mint-secretless-fullsend.md) — default credential model for per-repo
-- [ADR 0030: Reusable workflows](0030-reusable-workflows-for-action-installed-distribution.md) — foundation that makes per-repo possible
+- [ADR 0031: Reusable workflows](0031-reusable-workflows-for-action-installed-distribution.md) — foundation that makes per-repo possible
