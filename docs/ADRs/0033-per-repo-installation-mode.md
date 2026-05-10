@@ -23,7 +23,7 @@ Proposed
 
 ## Context
 
-Fullsend's installation model is per-org: `fullsend admin install` creates a dedicated `.fullsend` config repo, per-role GitHub Apps ([ADR 0007](0007-per-role-github-apps.md)), shim workflows in enrolled repos, and a central token mint for OIDC-based credential issuance ([ADR 0027](0027-central-token-mint-secretless-fullsend.md)). This requires org admin access and assumes all enrolled repos share agent configuration, credentials, and policies.
+Fullsend's installation model is per-org: `fullsend admin install` creates a dedicated `.fullsend` config repo, per-role GitHub Apps ([ADR 0007](0007-per-role-github-apps.md)), shim workflows in enrolled repos, and a central token mint for OIDC-based credential issuance ([ADR 0029](0029-central-token-mint-secretless-fullsend.md)). This requires org admin access and assumes all enrolled repos share agent configuration, credentials, and policies.
 
 Some users cannot or do not want to use the per-org model:
 
@@ -36,7 +36,7 @@ Some users cannot or do not want to use the per-org model:
 Two ADRs create the building blocks that make per-repo possible:
 
 - [ADR 0031](0031-reusable-workflows-for-action-installed-distribution.md) publishes reusable workflows and four composite actions (`fullsend`, `mint-token`, `validate-enrollment`, `setup-gcp`) from `fullsend-ai/fullsend`, enabling any repo to call fullsend infrastructure via `workflow_call` without copying workflow files.
-- [ADR 0027](0027-central-token-mint-secretless-fullsend.md) replaces PEM secrets and dispatch PATs with OIDC-based credential issuance via a central token mint. The `mint-token` composite action takes a role name (triage, coder, review, fix) and returns a scoped GitHub App installation token — no PEMs or client IDs in the calling repo.
+- [ADR 0029](0029-central-token-mint-secretless-fullsend.md) replaces PEM secrets and dispatch PATs with OIDC-based credential issuance via a central token mint. The `mint-token` composite action takes a role name (triage, coder, review, fix) and returns a scoped GitHub App installation token — no PEMs or client IDs in the calling repo.
 
 Combined, these make per-repo installation viable: a single ~30-line workflow file in the target repo, calling upstream reusable workflows, with credentials issued by the token mint.
 
@@ -172,7 +172,7 @@ In per-org mode:
 
 Per-repo supports two credential models:
 
-**Model A: Token mint (default, [ADR 0027](0027-central-token-mint-secretless-fullsend.md))**
+**Model A: Token mint (default, [ADR 0029](0029-central-token-mint-secretless-fullsend.md))**
 
 GitHub Apps managed by the mint operator are installed on the repo. The
 `mint-token` composite action exchanges a GitHub OIDC token for a scoped
@@ -286,7 +286,7 @@ Concurrent fullsend runs for the same issue/PR should be prevented. Options: wor
 ## References
 
 - [ADR 0007: Per-role GitHub Apps](0007-per-role-github-apps.md) — authentication model replicated in per-repo
-- [ADR 0008: workflow_dispatch for cross-repo dispatch](0008-workflow-dispatch-for-cross-repo-dispatch.md) — superseded by `workflow_call` (ADR 0027 removes the original constraint)
+- [ADR 0008: workflow_dispatch for cross-repo dispatch](0008-workflow-dispatch-for-cross-repo-dispatch.md) — superseded by `workflow_call` (ADR 0029 removes the original constraint)
 - [ADR 0026: Stage-based dispatch](0026-stage-based-dispatch-for-agent-workflow-decoupling.md) — routing logic extracted into `reusable-fullsend.yml`
-- [ADR 0027: Central token mint](0027-central-token-mint-secretless-fullsend.md) — default credential model for per-repo
+- [ADR 0029: Central token mint](0027-central-token-mint-secretless-fullsend.md) — default credential model for per-repo
 - [ADR 0031: Reusable workflows](0031-reusable-workflows-for-action-installed-distribution.md) — foundation that makes per-repo possible
