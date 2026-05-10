@@ -36,7 +36,7 @@ it is duplicated in every enrolled repo and drifts when shims are not
 updated after scaffold changes.
 
 The token mint work
-([ADR 0027 PR #655](https://github.com/fullsend-ai/fullsend/pull/655))
+([ADR 0029 PR #655](https://github.com/fullsend-ai/fullsend/pull/655))
 migrates the shim from `workflow_dispatch` + `gh workflow run` to native
 `workflow_call`. This removes the dispatch credential (`FULLSEND_DISPATCH_TOKEN`)
 and the imperative dispatch boilerplate, creating the natural opportunity to
