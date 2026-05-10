@@ -10,8 +10,8 @@ import (
 
 func TestDefaultAgentRoles(t *testing.T) {
 	roles := DefaultAgentRoles()
-	require.Len(t, roles, 4)
-	assert.Equal(t, []string{"fullsend", "triage", "coder", "review"}, roles)
+	require.Len(t, roles, 5)
+	assert.Equal(t, []string{"fullsend", "triage", "coder", "review", "fix"}, roles)
 }
 
 func TestAgentAppConfig_Fullsend(t *testing.T) {
@@ -28,6 +28,7 @@ func TestAgentAppConfig_Fullsend(t *testing.T) {
 	assert.Equal(t, "read", cfg.Permissions.Checks)
 	assert.Equal(t, "write", cfg.Permissions.Administration)
 	assert.Equal(t, "read", cfg.Permissions.Members)
+	assert.Equal(t, "read", cfg.Permissions.OrganizationProjects)
 
 	assert.Contains(t, cfg.Events, "issues")
 	assert.Contains(t, cfg.Events, "push")
@@ -71,6 +72,19 @@ func TestAgentAppConfig_Review(t *testing.T) {
 	assert.Equal(t, "read", cfg.Permissions.Issues)
 
 	assert.Contains(t, cfg.Events, "pull_request")
+}
+
+func TestAgentAppConfig_Prioritize(t *testing.T) {
+	cfg := AgentAppConfig("myorg", "prioritize")
+
+	assert.Equal(t, "myorg-prioritize", cfg.Name)
+	assert.Equal(t, "write", cfg.Permissions.OrganizationProjects)
+	assert.Equal(t, "write", cfg.Permissions.Issues)
+	assert.Empty(t, cfg.Permissions.Contents)
+	assert.Empty(t, cfg.Permissions.PullRequests)
+
+	// Prioritize is cron-driven, no webhook events.
+	assert.Empty(t, cfg.Events)
 }
 
 func TestAgentAppConfig_UnknownRole(t *testing.T) {

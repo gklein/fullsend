@@ -530,3 +530,18 @@ func TestValidateFilesExist_SkipsVarPaths(t *testing.T) {
 	// Should not error — ${VAR} paths are expanded at bootstrap time.
 	require.NoError(t, h.ValidateFilesExist())
 }
+
+func TestValidateFilesExist_SkipsOptionalPaths(t *testing.T) {
+	dir := t.TempDir()
+	agentFile := filepath.Join(dir, "agent.md")
+	require.NoError(t, os.WriteFile(agentFile, []byte("agent"), 0o644))
+
+	h := &Harness{
+		Agent: agentFile,
+		HostFiles: []HostFile{
+			{Src: "/tmp/does-not-exist-yet.env", Dest: "/tmp/dest", Optional: true},
+		},
+	}
+	// Should not error — optional host files may not exist until runtime.
+	require.NoError(t, h.ValidateFilesExist())
+}

@@ -10,11 +10,13 @@ import (
 
 func TestValidRoles(t *testing.T) {
 	roles := ValidRoles()
-	assert.Len(t, roles, 4)
+	assert.Len(t, roles, 6)
 	assert.Contains(t, roles, "fullsend")
 	assert.Contains(t, roles, "triage")
 	assert.Contains(t, roles, "coder")
 	assert.Contains(t, roles, "review")
+	assert.Contains(t, roles, "fix")
+	assert.Contains(t, roles, "prioritize")
 }
 
 func TestNewOrgConfig(t *testing.T) {
@@ -343,4 +345,92 @@ func TestOrgConfigMarshal_WithInference(t *testing.T) {
 func TestValidProviders(t *testing.T) {
 	providers := ValidProviders()
 	assert.Equal(t, []string{"vertex"}, providers)
+}
+
+func TestParseOrgConfig_KillSwitch(t *testing.T) {
+	yamlData := `
+version: "1"
+kill_switch: true
+dispatch:
+  platform: github-actions
+defaults:
+  roles:
+    - fullsend
+  max_implementation_retries: 2
+agents: []
+repos: {}
+`
+	cfg, err := ParseOrgConfig([]byte(yamlData))
+	require.NoError(t, err)
+	assert.True(t, cfg.KillSwitch)
+}
+
+func TestParseOrgConfig_KillSwitchDefault(t *testing.T) {
+	yamlData := `
+version: "1"
+dispatch:
+  platform: github-actions
+defaults:
+  roles:
+    - fullsend
+  max_implementation_retries: 2
+agents: []
+repos: {}
+`
+	cfg, err := ParseOrgConfig([]byte(yamlData))
+	require.NoError(t, err)
+	assert.False(t, cfg.KillSwitch)
+}
+
+func TestOrgConfigMarshal_KillSwitch(t *testing.T) {
+	cfg := &OrgConfig{
+		Version:    "1",
+		KillSwitch: true,
+		Dispatch:   DispatchConfig{Platform: "github-actions"},
+		Defaults: RepoDefaults{
+			Roles:                    []string{"fullsend"},
+			MaxImplementationRetries: 2,
+		},
+		Agents: []AgentEntry{},
+		Repos:  map[string]RepoConfig{},
+	}
+
+	data, err := cfg.Marshal()
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "kill_switch: true")
+}
+
+func TestOrgConfigValidate_FixRole(t *testing.T) {
+	cfg := &OrgConfig{
+		Version:  "1",
+		Dispatch: DispatchConfig{Platform: "github-actions"},
+		Defaults: RepoDefaults{
+			Roles:                    []string{"fullsend", "review", "fix"},
+			MaxImplementationRetries: 2,
+		},
+	}
+	err := cfg.Validate()
+	assert.NoError(t, err)
+}
+
+func TestNewOrgConfig_KillSwitchDefaultFalse(t *testing.T) {
+	cfg := NewOrgConfig(nil, nil, []string{"fullsend"}, nil, "")
+	assert.False(t, cfg.KillSwitch)
+}
+
+func TestOrgConfigMarshal_KillSwitchOmitEmpty(t *testing.T) {
+	cfg := &OrgConfig{
+		Version:  "1",
+		Dispatch: DispatchConfig{Platform: "github-actions"},
+		Defaults: RepoDefaults{
+			Roles:                    []string{"fullsend"},
+			MaxImplementationRetries: 2,
+		},
+		Agents: []AgentEntry{},
+		Repos:  map[string]RepoConfig{},
+	}
+
+	data, err := cfg.Marshal()
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "kill_switch")
 }

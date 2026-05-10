@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fullsend-ai/fullsend/internal/forge"
 )
 
 // newTestClient creates a LiveClient pointed at the given httptest server.
@@ -953,4 +955,195 @@ func TestIsTransientStatus(t *testing.T) {
 	for _, code := range nonTransient {
 		assert.False(t, isTransientStatus(code), "expected %d to not be transient", code)
 	}
+}
+
+func TestBlobSHA(t *testing.T) {
+	// printf "blob 5\0hello" | sha1sum
+	got := blobSHA([]byte("hello"))
+	assert.Equal(t, "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0", got)
+
+	// echo -n "" | git hash-object --stdin
+	got = blobSHA([]byte{})
+	assert.Equal(t, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", got)
+}
+
+func TestCommitFiles_AllNew(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo":
+			json.NewEncoder(w).Encode(map[string]string{"default_branch": "main"})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/ref/heads/main":
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": map[string]string{"sha": "abc123"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/commits/abc123":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree": map[string]string{"sha": "tree000"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/trees/tree000":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree":      []any{},
+				"truncated": false,
+			})
+
+		case r.Method == "POST" && r.URL.Path == "/repos/org/repo/git/trees":
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			assert.Equal(t, "tree000", body["base_tree"])
+			entries := body["tree"].([]any)
+			assert.Len(t, entries, 2)
+
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"sha": "newtree"})
+
+		case r.Method == "POST" && r.URL.Path == "/repos/org/repo/git/commits":
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			assert.Equal(t, "newtree", body["tree"])
+			assert.Equal(t, []any{"abc123"}, body["parents"])
+
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"sha": "newcommit"})
+
+		case r.Method == "PATCH" && r.URL.Path == "/repos/org/repo/git/refs/heads/main":
+			var body map[string]string
+			json.NewDecoder(r.Body).Decode(&body)
+			assert.Equal(t, "newcommit", body["sha"])
+			json.NewEncoder(w).Encode(map[string]any{})
+
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	files := []forge.TreeFile{
+		{Path: "file1.txt", Content: []byte("content1"), Mode: "100644"},
+		{Path: "scripts/run.sh", Content: []byte("#!/bin/bash"), Mode: "100755"},
+	}
+	committed, err := client.CommitFiles(context.Background(), "org", "repo", "test commit", files)
+	require.NoError(t, err)
+	assert.True(t, committed)
+}
+
+func TestCommitFiles_AllUnchanged(t *testing.T) {
+	content := []byte("existing content")
+	existingSHA := blobSHA(content)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo":
+			json.NewEncoder(w).Encode(map[string]string{"default_branch": "main"})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/ref/heads/main":
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": map[string]string{"sha": "abc123"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/commits/abc123":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree": map[string]string{"sha": "tree000"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/trees/tree000":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree": []map[string]string{
+					{"path": "file.txt", "mode": "100644", "sha": existingSHA},
+				},
+				"truncated": false,
+			})
+
+		default:
+			t.Errorf("unexpected request: %s %s (should not create tree/commit)", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	files := []forge.TreeFile{
+		{Path: "file.txt", Content: content, Mode: "100644"},
+	}
+	committed, err := client.CommitFiles(context.Background(), "org", "repo", "no-op", files)
+	require.NoError(t, err)
+	assert.False(t, committed)
+}
+
+func TestCommitFiles_ModeChange(t *testing.T) {
+	content := []byte("#!/bin/bash\necho hello")
+	existingSHA := blobSHA(content)
+
+	var treeCreated bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo":
+			json.NewEncoder(w).Encode(map[string]string{"default_branch": "main"})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/ref/heads/main":
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": map[string]string{"sha": "abc123"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/commits/abc123":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree": map[string]string{"sha": "tree000"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/trees/tree000":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree": []map[string]string{
+					{"path": "scripts/run.sh", "mode": "100644", "sha": existingSHA},
+				},
+				"truncated": false,
+			})
+
+		case r.Method == "POST" && r.URL.Path == "/repos/org/repo/git/trees":
+			treeCreated = true
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			entries := body["tree"].([]any)
+			require.Len(t, entries, 1)
+			entry := entries[0].(map[string]any)
+			assert.Equal(t, "100755", entry["mode"])
+
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"sha": "newtree"})
+
+		case r.Method == "POST" && r.URL.Path == "/repos/org/repo/git/commits":
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"sha": "newcommit"})
+
+		case r.Method == "PATCH" && r.URL.Path == "/repos/org/repo/git/refs/heads/main":
+			json.NewEncoder(w).Encode(map[string]any{})
+
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	files := []forge.TreeFile{
+		{Path: "scripts/run.sh", Content: content, Mode: "100755"},
+	}
+	committed, err := client.CommitFiles(context.Background(), "org", "repo", "fix modes", files)
+	require.NoError(t, err)
+	assert.True(t, committed)
+	assert.True(t, treeCreated, "should create tree for mode change")
+}
+
+func TestCommitFiles_Empty(t *testing.T) {
+	client := New("token")
+	committed, err := client.CommitFiles(context.Background(), "org", "repo", "msg", nil)
+	require.NoError(t, err)
+	assert.False(t, committed)
 }

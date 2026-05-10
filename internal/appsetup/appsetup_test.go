@@ -437,6 +437,43 @@ func TestSetup_StalePermissions_AllRolesChecked(t *testing.T) {
 	assert.Contains(t, permErr.Error(), "myorg-triage")
 }
 
+func TestSetup_StalePermissions_IncludesInstallationURL(t *testing.T) {
+	client := &forge.FakeClient{
+		AppClientIDs: map[string]string{
+			"myorg-fullsend": "Iv1.abc",
+		},
+		Installations: []forge.Installation{
+			{
+				ID: 12345, AppID: 10, AppSlug: "myorg-fullsend",
+				Permissions: map[string]string{
+					"contents":      "write",
+					"issues":        "read",
+					"pull_requests": "write",
+					"checks":        "read",
+					// missing some expected permissions
+				},
+			},
+		},
+	}
+	printer := ui.New(&discardWriter{})
+
+	setup := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithSecretExists(func(_ string) (bool, error) { return true, nil })
+
+	_, err := setup.Run(context.Background(), "myorg", "fullsend")
+	require.NoError(t, err)
+
+	permErr := setup.PermissionErrors()
+	require.Error(t, permErr)
+	errMsg := permErr.Error()
+	assert.Contains(t, errMsg, "/settings/apps/myorg-fullsend/permissions",
+		"error should contain app permissions URL")
+	assert.Contains(t, errMsg, "/settings/installations/12345",
+		"error should contain installation approval URL")
+	assert.Contains(t, errMsg, "organizations/myorg",
+		"both URLs should reference the correct org")
+}
+
 func TestSetup_CorrectPermissions_NoError(t *testing.T) {
 	client := &forge.FakeClient{
 		AppClientIDs: map[string]string{
@@ -446,14 +483,15 @@ func TestSetup_CorrectPermissions_NoError(t *testing.T) {
 			{
 				ID: 100, AppID: 10, AppSlug: "myorg-fullsend",
 				Permissions: map[string]string{
-					"actions":        "write",
-					"contents":       "write",
-					"workflows":      "write",
-					"issues":         "read",
-					"pull_requests":  "write",
-					"checks":         "read",
-					"administration": "write",
-					"members":        "read",
+					"actions":               "write",
+					"contents":              "write",
+					"workflows":             "write",
+					"issues":                "read",
+					"pull_requests":         "write",
+					"checks":                "read",
+					"administration":        "write",
+					"members":               "read",
+					"organization_projects": "read",
 				},
 			},
 		},

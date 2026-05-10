@@ -1,16 +1,53 @@
 package scaffold
 
 import (
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"github.com/fullsend-ai/fullsend/internal/harness"
 )
+
+func TestFileModeMatchesFilesystem(t *testing.T) {
+	scaffoldRoot := "fullsend-repo"
+
+	var onDiskExecutable []string
+	err := filepath.WalkDir(scaffoldRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return walkErr
+		}
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			return infoErr
+		}
+		relPath := path[len(scaffoldRoot)+1:]
+		if info.Mode()&0o111 != 0 {
+			onDiskExecutable = append(onDiskExecutable, relPath)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+
+	for _, path := range onDiskExecutable {
+		assert.Equal(t, "100755", FileMode(path),
+			"file %s is executable on disk but not in executableFiles", path)
+	}
+
+	for path := range executableFiles {
+		info, statErr := os.Stat(filepath.Join(scaffoldRoot, path))
+		require.NoError(t, statErr, "file %s is in executableFiles but not on disk", path)
+		assert.NotEqual(t, os.FileMode(0), info.Mode()&0o111,
+			"file %s is in executableFiles but is not executable on disk", path)
+	}
+}
 
 func TestFullsendRepoFilesExist(t *testing.T) {
 	expected := []string{
@@ -21,6 +58,8 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		".github/workflows/fix.yml",
 		".github/workflows/repo-maintenance.yml",
 		".github/actions/fullsend/action.yml",
+		".github/actions/setup-gcp/action.yml",
+		".github/actions/validate-enrollment/action.yml",
 		".github/scripts/setup-agent-env.sh",
 		"agents/triage.md",
 		"agents/code.md",
@@ -40,8 +79,19 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		"scripts/post-code.sh",
 		"scripts/reconcile-repos.sh",
 		"scripts/validate-output-schema.sh",
+		"scripts/validate-source-repo.sh",
 		"skills/code-implementation/SKILL.md",
 		"templates/shim-workflow.yaml",
+		"agents/prioritize.md",
+		"env/prioritize.env",
+		"harness/prioritize.yaml",
+		"policies/prioritize.yaml",
+		"schemas/prioritize-result.schema.json",
+		"scripts/setup-prioritize.sh",
+		"scripts/pre-prioritize.sh",
+		"scripts/post-prioritize.sh",
+		".github/workflows/prioritize.yml",
+		".github/workflows/prioritize-scheduler.yml",
 	}
 
 	for _, path := range expected {
@@ -151,6 +201,8 @@ func TestTriageWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "event_payload")
 	assert.Contains(t, s, "setup-agent-env.sh")
 	assert.Contains(t, s, "fullsend")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs for same issue
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-triage-")
@@ -186,6 +238,8 @@ func TestCodeWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "sandbox-token")
 	assert.Contains(t, s, "push-token")
 	assert.Contains(t, s, "permission-contents: read")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs for same issue
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-code-")
@@ -204,6 +258,8 @@ func TestReviewWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "FULLSEND_REVIEW_CLIENT_ID")
 	assert.Contains(t, s, "sandbox-token")
 	assert.Contains(t, s, "review-token")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-review-")
@@ -223,11 +279,90 @@ func TestFixWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "FULLSEND_CODER_CLIENT_ID")
 	assert.Contains(t, s, "sandbox-token")
 	assert.Contains(t, s, "push-token")
-	assert.Contains(t, s, "RUNNER_TEMP/empty-oidc-token")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	// Verify concurrency group prevents overlapping runs
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-fix-")
 	assert.Contains(t, s, "cancel-in-progress: true")
+}
+
+func TestSetupGcpActionContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/actions/setup-gcp/action.yml")
+	require.NoError(t, err)
+	s := string(content)
+	// Verify inputs (composite actions cannot access vars/secrets directly)
+	assert.Contains(t, s, "inputs:")
+	assert.Contains(t, s, "gcp_auth_mode:")
+	assert.Contains(t, s, "gcp_wif_provider:")
+	assert.Contains(t, s, "gcp_wif_sa_email:")
+	assert.Contains(t, s, "gcp_sa_key_json:")
+	// Verify pre-mask step
+	assert.Contains(t, s, "Pre-mask GCP credential file path")
+	assert.Contains(t, s, "GITHUB_WORKSPACE}/gha-creds-")
+	// Verify WIF authentication path
+	assert.Contains(t, s, "if: inputs.gcp_auth_mode == 'wif'")
+	assert.Contains(t, s, "google-github-actions/auth@v3")
+	assert.Contains(t, s, "workload_identity_provider:")
+	assert.Contains(t, s, "service_account:")
+	// Verify SA key authentication path
+	assert.Contains(t, s, "if: inputs.gcp_auth_mode != 'wif'")
+	assert.Contains(t, s, "credentials_json:")
+	// Verify OIDC token workaround for non-WIF
+	assert.Contains(t, s, "RUNNER_TEMP/empty-oidc-token")
+	assert.Contains(t, s, "GCP_OIDC_TOKEN_FILE")
+	// Verify credential masking
+	assert.Contains(t, s, "Mask GCP credential file paths")
+	assert.Contains(t, s, "::add-mask::")
+	assert.Contains(t, s, "GOOGLE_GHA_CREDS_PATH")
+	assert.Contains(t, s, "GOOGLE_APPLICATION_CREDENTIALS")
+	assert.Contains(t, s, "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE")
+	// Verify sandbox preparation
+	assert.Contains(t, s, "prepare-sandbox-credentials.sh")
+}
+
+func TestValidateEnrollmentActionContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/actions/validate-enrollment/action.yml")
+	require.NoError(t, err)
+	s := string(content)
+	// Verify inputs declarations
+	assert.Contains(t, s, "inputs:")
+	assert.Contains(t, s, "source_repo:")
+	assert.Contains(t, s, "required: true")
+	// Verify outputs contract
+	assert.Contains(t, s, "outputs:")
+	assert.Contains(t, s, "name:")
+	assert.Contains(t, s, "steps.extract.outputs.name")
+	// Verify step ID matches output reference
+	assert.Contains(t, s, "id: extract")
+	// Verify SOURCE_REPO env var wiring
+	assert.Contains(t, s, "SOURCE_REPO: ${{ inputs.source_repo }}")
+	// Verify enrollment validation script
+	assert.Contains(t, s, "validate-source-repo.sh")
+}
+
+func TestValidateSourceRepoContent(t *testing.T) {
+	content, err := FullsendRepoFile("scripts/validate-source-repo.sh")
+	require.NoError(t, err)
+	s := string(content)
+	// Verify security-critical format regex
+	assert.Contains(t, s, "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$")
+	assert.Contains(t, s, "Invalid source_repo format")
+	// Verify owner check
+	assert.Contains(t, s, "REPO_OWNER=\"${SOURCE_REPO%%/*}\"")
+	assert.Contains(t, s, "source_repo owner does not match org")
+	// Verify allowlist check
+	assert.Contains(t, s, "REPO_NAME=\"${SOURCE_REPO#*/}\"")
+	assert.Contains(t, s, "repo is not enabled in config.yaml")
+	// Verify required environment variables
+	assert.Contains(t, s, "${SOURCE_REPO:?SOURCE_REPO is required}")
+	assert.Contains(t, s, "${GITHUB_REPOSITORY_OWNER:?GITHUB_REPOSITORY_OWNER is required}")
+	// Verify error messages use ::error:: format
+	assert.Contains(t, s, "::error::")
+	// Verify config.yaml existence check (not masked by 2>/dev/null)
+	assert.Contains(t, s, "config.yaml not found")
+	// Verify yq availability check
+	assert.Contains(t, s, "yq command not found")
 }
 
 func TestCodeHarnessContent(t *testing.T) {
@@ -323,6 +458,150 @@ func TestHarnessesLoadAndValidate(t *testing.T) {
 		loaded++
 	}
 	assert.True(t, loaded >= 2, "expected at least 2 harnesses, got %d", loaded)
+}
+
+func TestRepoMaintenanceWorkflowContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/repo-maintenance.yml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "config.yaml")
+	assert.Contains(t, s, "templates/shim-workflow.yaml",
+		"push trigger must include shim template so changes propagate to enrolled repos")
+}
+
+func TestPrioritizeWorkflowContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/prioritize.yml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "# fullsend-stage: prioritize")
+	assert.Contains(t, s, "workflow_dispatch")
+	assert.Contains(t, s, "event_type")
+	assert.Contains(t, s, "source_repo")
+	assert.Contains(t, s, "event_payload")
+	assert.Contains(t, s, "FULLSEND_PROJECT_NUMBER")
+	assert.Contains(t, s, "setup-agent-env.sh")
+	assert.Contains(t, s, "agent: prioritize")
+	assert.Contains(t, s, "concurrency:")
+	assert.Contains(t, s, "fullsend-prioritize")
+	assert.Contains(t, s, "cancel-in-progress: true")
+	// Org-scoped agent needs an empty target-repo directory.
+	assert.Contains(t, s, "mkdir -p target-repo")
+	// Issue URL comes from event_payload, not pre-script output file.
+	assert.Contains(t, s, "GITHUB_ISSUE_URL")
+	assert.Contains(t, s, "fromJSON(inputs.event_payload)")
+}
+
+func TestPrioritizeSchedulerWorkflowContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/prioritize-scheduler.yml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "# schedule:", "cron trigger should be commented out by default (#778)")
+	assert.Contains(t, s, "#   - cron:", "cron trigger should be commented out by default (#778)")
+	assert.Contains(t, s, "workflow_dispatch")
+	assert.Contains(t, s, "fullsend-prioritize-scheduler")
+	assert.Contains(t, s, "RICE Score")
+	assert.Contains(t, s, "prioritize.yml")
+	assert.Contains(t, s, "FULLSEND_PROJECT_NUMBER")
+	assert.Contains(t, s, "FULLSEND_PROJECT_NUMBER is not set; skipping prioritize scheduler")
+	guardIndex := strings.Index(s, `if [[ -z "${PROJECT_NUMBER}" ]]; then`)
+	projectViewIndex := strings.Index(s, `gh project view "${PROJECT_NUMBER}"`)
+	require.NotEqual(t, -1, guardIndex)
+	require.NotEqual(t, -1, projectViewIndex)
+	assert.Less(t, guardIndex, projectViewIndex, "PROJECT_NUMBER must be checked before gh project view")
+}
+
+func TestPrioritizeSchedulerSkipsWhenProjectNumberUnset(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/prioritize-scheduler.yml")
+	require.NoError(t, err)
+
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(content, &workflow))
+
+	dispatchJob, ok := workflow.Jobs["dispatch"]
+	require.True(t, ok, "dispatch job should exist")
+
+	var runScript string
+	for _, step := range dispatchJob.Steps {
+		if step.Name == "Find issues and dispatch prioritize runs" {
+			runScript = step.Run
+			break
+		}
+	}
+	require.NotEmpty(t, runScript, "prioritize scheduler dispatch script should exist")
+
+	tmpDir := t.TempDir()
+	binDir := filepath.Join(tmpDir, "bin")
+	require.NoError(t, os.Mkdir(binDir, 0o755))
+
+	ghLog := filepath.Join(tmpDir, "gh-calls.log")
+	fakeGH := "#!/usr/bin/env bash\n" +
+		"printf 'gh called: %s\\n' \"$*\" >> " + strconv.Quote(ghLog) + "\n" +
+		"exit 99\n"
+	ghPath := filepath.Join(binDir, "gh")
+	require.NoError(t, os.WriteFile(ghPath, []byte(fakeGH), 0o755))
+
+	scriptPath := filepath.Join(tmpDir, "prioritize-scheduler-run.sh")
+	require.NoError(t, os.WriteFile(scriptPath, []byte(runScript), 0o755))
+
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Env = []string{
+		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PROJECT_NUMBER=",
+		"ORG=test-org",
+		"GH_TOKEN=test-token",
+		"WIP_LIMIT=5",
+		"STALE_THRESHOLD=7d",
+		"GITHUB_REPOSITORY=test-org/.fullsend",
+	}
+
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	assert.Contains(t, string(output), "FULLSEND_PROJECT_NUMBER is not set; skipping prioritize scheduler")
+	_, statErr := os.Stat(ghLog)
+	assert.True(t, os.IsNotExist(statErr), "gh should not be called when PROJECT_NUMBER is unset")
+}
+
+func TestPrioritizeAgentPromptContent(t *testing.T) {
+	content, err := FullsendRepoFile("agents/prioritize.md")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "agent-result.json")
+	assert.Contains(t, s, "RICE")
+	assert.Contains(t, s, "Reach")
+	assert.Contains(t, s, "Impact")
+	assert.Contains(t, s, "Confidence")
+	assert.Contains(t, s, "Effort")
+	assert.Contains(t, s, "customer-research skill")
+}
+
+func TestPrioritizeSchemaContent(t *testing.T) {
+	content, err := FullsendRepoFile("schemas/prioritize-result.schema.json")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "$schema")
+	assert.Contains(t, s, "reach")
+	assert.Contains(t, s, "impact")
+	assert.Contains(t, s, "confidence")
+	assert.Contains(t, s, "effort")
+	assert.Contains(t, s, "reasoning")
+}
+
+func TestPrioritizeHarnessContent(t *testing.T) {
+	content, err := FullsendRepoFile("harness/prioritize.yaml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "agents/prioritize.md")
+	assert.Contains(t, s, "pre_script")
+	assert.Contains(t, s, "post_script")
+	assert.Contains(t, s, "runner_env")
+	assert.Contains(t, s, "PROJECT_NUMBER")
 }
 
 func TestValidateTriageDeleted(t *testing.T) {

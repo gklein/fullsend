@@ -1,13 +1,25 @@
 package cli
 
 import (
+	"archive/tar"
+	"bufio"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"debug/elf"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,6 +37,7 @@ func newRunCmd() *cobra.Command {
 	var targetRepo string
 	var fullsendBinary string
 	var envFiles []string
+	var noPostScript bool
 
 	cmd := &cobra.Command{
 		Use:   "run <agent-name>",
@@ -34,7 +47,7 @@ func newRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentName := args[0]
 			printer := ui.New(os.Stdout)
-			return runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary, envFiles, printer)
+			return runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary, envFiles, noPostScript, printer)
 		},
 	}
 
@@ -43,13 +56,14 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&targetRepo, "target-repo", "", "path to the target repository")
 	cmd.Flags().StringVar(&fullsendBinary, "fullsend-binary", "", "path to a Linux fullsend binary to copy into the sandbox (default: current executable)")
 	cmd.Flags().StringArrayVar(&envFiles, "env-file", nil, "load environment variables from a dotenv file (repeatable)")
+	cmd.Flags().BoolVar(&noPostScript, "no-post-script", false, "skip post-script execution (agent still runs full inference)")
 	_ = cmd.MarkFlagRequired("fullsend-dir")
 	_ = cmd.MarkFlagRequired("target-repo")
 
 	return cmd
 }
 
-func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary string, envFiles []string, printer *ui.Printer) (runErr error) {
+func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary string, envFiles []string, noPostScript bool, printer *ui.Printer) (runErr error) {
 	printer.Banner()
 	printer.Blank()
 	printer.Header("Running agent: " + agentName)
@@ -143,7 +157,11 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		printer.KeyValue("Pre-script", h.PreScript)
 	}
 	if h.PostScript != "" {
-		printer.KeyValue("Post-script", h.PostScript)
+		if noPostScript {
+			printer.KeyValue("Post-script", h.PostScript+" (SKIPPED: --no-post-script)")
+		} else {
+			printer.KeyValue("Post-script", h.PostScript)
+		}
 	}
 	if h.TimeoutMinutes > 0 {
 		printer.KeyValue("Timeout", fmt.Sprintf("%d minutes", h.TimeoutMinutes))
@@ -230,6 +248,10 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	// any output checks it needs.
 	if h.PostScript != "" {
 		defer func() {
+			if noPostScript {
+				printer.StepWarn(fmt.Sprintf("Skipping post-script %s: --no-post-script", h.PostScript))
+				return
+			}
 			if h.ValidationLoop != nil && !validationPassed {
 				printer.StepWarn("Skipping post-script: validation did not pass")
 				return
@@ -269,27 +291,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	}()
 	printer.StepDone(fmt.Sprintf("Sandbox created (%.1fs)", time.Since(createStart).Seconds()))
 
-	// 4. Get SSH config.
-	sshConfig, err := sandbox.GetSSHConfig(sandboxName)
-	if err != nil {
-		printer.StepFail("Failed to get SSH config")
-		return err
-	}
-
-	sshConfigFile, err := os.CreateTemp("", "openshell-ssh-*.config")
-	if err != nil {
-		return fmt.Errorf("creating SSH config temp file: %w", err)
-	}
-	sshConfigPath := sshConfigFile.Name()
-	if _, err := sshConfigFile.WriteString(sshConfig); err != nil {
-		sshConfigFile.Close()
-		os.Remove(sshConfigPath)
-		return fmt.Errorf("writing SSH config: %w", err)
-	}
-	sshConfigFile.Close()
-	defer os.Remove(sshConfigPath)
-
-	// 6. Resolve target repo path (needed by bootstrap for env vars).
+	// 4. Resolve target repo path (needed by bootstrap for env vars).
 	repoSrc, err := filepath.Abs(targetRepo)
 	if err != nil {
 		return fmt.Errorf("resolving target repo path: %w", err)
@@ -300,7 +302,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	// 7. Bootstrap sandbox.
 	bootstrapStart := time.Now()
 	printer.StepStart("Bootstrapping sandbox")
-	if err := bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary, h); err != nil {
+	if err := bootstrapSandbox(sandboxName, repoDir, fullsendBinary, h); err != nil {
 		printer.StepFail("Failed to bootstrap sandbox")
 		return err
 	}
@@ -310,14 +312,35 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	copyStart := time.Now()
 	printer.StepStart("Copying project code into sandbox")
 	mkRepoCmd := fmt.Sprintf("mkdir -p %s", repoDir)
-	if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, mkRepoCmd, 10*time.Second); err != nil {
+	if _, _, _, err := sandbox.Exec(sandboxName, mkRepoCmd, 10*time.Second); err != nil {
 		return fmt.Errorf("creating repo dir in sandbox: %w", err)
 	}
-	if err := sandbox.SCP(sshConfigPath, sandboxName, repoSrc+"/.", repoDir+"/"); err != nil {
+	if err := sandbox.Upload(sandboxName, repoSrc+"/.", repoDir+"/"); err != nil {
 		printer.StepFail("Failed to copy project code")
 		return fmt.Errorf("copying project code: %w", err)
 	}
 	printer.StepDone(fmt.Sprintf("Project code copied to %s/ (%.1fs)", repoName, time.Since(copyStart).Seconds()))
+
+	// 8a. Inject org-level AGENTS.md if the target repo does not have one.
+	// The scaffold ships a default AGENTS.md with baseline behavioral
+	// guidelines. Skills already instruct agents to read AGENTS.md from
+	// the project root — this ensures there is something to read even
+	// when the target repo has not authored its own.
+	if !hasAgentsMD(repoSrc) {
+		orgAgentsMD := filepath.Join(absFullsendDir, "AGENTS.md")
+		if _, err := os.Stat(orgAgentsMD); err == nil {
+			if err := sandbox.Upload(sandboxName, orgAgentsMD, repoDir+"/AGENTS.md"); err != nil {
+				printer.StepWarn("Could not inject org AGENTS.md: " + err.Error())
+			} else {
+				// Hide the injected file from git status so agents don't stage it.
+				excludeCmd := fmt.Sprintf("echo 'AGENTS.md' >> %s/.git/info/exclude", repoDir)
+				if _, _, _, err := sandbox.Exec(sandboxName, excludeCmd, 5*time.Second); err != nil {
+					printer.StepWarn("Could not add AGENTS.md to git exclude: " + err.Error())
+				}
+				printer.StepDone("Injected org-level AGENTS.md (target repo has none)")
+			}
+		}
+	}
 
 	// 8b. Copy agent-input files (if configured).
 	if h.AgentInput != "" {
@@ -325,10 +348,10 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		printer.StepStart("Copying agent-input files into sandbox")
 		remoteInput := fmt.Sprintf("%s/agent-input", sandbox.SandboxWorkspace)
 		mkInputCmd := fmt.Sprintf("mkdir -p %s", remoteInput)
-		if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, mkInputCmd, 10*time.Second); err != nil {
+		if _, _, _, err := sandbox.Exec(sandboxName, mkInputCmd, 10*time.Second); err != nil {
 			return fmt.Errorf("creating agent-input dir in sandbox: %w", err)
 		}
-		if err := sandbox.SCP(sshConfigPath, sandboxName, h.AgentInput+"/.", remoteInput+"/"); err != nil {
+		if err := sandbox.Upload(sandboxName, h.AgentInput+"/.", remoteInput+"/"); err != nil {
 			printer.StepFail("Failed to copy agent-input files")
 			return fmt.Errorf("copying agent-input files: %w", err)
 		}
@@ -357,7 +380,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	// 9a. Generate trace ID for security finding correlation.
 	traceID := security.GenerateTraceID()
 	printer.KeyValue("Trace ID", traceID)
-	if err := injectTraceID(sshConfigPath, sandboxName, traceID); err != nil {
+	if err := injectTraceID(sandboxName, traceID); err != nil {
 		printer.StepWarn("Could not inject trace ID into sandbox: " + err.Error())
 	}
 
@@ -367,11 +390,11 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	if h.SecurityEnabled() {
 		printer.StepStart("Running pre-agent security scan")
 		scanCmd := buildScanContextCommand(repoDir, traceID)
-		stdout, stderr, exitCode, sshErr := sandbox.SSH(sshConfigPath, sandboxName, scanCmd, 60*time.Second)
-		if sshErr != nil {
-			printer.StepFail("Security scan SSH failed: " + sshErr.Error())
+		stdout, stderr, exitCode, execErr := sandbox.Exec(sandboxName, scanCmd, 60*time.Second)
+		if execErr != nil {
+			printer.StepFail("Security scan failed: " + execErr.Error())
 			if h.FailModeClosed() {
-				return fmt.Errorf("pre-agent security scan failed: %w", sshErr)
+				return fmt.Errorf("pre-agent security scan failed: %w", execErr)
 			}
 			printer.StepWarn("Continuing despite scan failure (fail_mode: open)")
 		} else if exitCode != 0 {
@@ -407,6 +430,26 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		return fmt.Errorf("creating run directory: %w", err)
 	}
 
+	oidcCtx, oidcCancel := context.WithCancel(context.Background())
+	var oidcWg sync.WaitGroup
+	if oidcURL := os.Getenv("FULLSEND_GCP_OIDC_URL"); oidcURL != "" {
+		oidcAuth, err := readOIDCAuthFile(os.Getenv("FULLSEND_GCP_OIDC_AUTH_FILE"))
+		if err != nil {
+			printer.StepWarn("OIDC token refresh disabled: " + err.Error())
+		} else {
+			printer.StepDone("OIDC token refresh enabled (WIF mode)")
+			oidcWg.Add(1)
+			go func() {
+				defer oidcWg.Done()
+				runOIDCRefresh(oidcCtx, sandboxName, oidcURL, oidcAuth, printer)
+			}()
+		}
+	}
+	defer func() {
+		oidcCancel()
+		oidcWg.Wait()
+	}()
+
 	var lastExitCode int
 	var runCount int
 
@@ -430,7 +473,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		if iteration > 1 {
 			clearCmd := fmt.Sprintf("rm -rf %s/output/* %s/*.jsonl",
 				sandbox.SandboxWorkspace, sandbox.SandboxClaudeConfig)
-			if _, _, _, clearErr := sandbox.SSH(sshConfigPath, sandboxName, clearCmd, 10*time.Second); clearErr != nil {
+			if _, _, _, clearErr := sandbox.Exec(sandboxName, clearCmd, 10*time.Second); clearErr != nil {
 				printer.StepWarn("Failed to clear sandbox output: " + clearErr.Error())
 			}
 		}
@@ -444,7 +487,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		go runHeartbeat(printer, agentStart, timeout, heartbeatDone)
 
 		var metrics RunMetrics
-		exitCode, runErr := runAgentWithProgress(sshConfigPath, sandboxName, claudeCmd, timeout, printer, agentStart, &metrics)
+		exitCode, runErr := runAgentWithProgress(sandboxName, claudeCmd, timeout, printer, agentStart, &metrics)
 		close(heartbeatDone)
 
 		if runErr != nil {
@@ -465,7 +508,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		extractStart := time.Now()
 		printer.StepStart("Extracting output files")
 		remoteSrc := fmt.Sprintf("%s/output", sandbox.SandboxWorkspace)
-		extracted, extractErr := sandbox.ExtractOutputFiles(sshConfigPath, sandboxName, remoteSrc, iterOutputDir)
+		extracted, extractErr := sandbox.ExtractOutputFiles(sandboxName, remoteSrc, iterOutputDir)
 		if extractErr != nil {
 			printer.StepWarn("Failed to extract output files: " + extractErr.Error())
 		} else if len(extracted) == 0 {
@@ -480,18 +523,17 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		// 9c. Extract transcripts for this iteration.
 		transcriptStart := time.Now()
 		printer.StepStart("Extracting transcripts")
-		if err := sandbox.ExtractTranscripts(sshConfigPath, sandboxName, agentName, iterTranscriptDir); err != nil {
+		if err := sandbox.ExtractTranscripts(sandboxName, agentName, iterTranscriptDir); err != nil {
 			printer.StepWarn("Failed to extract transcripts: " + err.Error())
 		} else {
 			printer.StepDone(fmt.Sprintf("Transcripts extracted (%.1fs)", time.Since(transcriptStart).Seconds()))
 		}
 
-		// 9d. Extract target repo back to host. Uses rsync with --no-links
-		// and --exclude .git/hooks/ to prevent sandbox escape via symlinks
-		// or injected git hooks.
+		// 9d. Extract target repo back to host. SafeDownload removes symlinks
+		// and .git/hooks/ after download to prevent sandbox escape.
 		repoExtractStart := time.Now()
 		printer.StepStart("Extracting target repo")
-		if err := sandbox.RsyncFrom(sshConfigPath, sandboxName, repoDir, repoSrc); err != nil {
+		if err := sandbox.SafeDownload(sandboxName, repoDir, repoSrc); err != nil {
 			printer.StepWarn("Failed to extract target repo: " + err.Error())
 		} else {
 			printer.StepDone(fmt.Sprintf("Target repo extracted to %s (%.1fs)", repoSrc, time.Since(repoExtractStart).Seconds()))
@@ -537,7 +579,7 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		findingsDir := filepath.Join(runDir, "security")
 		if err := os.MkdirAll(findingsDir, 0o755); err == nil {
 			remoteFindingsDir := sandbox.SandboxWorkspace + "/.security/"
-			if scpErr := sandbox.SCPFrom(sshConfigPath, sandboxName, remoteFindingsDir, findingsDir); scpErr != nil {
+			if dlErr := sandbox.Download(sandboxName, remoteFindingsDir, findingsDir); dlErr != nil {
 				printer.StepInfo("No sandbox security findings to extract")
 			} else {
 				printer.StepDone("Security findings extracted")
@@ -568,14 +610,14 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	return nil
 }
 
-func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string, h *harness.Harness) error {
+func bootstrapSandbox(sandboxName, repoDir, fullsendBinary string, h *harness.Harness) error {
 	// Create workspace structure and Claude config dir for transcripts.
 	// Agent and skill definitions go in CLAUDE_CONFIG_DIR so `claude --agent`
 	// finds them regardless of the repo's own .claude/ directory. When
 	// CLAUDE_CONFIG_DIR is set, Claude uses it instead of ~/.claude/.
 	mkdirCmd := fmt.Sprintf("mkdir -p %s/agents %s/skills %s/hooks %s/bin %s/.env.d %s/.security %s %s/.claude/hooks",
 		sandbox.SandboxClaudeConfig, sandbox.SandboxClaudeConfig, sandbox.SandboxClaudeConfig, sandbox.SandboxWorkspace, sandbox.SandboxWorkspace, sandbox.SandboxWorkspace, sandbox.SandboxClaudeConfig, sandbox.SandboxWorkspace)
-	if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, mkdirCmd, 10*time.Second); err != nil {
+	if _, _, _, err := sandbox.Exec(sandboxName, mkdirCmd, 10*time.Second); err != nil {
 		return fmt.Errorf("creating workspace dirs: %w", err)
 	}
 
@@ -583,20 +625,45 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string
 	// The pre-agent security scan runs inside the sandbox and needs the
 	// fullsend CLI to scan context files.
 	localBinary := fullsendBinary
+	var tmpBinaryDir string
 	if localBinary == "" {
-		var err error
-		localBinary, err = os.Executable()
-		if err != nil {
-			return fmt.Errorf("finding fullsend executable: %w", err)
+		if needsCrossCompilation() {
+			targetArch := sandboxArch()
+			dir, binPath, err := resolveLinuxBinary(targetArch)
+			if err != nil {
+				if h.FailModeClosed() {
+					return fmt.Errorf("could not obtain linux/%s binary for security scan (fail_mode: closed): %w\nUse --fullsend-binary to provide a pre-built Linux binary", targetArch, err)
+				}
+				fmt.Fprintf(os.Stderr, "WARNING: could not obtain linux/%s binary: %v\n", targetArch, err)
+				fmt.Fprintf(os.Stderr, "WARNING: skipping sandbox-side security scan (fail_mode: open). Use --fullsend-binary to provide a pre-built Linux binary.\n")
+				localBinary = ""
+			} else {
+				tmpBinaryDir = dir
+				localBinary = binPath
+			}
+		} else {
+			var err error
+			localBinary, err = os.Executable()
+			if err != nil {
+				return fmt.Errorf("finding fullsend executable: %w", err)
+			}
 		}
 	}
-	remoteBinary := fmt.Sprintf("%s/bin/fullsend", sandbox.SandboxWorkspace)
-	if err := sandbox.SCP(sshConfigPath, sandboxName, localBinary, remoteBinary); err != nil {
-		return fmt.Errorf("copying fullsend binary to sandbox: %w", err)
+	if tmpBinaryDir != "" {
+		defer os.RemoveAll(tmpBinaryDir)
 	}
-	chmodCmd := fmt.Sprintf("chmod +x %s", remoteBinary)
-	if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, chmodCmd, 10*time.Second); err != nil {
-		return fmt.Errorf("chmod fullsend binary: %w", err)
+	if localBinary != "" {
+		if err := validateLinuxBinary(localBinary); err != nil {
+			return fmt.Errorf("fullsend binary %q is not valid for the sandbox: %w", localBinary, err)
+		}
+		remoteBinary := fmt.Sprintf("%s/bin/fullsend", sandbox.SandboxWorkspace)
+		if err := sandbox.Upload(sandboxName, localBinary, remoteBinary); err != nil {
+			return fmt.Errorf("copying fullsend binary to sandbox: %w", err)
+		}
+		chmodCmd := fmt.Sprintf("chmod +x %s", remoteBinary)
+		if _, _, _, err := sandbox.Exec(sandboxName, chmodCmd, 10*time.Second); err != nil {
+			return fmt.Errorf("chmod fullsend binary: %w", err)
+		}
 	}
 
 	// Host-side scan (Path A): check agent definition and skills for injection
@@ -628,12 +695,12 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string
 	}
 
 	// Copy agent definition to $CLAUDE_CONFIG_DIR/agents/.
-	if err := sandbox.SCP(sshConfigPath, sandboxName, h.Agent,
+	if err := sandbox.Upload(sandboxName, h.Agent,
 		fmt.Sprintf("%s/agents/", sandbox.SandboxClaudeConfig)); err != nil {
 		return fmt.Errorf("copying agent definition: %w", err)
 	}
 
-	// Copy skills (SCP -r copies the entire directory tree, including any
+	// Copy skills (Upload copies the entire directory tree, including any
 	// scripts/, references/, and assets/ bundled with the skill per the
 	// agentskills.io specification).
 	for _, skillPath := range h.Skills {
@@ -666,20 +733,20 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string
 			}
 		}
 
-		if err := sandbox.SCP(sshConfigPath, sandboxName, skillPath,
+		if err := sandbox.Upload(sandboxName, skillPath,
 			fmt.Sprintf("%s/skills/", sandbox.SandboxClaudeConfig)); err != nil {
 			return fmt.Errorf("copying skill %q: %w", skillPath, err)
 		}
 	}
 
 	// Write .env file (infrastructure vars) and copy host files.
-	if err := bootstrapEnv(sshConfigPath, sandboxName, repoDir, h); err != nil {
+	if err := bootstrapEnv(sandboxName, repoDir, h); err != nil {
 		return fmt.Errorf("bootstrapping environment: %w", err)
 	}
 
 	// Install security hooks if enabled.
 	if h.SecurityEnabled() {
-		if err := bootstrapSecurityHooks(sshConfigPath, sandboxName, h); err != nil {
+		if err := bootstrapSecurityHooks(sandboxName, h); err != nil {
 			return fmt.Errorf("bootstrapping security hooks: %w", err)
 		}
 	}
@@ -698,7 +765,7 @@ func bootstrapSandbox(sshConfigPath, sandboxName, repoDir, fullsendBinary string
 // host_files entries copy files from the host into the sandbox at specified
 // destination paths. Src values may contain ${VAR} references expanded from
 // the host environment. When expand is true, file content is also expanded.
-func bootstrapEnv(sshConfigPath, sandboxName, repoDir string, h *harness.Harness) error {
+func bootstrapEnv(sandboxName, repoDir string, h *harness.Harness) error {
 	remoteEnvFile := sandbox.SandboxWorkspace + "/.env"
 	outputDir := sandbox.SandboxWorkspace + "/output"
 
@@ -727,7 +794,7 @@ func bootstrapEnv(sshConfigPath, sandboxName, repoDir string, h *harness.Harness
 	}
 	tmpFile.Close()
 
-	if err := sandbox.SCP(sshConfigPath, sandboxName, tmpFile.Name(), remoteEnvFile); err != nil {
+	if err := sandbox.Upload(sandboxName, tmpFile.Name(), remoteEnvFile); err != nil {
 		return fmt.Errorf("copying .env file to sandbox: %w", err)
 	}
 
@@ -765,13 +832,13 @@ func bootstrapEnv(sshConfigPath, sandboxName, repoDir string, h *harness.Harness
 			}
 			tmp.Close()
 
-			if err := sandbox.SCP(sshConfigPath, sandboxName, tmp.Name(), hf.Dest); err != nil {
+			if err := sandbox.Upload(sandboxName, tmp.Name(), hf.Dest); err != nil {
 				os.Remove(tmp.Name())
 				return fmt.Errorf("copying expanded file %s to %s: %w", hf.Src, hf.Dest, err)
 			}
 			os.Remove(tmp.Name())
 		} else {
-			if err := sandbox.SCP(sshConfigPath, sandboxName, hostPath, hf.Dest); err != nil {
+			if err := sandbox.Upload(sandboxName, hostPath, hf.Dest); err != nil {
 				return fmt.Errorf("copying host file %s to %s: %w", hf.Src, hf.Dest, err)
 			}
 		}
@@ -783,8 +850,8 @@ func bootstrapEnv(sshConfigPath, sandboxName, repoDir string, h *harness.Harness
 		// https://github.com/fullsend-ai/fullsend/issues/345#issuecomment-4300740512
 		if strings.Contains(hf.Dest, "/bin/") {
 			chmodCmd := fmt.Sprintf("chmod +x %s", hf.Dest)
-			if _, _, _, sshErr := sandbox.SSH(sshConfigPath, sandboxName, chmodCmd, 10*time.Second); sshErr != nil {
-				return fmt.Errorf("chmod host file %s in sandbox: %w", hf.Dest, sshErr)
+			if _, _, _, execErr := sandbox.Exec(sandboxName, chmodCmd, 10*time.Second); execErr != nil {
+				return fmt.Errorf("chmod host file %s in sandbox: %w", hf.Dest, execErr)
 			}
 		}
 	}
@@ -806,8 +873,8 @@ func envToList(env map[string]string) []string {
 	return list
 }
 
-func runAgentWithProgress(sshConfigPath, sandboxName, claudeCmd string, timeout time.Duration, printer *ui.Printer, start time.Time, metrics *RunMetrics) (int, error) {
-	stdout, cmd, cancel, err := sandbox.SSHStreamReader(sshConfigPath, sandboxName, claudeCmd, timeout, os.Stderr)
+func runAgentWithProgress(sandboxName, claudeCmd string, timeout time.Duration, printer *ui.Printer, start time.Time, metrics *RunMetrics) (int, error) {
+	stdout, cmd, cancel, err := sandbox.ExecStreamReader(sandboxName, claudeCmd, timeout, os.Stderr)
 	if err != nil {
 		return -1, err
 	}
@@ -826,7 +893,7 @@ func runAgentWithProgress(sshConfigPath, sandboxName, claudeCmd string, timeout 
 	}
 
 	if waitErr != nil && cmd.ProcessState == nil {
-		return exitCode, fmt.Errorf("ssh failed: %w", waitErr)
+		return exitCode, fmt.Errorf("openshell exec failed: %w", waitErr)
 	}
 
 	return exitCode, nil
@@ -856,6 +923,92 @@ func runHeartbeat(printer *ui.Printer, start time.Time, timeout time.Duration, d
 	}
 }
 
+func readOIDCAuthFile(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("FULLSEND_GCP_OIDC_AUTH_FILE not set")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading OIDC auth file: %w", err)
+	}
+	val := strings.TrimSpace(string(data))
+	if val == "" {
+		return "", fmt.Errorf("OIDC auth file is empty")
+	}
+	return val, nil
+}
+
+var oidcRefreshInterval = 4 * time.Minute
+
+func runOIDCRefresh(ctx context.Context, sandboxName, oidcURL, oidcAuth string, printer *ui.Printer) {
+	ticker := time.NewTicker(oidcRefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := refreshOIDCToken(ctx, sandboxName, oidcURL, oidcAuth); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				printer.StepWarn("OIDC token refresh failed: " + err.Error())
+			} else {
+				printer.StepDone("OIDC token refreshed")
+			}
+		}
+	}
+}
+
+func refreshOIDCToken(ctx context.Context, sandboxName, oidcURL, oidcAuth string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", oidcURL, nil)
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", oidcAuth)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetching OIDC token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("OIDC endpoint returned HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return fmt.Errorf("reading OIDC token response: %w", err)
+	}
+	if len(body) == 0 {
+		return fmt.Errorf("OIDC endpoint returned empty token")
+	}
+	if !json.Valid(body) {
+		return fmt.Errorf("OIDC endpoint returned non-JSON response")
+	}
+
+	tmpFile, err := os.CreateTemp("", "fullsend-oidc-*.token")
+	if err != nil {
+		return fmt.Errorf("creating temp token file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write(body); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("writing temp token file: %w", err)
+	}
+	tmpFile.Close()
+
+	remotePath := sandbox.SandboxWorkspace + "/.gcp-oidc-token"
+	if err := sandbox.Upload(sandboxName, tmpFile.Name(), remotePath); err != nil {
+		return fmt.Errorf("copying token to sandbox: %w", err)
+	}
+
+	return nil
+}
+
 func buildClaudeCommand(agentName, model, repoDir string) string {
 	envFile := sandbox.SandboxWorkspace + "/.env"
 
@@ -871,7 +1024,7 @@ func buildClaudeCommand(agentName, model, repoDir string) string {
 		// --verbose increases log output in the job log. If artifact upload is
 		// added to this workflow, consider whether verbose output should be
 		// redacted or made conditional via an env var.
-		"cd %s && source %s && claude --print --verbose --output-format stream-json %s--agent '%s' --dangerously-skip-permissions 'Run the agent task'",
+		"cd %s && . %s && claude --print --verbose --output-format stream-json %s--agent '%s' --dangerously-skip-permissions 'Run the agent task'",
 		repoDir, envFile, modelFlag, safe,
 	)
 }
@@ -881,7 +1034,7 @@ func buildClaudeCommand(agentName, model, repoDir string) string {
 // (buildScanContextCommand) scans to ensure parity.
 const maxContextScanDepth = 5
 
-// buildScanContextCommand builds the SSH command to run `fullsend scan context`
+// buildScanContextCommand builds the command to run `fullsend scan context`
 // inside the sandbox. It finds known context files (including SKILL.md in
 // skill directories) in the repo directory and passes them as arguments.
 func buildScanContextCommand(repoDir, traceID string) string {
@@ -920,7 +1073,7 @@ func buildScanContextCommand(repoDir, traceID string) string {
 	envFile := sandbox.SandboxWorkspace + "/.env"
 
 	return fmt.Sprintf(
-		"source %s && FULLSEND_TRACE_ID='%s' find '%s' -maxdepth %d -type f \\( %s \\) -exec fullsend scan context {} +",
+		". %s && FULLSEND_TRACE_ID='%s' find '%s' -maxdepth %d -type f \\( %s \\) -exec fullsend scan context {} +",
 		envFile, traceID, escapedDir, maxContextScanDepth, inameExpr,
 	)
 }
@@ -976,6 +1129,17 @@ func relOrAbs(base, path string) string {
 		return path
 	}
 	return rel
+}
+
+// hasAgentsMD checks whether the repo directory contains an AGENTS.md file
+// in any common casing.
+func hasAgentsMD(repoDir string) bool {
+	for _, name := range []string{"AGENTS.md", "agents.md", "Agents.md"} {
+		if _, err := os.Stat(filepath.Join(repoDir, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // scanRepoContextFiles walks the target repo directory for known context
@@ -1141,7 +1305,7 @@ func scanOutputFiles(outputDir, traceID string, printer *ui.Printer) error {
 
 // bootstrapSecurityHooks installs Claude Code hook scripts and settings.json
 // inside the sandbox. Hook scripts are embedded in the binary via go:embed.
-func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harness) error {
+func bootstrapSecurityHooks(sandboxName string, h *harness.Harness) error {
 	// Write hook scripts.
 	hookFiles := security.HookFiles(h)
 	for name, content := range hookFiles {
@@ -1157,7 +1321,7 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 		tmpFile.Close()
 
 		remotePath := fmt.Sprintf("%s/.claude/hooks/%s", sandbox.SandboxWorkspace, name)
-		if err := sandbox.SCP(sshConfigPath, sandboxName, tmpFile.Name(), remotePath); err != nil {
+		if err := sandbox.Upload(sandboxName, tmpFile.Name(), remotePath); err != nil {
 			os.Remove(tmpFile.Name())
 			return fmt.Errorf("copying hook %s to sandbox: %w", name, err)
 		}
@@ -1165,7 +1329,7 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 
 		// Make executable.
 		chmodCmd := fmt.Sprintf("chmod +x %s", remotePath)
-		if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, chmodCmd, 10*time.Second); err != nil {
+		if _, _, _, err := sandbox.Exec(sandboxName, chmodCmd, 10*time.Second); err != nil {
 			return fmt.Errorf("chmod hook %s: %w", name, err)
 		}
 	}
@@ -1188,7 +1352,7 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 	tmpSettings.Close()
 
 	remoteSettings := fmt.Sprintf("%s/.claude/settings.json", sandbox.SandboxWorkspace)
-	if err := sandbox.SCP(sshConfigPath, sandboxName, tmpSettings.Name(), remoteSettings); err != nil {
+	if err := sandbox.Upload(sandboxName, tmpSettings.Name(), remoteSettings); err != nil {
 		os.Remove(tmpSettings.Name())
 		return fmt.Errorf("copying settings.json to sandbox: %w", err)
 	}
@@ -1205,7 +1369,7 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 			escapedFailOn := strings.ReplaceAll(tirithCfg.FailOn, "'", "'\\''")
 			envCmd := fmt.Sprintf("echo 'export TIRITH_FAIL_ON=%s' >> %s/.env",
 				escapedFailOn, sandbox.SandboxWorkspace)
-			if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, envCmd, 10*time.Second); err != nil {
+			if _, _, _, err := sandbox.Exec(sandboxName, envCmd, 10*time.Second); err != nil {
 				return fmt.Errorf("setting TIRITH_FAIL_ON: %w", err)
 			}
 		}
@@ -1214,7 +1378,7 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 		// fails closed if the binary is missing from the sandbox image.
 		if harness.BoolDefault(tirithCfg.Enabled, true) {
 			envCmd := fmt.Sprintf("echo 'export TIRITH_REQUIRED=1' >> %s/.env", sandbox.SandboxWorkspace)
-			if _, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, envCmd, 10*time.Second); err != nil {
+			if _, _, _, err := sandbox.Exec(sandboxName, envCmd, 10*time.Second); err != nil {
 				return fmt.Errorf("setting TIRITH_REQUIRED: %w", err)
 			}
 		}
@@ -1224,13 +1388,13 @@ func bootstrapSecurityHooks(sshConfigPath, sandboxName string, h *harness.Harnes
 }
 
 // injectTraceID appends the FULLSEND_TRACE_ID to the sandbox .env file.
-func injectTraceID(sshConfigPath, sandboxName, traceID string) error {
+func injectTraceID(sandboxName, traceID string) error {
 	if !security.IsValidTraceID(traceID) {
 		return fmt.Errorf("invalid trace ID format: %q", traceID)
 	}
 	// Safe: IsValidTraceID() above ensures traceID matches UUID v4 format only.
 	cmd := fmt.Sprintf("echo 'export FULLSEND_TRACE_ID=%s' >> %s/.env", traceID, sandbox.SandboxWorkspace)
-	_, _, _, err := sandbox.SSH(sshConfigPath, sandboxName, cmd, 10*time.Second)
+	_, _, _, err := sandbox.Exec(sandboxName, cmd, 10*time.Second)
 	return err
 }
 
@@ -1241,4 +1405,307 @@ func applySandboxImageOverride(image string) (string, bool) {
 		return override, true
 	}
 	return image, false
+}
+
+// needsCrossCompilation reports whether the host binary cannot run inside the
+// sandbox (Linux). True when running on macOS or any non-Linux OS.
+func needsCrossCompilation() bool {
+	return runtime.GOOS != "linux"
+}
+
+// validateLinuxBinary checks that the file at path is a Linux ELF executable
+// for the expected sandbox architecture. Returns a descriptive error if the
+// file is missing, not ELF, not Linux, or the wrong architecture.
+func validateLinuxBinary(path string) error {
+	f, err := elf.Open(path)
+	if err != nil {
+		return fmt.Errorf("not a valid ELF binary (is this a macOS Mach-O?): %w", err)
+	}
+	defer f.Close()
+
+	if f.OSABI != elf.ELFOSABI_NONE && f.OSABI != elf.ELFOSABI_LINUX {
+		return fmt.Errorf("ELF OS/ABI is %s, expected Linux or NONE", f.OSABI)
+	}
+
+	arch := sandboxArch()
+	archToMachine := map[string]elf.Machine{
+		"amd64": elf.EM_X86_64,
+		"arm64": elf.EM_AARCH64,
+	}
+	if expected, ok := archToMachine[arch]; ok && f.Machine != expected {
+		return fmt.Errorf("ELF machine is %s, expected %s for %s (set FULLSEND_SANDBOX_ARCH to override)", f.Machine, expected, arch)
+	}
+	return nil
+}
+
+var validArchs = map[string]bool{"amd64": true, "arm64": true}
+
+// sandboxArch returns the target architecture for the sandbox binary.
+// Defaults to the host arch (correct when sandbox image matches host, e.g.
+// arm64 Mac → arm64 sandbox image). Override with FULLSEND_SANDBOX_ARCH
+// when the sandbox image uses a different architecture (e.g. amd64 image
+// on an arm64 host via emulation). Only amd64 and arm64 are supported.
+func sandboxArch() string {
+	if arch := os.Getenv("FULLSEND_SANDBOX_ARCH"); arch != "" {
+		if !validArchs[arch] {
+			fmt.Fprintf(os.Stderr, "WARNING: FULLSEND_SANDBOX_ARCH=%q is not a supported architecture (amd64, arm64), using host arch %s\n", arch, runtime.GOARCH)
+			return runtime.GOARCH
+		}
+		return arch
+	}
+	return runtime.GOARCH
+}
+
+// resolveLinuxBinary obtains a Linux fullsend binary for the given arch.
+// Strategy: download from GitHub Release first (fast, no toolchain needed),
+// fall back to cross-compilation if the download fails or version is "dev".
+// Returns the temp directory (caller must clean up), the binary path, and any error.
+func resolveLinuxBinary(arch string) (tmpDir string, binaryPath string, err error) {
+	tmpDir, err = os.MkdirTemp("", "fullsend-linux-*")
+	if err != nil {
+		return "", "", fmt.Errorf("creating temp dir: %w", err)
+	}
+	binaryPath = filepath.Join(tmpDir, "fullsend")
+
+	// 1. Released version → download matching release asset.
+	if isReleasedVersion(version) {
+		fmt.Fprintf(os.Stderr, "Downloading fullsend %s for linux/%s from GitHub Release...\n", version, arch)
+		if dlErr := downloadReleaseBinary(version, arch, binaryPath); dlErr == nil {
+			fmt.Fprintf(os.Stderr, "Downloaded fullsend for linux/%s\n", arch)
+			return tmpDir, binaryPath, nil
+		} else {
+			fmt.Fprintf(os.Stderr, "WARNING: release download failed: %v\n", dlErr)
+		}
+	}
+
+	// 2. Dev build → try cross-compilation (requires Go toolchain + module in CWD).
+	fmt.Fprintf(os.Stderr, "Cross-compiling fullsend for linux/%s...\n", arch)
+	if ccErr := crossCompileFullsend(arch, binaryPath); ccErr == nil {
+		fmt.Fprintf(os.Stderr, "Cross-compiled fullsend for linux/%s\n", arch)
+		return tmpDir, binaryPath, nil
+	} else {
+		fmt.Fprintf(os.Stderr, "WARNING: cross-compilation failed: %v\n", ccErr)
+	}
+
+	// 3. Last resort → download latest release (version won't match exactly,
+	//    but the scan context command interface is stable across patch versions).
+	fmt.Fprintf(os.Stderr, "Downloading latest fullsend release for linux/%s...\n", arch)
+	if dlErr := downloadLatestReleaseBinary(arch, binaryPath); dlErr == nil {
+		fmt.Fprintf(os.Stderr, "Downloaded latest fullsend for linux/%s\n", arch)
+		return tmpDir, binaryPath, nil
+	} else {
+		fmt.Fprintf(os.Stderr, "WARNING: latest release download failed: %v\n", dlErr)
+	}
+
+	os.RemoveAll(tmpDir)
+	return "", "", fmt.Errorf("all strategies failed for linux/%s: provide --fullsend-binary or install Go toolchain", arch)
+}
+
+// isReleasedVersion returns true if version looks like a release tag
+// (e.g. "0.4.0", "v0.4.0") rather than a dev build (e.g. "dev",
+// "0.4.0-3-gabcdef", "0.4.0-vendored").
+func isReleasedVersion(v string) bool {
+	v = strings.TrimPrefix(v, "v")
+	if v == "" || v == "dev" {
+		return false
+	}
+	// A released version is purely digits and dots (e.g. "0.4.0").
+	for _, c := range v {
+		if c != '.' && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+var releaseBaseURL = "https://github.com/fullsend-ai/fullsend/releases/download"
+
+var httpClient = &http.Client{Timeout: 120 * time.Second}
+
+// downloadReleaseBinary downloads the fullsend binary for linux/{arch} from
+// the GitHub Release matching the given version, verifies its SHA256 checksum
+// against the release checksums.txt, and writes it to destPath.
+func downloadReleaseBinary(ver, arch, destPath string) error {
+	cleanVer := strings.TrimPrefix(ver, "v")
+	assetName := fmt.Sprintf("fullsend_%s_linux_%s.tar.gz", cleanVer, arch)
+
+	expectedHash, err := downloadChecksumForAsset(ver, assetName)
+	if err != nil {
+		return fmt.Errorf("fetching checksum for %s: %w", assetName, err)
+	}
+
+	url := fmt.Sprintf("%s/v%s/%s", releaseBaseURL, cleanVer, assetName)
+	resp, err := httpClient.Get(url) //nolint:gosec // URL is constructed from known constants
+	if err != nil {
+		return fmt.Errorf("fetching %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s returned %d", url, resp.StatusCode)
+	}
+
+	const maxDownloadSize = 200 * 1024 * 1024 // 200 MB compressed
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, io.LimitReader(resp.Body, maxDownloadSize)); err != nil {
+		return fmt.Errorf("reading %s: %w", assetName, err)
+	}
+
+	h := sha256.Sum256(buf.Bytes())
+	actualHash := hex.EncodeToString(h[:])
+	if actualHash != expectedHash {
+		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", assetName, actualHash, expectedHash)
+	}
+
+	return extractFullsendFromTarGz(bytes.NewReader(buf.Bytes()), destPath)
+}
+
+// downloadChecksumForAsset fetches the checksums.txt from the GitHub Release
+// for the given version and returns the SHA256 hash for assetName.
+// GoReleaser format: "<sha256>  <filename>\n"
+func downloadChecksumForAsset(ver, assetName string) (string, error) {
+	cleanVer := strings.TrimPrefix(ver, "v")
+	url := fmt.Sprintf("%s/v%s/checksums.txt", releaseBaseURL, cleanVer)
+
+	resp, err := httpClient.Get(url) //nolint:gosec // URL is constructed from known constants
+	if err != nil {
+		return "", fmt.Errorf("fetching checksums: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s returned %d", url, resp.StatusCode)
+	}
+
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 64*1024))
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.Fields(line)
+		if len(parts) == 2 && parts[1] == assetName {
+			hash := strings.ToLower(parts[0])
+			if len(hash) != 64 {
+				return "", fmt.Errorf("invalid hash length for %s in checksums.txt", assetName)
+			}
+			if _, err := hex.DecodeString(hash); err != nil {
+				return "", fmt.Errorf("invalid hex hash for %s in checksums.txt: %w", assetName, err)
+			}
+			return hash, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("reading checksums: %w", err)
+	}
+	return "", fmt.Errorf("asset %s not found in checksums.txt", assetName)
+}
+
+// downloadLatestReleaseBinary resolves the latest release tag from the GitHub
+// API and downloads the Linux binary for the given arch.
+func downloadLatestReleaseBinary(arch, destPath string) error {
+	tag, err := resolveLatestReleaseTag()
+	if err != nil {
+		return err
+	}
+	return downloadReleaseBinary(tag, arch, destPath)
+}
+
+func resolveLatestReleaseTag() (string, error) {
+	resp, err := httpClient.Get("https://api.github.com/repos/fullsend-ai/fullsend/releases/latest") //nolint:gosec
+	if err != nil {
+		return "", fmt.Errorf("fetching latest release: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&release); err != nil {
+		return "", fmt.Errorf("parsing release JSON: %w", err)
+	}
+	if release.TagName == "" {
+		return "", fmt.Errorf("empty tag_name in latest release")
+	}
+	return release.TagName, nil
+}
+
+const maxBinarySize = 500 * 1024 * 1024 // 500 MB — reasonable upper bound for a Go binary
+
+// extractFullsendFromTarGz reads a tar.gz stream and extracts the "fullsend"
+// binary to destPath.
+func extractFullsendFromTarGz(r io.Reader, destPath string) error {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return fmt.Errorf("fullsend binary not found in archive")
+		}
+		if err != nil {
+			return fmt.Errorf("reading tar: %w", err)
+		}
+		clean := filepath.Clean(hdr.Name)
+		if strings.Contains(clean, "..") || filepath.IsAbs(clean) {
+			continue
+		}
+		if filepath.Base(clean) == "fullsend" && hdr.Typeflag == tar.TypeReg {
+			f, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+			if err != nil {
+				return fmt.Errorf("creating %s: %w", destPath, err)
+			}
+			n, copyErr := io.Copy(f, io.LimitReader(tr, maxBinarySize+1))
+			if copyErr != nil {
+				f.Close()
+				return fmt.Errorf("extracting fullsend: %w", copyErr)
+			}
+			if n > maxBinarySize {
+				f.Close()
+				os.Remove(destPath)
+				return fmt.Errorf("binary exceeds maximum size (%d bytes)", maxBinarySize)
+			}
+			return f.Close()
+		}
+	}
+}
+
+// crossCompileFullsend builds a Linux fullsend binary for the given arch
+// and writes it to destPath. Requires the Go toolchain.
+func crossCompileFullsend(arch, destPath string) error {
+	goPath, lookErr := exec.LookPath("go")
+	if lookErr != nil {
+		return fmt.Errorf("Go toolchain not found — install Go or use a released version of fullsend: %w", lookErr)
+	}
+
+	// Find the module root so `go build ./cmd/fullsend/` resolves correctly
+	// regardless of the caller's working directory.
+	modRootCmd := exec.Command(goPath, "env", "GOMOD")
+	modOutput, err := modRootCmd.Output()
+	if err != nil {
+		return fmt.Errorf("finding module root: %w", err)
+	}
+	modPath := strings.TrimSpace(string(modOutput))
+	if modPath == "" || modPath == os.DevNull {
+		return fmt.Errorf("not in a Go module — run from the fullsend source tree or use a released version")
+	}
+	modRoot := filepath.Dir(modPath)
+
+	buildCmd := exec.Command(goPath, "build",
+		"-ldflags", fmt.Sprintf("-X github.com/fullsend-ai/fullsend/internal/cli.version=%s-crosscompiled", version),
+		"-o", destPath,
+		"./cmd/fullsend/",
+	)
+	buildCmd.Dir = modRoot
+	buildCmd.Env = append(os.Environ(), "GOTOOLCHAIN=auto", "GOOS=linux", "GOARCH="+arch, "CGO_ENABLED=0")
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		return fmt.Errorf("cross-compiling for linux/%s: %w", arch, err)
+	}
+	return nil
 }

@@ -216,6 +216,8 @@ Kubernetes has KEPs (enhancement proposals). Rust has RFCs. Fedora has Changes. 
 
 The difference for us: the process needs to be machine-readable enough for agents to evaluate, and fast enough that it doesn't bottleneck agent-speed development for lower tiers.
 
+[Forge-sdlc/forge](../landscape.md#forge-sdlcforge) is useful prior art for the *shape* of high-tier intent artifacts: a feature ticket is progressively elaborated into PRD, spec, epics, and tasks, with humans able to ask questions at each gate without approving or rejecting. The part to avoid is treating Jira labels/comments as the authority mechanism. For fullsend, the artifact progression is interesting; the authorization still needs to come from repo-visible mechanisms with stronger ownership and approval semantics.
+
 ## Adversarial analysis
 
 Any intent system needs to survive attack:

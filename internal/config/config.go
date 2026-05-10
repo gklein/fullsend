@@ -41,17 +41,18 @@ type RepoConfig struct {
 
 // OrgConfig is the top-level configuration for a fullsend organization.
 type OrgConfig struct {
-	Version   string                `yaml:"version"`
-	Dispatch  DispatchConfig        `yaml:"dispatch"`
-	Inference InferenceConfig       `yaml:"inference,omitempty"`
-	Defaults  RepoDefaults          `yaml:"defaults"`
-	Agents    []AgentEntry          `yaml:"agents"`
-	Repos     map[string]RepoConfig `yaml:"repos"`
+	Version    string                `yaml:"version"`
+	KillSwitch bool                  `yaml:"kill_switch,omitempty"`
+	Dispatch   DispatchConfig        `yaml:"dispatch"`
+	Inference  InferenceConfig       `yaml:"inference,omitempty"`
+	Defaults   RepoDefaults          `yaml:"defaults"`
+	Agents     []AgentEntry          `yaml:"agents"`
+	Repos      map[string]RepoConfig `yaml:"repos"`
 }
 
 // ValidRoles returns the set of recognized agent roles.
 func ValidRoles() []string {
-	return []string{"fullsend", "triage", "coder", "review"}
+	return []string{"fullsend", "triage", "coder", "review", "fix", "prioritize"}
 }
 
 // ValidProviders returns the set of recognized inference providers.
@@ -59,11 +60,11 @@ func ValidProviders() []string {
 	return []string{"vertex"}
 }
 
-// DefaultAgentRoles returns the standard set of agent roles used
-// when no custom roles are specified. This is the same as ValidRoles
-// but exists as a separate function for semantic clarity.
+// DefaultAgentRoles returns the standard set of agent roles installed
+// when no custom roles are specified. This excludes optional roles
+// like "prioritize" that must be explicitly requested via --agents.
 func DefaultAgentRoles() []string {
-	return ValidRoles()
+	return []string{"fullsend", "triage", "coder", "review", "fix"}
 }
 
 // NewOrgConfig creates a new OrgConfig with sensible defaults.

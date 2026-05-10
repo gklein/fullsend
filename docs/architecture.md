@@ -86,7 +86,7 @@ The harness draws its configuration from the adopting organization's **`.fullsen
 
 **Open questions:**
 
-- Does the harness live inside the sandbox (configuring the agent from within its isolation boundary) or outside it (preparing the environment before the agent starts)?
+- Does the harness live inside the sandbox (configuring the agent from within its isolation boundary) or outside it (preparing the environment before the agent starts)? (Tool permissions are injected as a host-managed `.claude/settings.json` — configured outside, enforced inside; see [ADR 0027](ADRs/0027-allowed-and-disallowed-tools-for-agents.md). General harness placement remains open.)
 - How is codebase context assembled? (See [codebase-context.md](problems/codebase-context.md).)
 - How do we version and test harness configurations? (See [testing-agents.md](problems/testing-agents.md).)
 
@@ -99,7 +99,7 @@ This is the thing that actually reasons and acts. Everything else in this docume
 **Open questions:**
 
 - Is the runtime a single model call, a loop (plan-act-observe), or something more structured?
-- How does the runtime interact with the sandbox boundaries — does it know what it can't do, or does it just hit walls?
+- How does the runtime interact with the sandbox boundaries — does it know what it can't do, or does it just hit walls? (For tool access: both — prose instructions inform the runtime, and `permissions.deny` hard-blocks execution; see [ADR 0027](ADRs/0027-allowed-and-disallowed-tools-for-agents.md). Broader sandbox interaction remains open.)
 - How do we swap model providers or versions without changing the rest of the stack?
 - What is the interface between the harness and the runtime? (A system prompt? A configuration file? An API contract?)
 
@@ -270,6 +270,10 @@ ADR 0002: [Building block 12](ADRs/0002-initial-fullsend-design.md#12-coordinato
 
 Traceability layer across issue, **Triage**, **Code**, **Review**, checks, and merge for incident response and correlation across automation runs.
 ADR 0002: [Building block 13](ADRs/0002-initial-fullsend-design.md#13-observability).
+
+### 14. retro agent runtime
+
+Retrospective analyst — examines completed or in-progress agent workflows, identifies improvement opportunities, and files proposals as GitHub issues. Runs automatically on PR close (merged or rejected) and on-demand via `/retro` command. Analyzes the full workflow graph (triage, code, review, fix agent interactions and human interventions) and posts a summary comment on the originating PR/issue linking to all filed proposals.
 
 ## Configuration layering
 
@@ -522,7 +526,7 @@ GitHub event ──► SHIM WORKFLOW (fullsend.yml in enrolled repo)
                  ║ │ │ OPENSHELL SANDBOX                                     │ │ ║
                  ║ │ │                                                       │ │ ║
                  ║ │ │ Created with --from image, --policy code.yaml.        │ │ ║
-                 ║ │ │ Bootstrapped via SCP/SSH:                             │ │ ║
+                 ║ │ │ Bootstrapped via openshell upload/exec:               │ │ ║
                  ║ │ │   agent def    → /tmp/claude-config/agents/           │ │ ║
                  ║ │ │   skills       → /tmp/claude-config/skills/           │ │ ║
                  ║ │ │   .env, host files (GCP creds), security hooks        │ │ ║

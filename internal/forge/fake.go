@@ -63,6 +63,20 @@ type ReviewRecord struct {
 	CommitSHA   string
 }
 
+// DismissedReviewRecord records a review dismissal call.
+type DismissedReviewRecord struct {
+	Owner, Repo string
+	Number      int
+	ReviewID    int
+	Message     string
+}
+
+// CommitFilesRecord records a CommitFiles call.
+type CommitFilesRecord struct {
+	Owner, Repo, Message string
+	Files                []TreeFile
+}
+
 // FakeClient is a thread-safe test double for forge.Client.
 // Pre-populate its fields to control return values, and inspect
 // recorder slices after the test to verify which calls were made.
@@ -93,6 +107,9 @@ type FakeClient struct {
 	// Issue comments for ListIssueComments / UpdateIssueComment.
 	IssueComments map[string][]IssueComment // key: "owner/repo/number"
 
+	// CommitFilesChanged controls the return value of CommitFiles (default true).
+	CommitFilesChanged *bool
+
 	// Pull request head SHA for GetPullRequestHeadSHA.
 	PullRequestHeadSHA string
 
@@ -113,6 +130,8 @@ type FakeClient struct {
 	UpdatedComments   []UpdatedCommentRecord
 	MinimizedComments []MinimizedCommentRecord
 	CreatedReviews    []ReviewRecord
+	DismissedReviews  []DismissedReviewRecord
+	CommittedFiles    []CommitFilesRecord
 
 	// internal counters
 	proposalCounter int
@@ -322,6 +341,32 @@ func (f *FakeClient) DeleteFile(_ context.Context, owner, repo, path, message st
 		Message: message,
 	})
 	return nil
+}
+
+func (f *FakeClient) CommitFiles(_ context.Context, owner, repo, message string, files []TreeFile) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("CommitFiles"); e != nil {
+		return false, e
+	}
+
+	f.CommittedFiles = append(f.CommittedFiles, CommitFilesRecord{
+		Owner:   owner,
+		Repo:    repo,
+		Message: message,
+		Files:   files,
+	})
+
+	if f.FileContents == nil {
+		f.FileContents = make(map[string][]byte)
+	}
+	for _, file := range files {
+		f.FileContents[owner+"/"+repo+"/"+file.Path] = file.Content
+	}
+
+	changed := f.CommitFilesChanged == nil || *f.CommitFilesChanged
+	return changed, nil
 }
 
 func (f *FakeClient) CreateBranch(_ context.Context, owner, repo, branchName string) error {
@@ -681,6 +726,31 @@ func (f *FakeClient) ListPullRequestReviews(_ context.Context, owner, repo strin
 		}
 	}
 	return nil, nil
+}
+
+func (f *FakeClient) DismissPullRequestReview(_ context.Context, owner, repo string, number, reviewID int, message string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e := f.err("DismissPullRequestReview"); e != nil {
+		return e
+	}
+	f.DismissedReviews = append(f.DismissedReviews, DismissedReviewRecord{
+		Owner:    owner,
+		Repo:     repo,
+		Number:   number,
+		ReviewID: reviewID,
+		Message:  message,
+	})
+	key := fmt.Sprintf("%s/%s/%d", owner, repo, number)
+	if f.PRReviews != nil {
+		for i, r := range f.PRReviews[key] {
+			if r.ID == reviewID {
+				f.PRReviews[key][i].State = "DISMISSED"
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func (f *FakeClient) MergeChangeProposal(_ context.Context, _, _ string, _ int) error {

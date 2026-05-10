@@ -73,6 +73,8 @@ Agents are often discussed as if they run on a developer workstation: fast local
 
 - **Compute held open for human latency** — A long-lived pod that **blocks on PR approval, architecture sign-off, or escalation** consumes cluster quota and cost while idle. That misaligns with typical “always-on service” defaults. Better fits include **event-driven** scheduling (wake on comment or approval), aggressive scale-to-zero, or separating **planning** from **execution** so capacity is not reserved across human response times; see [human-factors.md](human-factors.md) and [autonomy-spectrum.md](autonomy-spectrum.md).
 
+[Forge-sdlc/forge](../landscape.md#forge-sdlcforge) demonstrates one practical pause/resume pattern: LangGraph checkpoints workflow state, then later Jira or GitHub webhooks resume the graph while implementation work happens in ephemeral Podman containers. That separation is directionally useful for fullsend, even though Forge's sandbox is a productivity boundary rather than the stricter credential and egress isolation boundary fullsend needs.
+
 ## Ambient Code Platform (ACP)
 
 [Ambient Code Platform](https://github.com/ambient-code/platform) is a Kubernetes-native stack (API, operator, runner pods) for agentic sessions—aligned in spirit with “ambient,” CR-driven agent workloads on a cluster.
@@ -92,6 +94,7 @@ ACP may still be useful for **narrow experiments** where those constraints are a
 - **Thin orchestration layer** — We build a small layer that triggers agents, gathers results, and posts status checks; the actual compute is 3rd party or internal. This keeps coordination logic in our control while deferring platform choice.
 - **Phase by phase** — Start with a 3rd party or internal option for early experiments (e.g. review agents only); decide later whether to replace or extend with custom infrastructure as autonomy expands.
 - **By agent type** — Triage and review agents might run on one platform (e.g. event-driven, short-lived); code agents that need more tooling and longer runs might need a different environment.
+- **Layered skill resolution** — Forge's `skills/default` plus `skills/{project}` fallback is a simple precedent for repo or project-specific harness instructions without duplicating every default. Fullsend's version would need clearer ownership, provenance, and policy controls, but the resolver shape is worth borrowing.
 
 ## Kubernetes SIG Agent Sandbox
 
@@ -116,7 +119,7 @@ Many fullsend scenarios skew toward **ephemeral, task-scoped** execution (triage
 ## Open questions
 
 - What is the right level of isolation per agent (process, container, microVM, separate cluster)?
-- How do we provide agents with “resources to do their work” (clone, tools, APIs) without over-privileging them or creating a single high-value target? (Credential access decided in [ADR 0017](../ADRs/0017-credential-isolation-for-sandboxed-agents.md); other resource access remains open.)
+- How do we provide agents with “resources to do their work” (clone, tools, APIs) without over-privileging them or creating a single high-value target? (Credential access decided in [ADR 0017](../ADRs/0017-credential-isolation-for-sandboxed-agents.md); tool access restrictions decided in [ADR 0027](../ADRs/0027-allowed-and-disallowed-tools-for-agents.md); other resource access remains open.)
 - Do we need a dedicated “agent runner” image or environment with a known, auditable tool set?
 - How do we compare 3rd party vs internal vs build-our-own on concrete criteria: cost, time to first agent, compliance, and alignment with our security and coordination model?
 - Who in the org would own and operate agent infrastructure, and how does that align with existing platform or CI ownership?

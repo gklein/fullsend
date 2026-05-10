@@ -99,7 +99,8 @@ filesystem walk order, then `CODEOWNERS` last (CODEOWNERS failure is non-fatal).
 ### 3.14 `scripts/reconcile-repos.sh`
 
 - Shell script that reconciles enrollment shims in target repos. Called by
-  `repo-maintenance.yml`. Uses `gh` CLI and `yq` to read `config.yaml`.
+  `repo-maintenance.yml`. Uses `gh` CLI, `yq` to read `config.yaml`, and
+  `jq` to construct Git API request bodies.
   For enabled repos: creates branches, writes shim workflows, and opens
   enrollment PRs. For disabled repos: creates branches, deletes shim
   workflows (via GitHub Contents API DELETE with blob SHA), and opens

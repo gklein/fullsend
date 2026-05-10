@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { clearSession, loadToken, saveToken } from "./tokenStore";
+import {
+  clearSession,
+  loadGithubAppSlug,
+  loadToken,
+  persistGithubAppSlugFromOAuth,
+  saveToken,
+} from "./tokenStore";
 
 beforeEach(() => {
   localStorage.clear();
@@ -60,6 +66,13 @@ describe("tokenStore", () => {
     });
     clearSession();
     expect(loadToken()).toBeNull();
+  });
+
+  it("clearSession removes persisted GitHub App slug", () => {
+    persistGithubAppSlugFromOAuth("my-app-slug");
+    expect(loadGithubAppSlug()).toBe("my-app-slug");
+    clearSession();
+    expect(loadGithubAppSlug()).toBeNull();
   });
 
   it("loadToken returns null for invalid JSON", () => {

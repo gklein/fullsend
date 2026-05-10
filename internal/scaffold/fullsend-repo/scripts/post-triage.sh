@@ -100,7 +100,7 @@ case "${ACTION}" in
     echo "Applying label and closing..."
     remove_label "blocked"
     add_label "duplicate"
-    gh issue close "${ISSUE_NUMBER}" --repo "${REPO}" --reason "not planned"
+    gh issue close "${ISSUE_NUMBER}" --repo "${REPO}" --reason "duplicate"
     ;;
 
   blocked)
@@ -144,6 +144,10 @@ case "${ACTION}" in
 
     echo "Posting triage summary..."
     printf '%s' "${COMMENT}" | fullsend post-comment --repo "${REPO}" --number "${ISSUE_NUMBER}" --marker "<!-- fullsend:triage-agent -->" --token "${GH_TOKEN}" --result -
+
+    echo "Removing stale labels..."
+    remove_label "blocked"
+    remove_label "needs-info"
 
     # Only bugs get the ready-to-code label (which triggers the code agent).
     # Non-bug sufficient results (enhancement, performance, documentation, etc.)

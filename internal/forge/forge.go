@@ -83,6 +83,15 @@ type Installation struct {
 	Permissions map[string]string
 }
 
+// TreeFile represents a file to be committed via the Git Trees API.
+// Mode controls file permissions: "100644" for regular files,
+// "100755" for executable files (e.g., shell scripts).
+type TreeFile struct {
+	Path    string
+	Content []byte
+	Mode    string // "100644" or "100755"
+}
+
 // Client abstracts all git forge operations.
 // Implementations exist for GitHub (and eventually GitLab, Forgejo).
 type Client interface {
@@ -113,6 +122,12 @@ type Client interface {
 
 	GetFileContent(ctx context.Context, owner, repo, path string) ([]byte, error)
 	DeleteFile(ctx context.Context, owner, repo, path, message string) error
+
+	// CommitFiles atomically commits multiple files to the repository's
+	// default branch in a single commit. It is idempotent: if all files
+	// already have the expected content and mode, no commit is created
+	// and it returns (false, nil).
+	CommitFiles(ctx context.Context, owner, repo, message string, files []TreeFile) (committed bool, err error)
 
 	// Branch operations
 	CreateBranch(ctx context.Context, owner, repo, branchName string) error
@@ -169,6 +184,7 @@ type Client interface {
 	// GitHub rejects the request if the commit is not the PR's current HEAD.
 	CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body, commitSHA string) error
 	ListPullRequestReviews(ctx context.Context, owner, repo string, number int) ([]PullRequestReview, error)
+	DismissPullRequestReview(ctx context.Context, owner, repo string, number, reviewID int, message string) error
 
 	// Change proposal merge
 	MergeChangeProposal(ctx context.Context, owner, repo string, number int) error
