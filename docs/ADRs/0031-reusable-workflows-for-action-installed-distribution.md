@@ -20,7 +20,7 @@ Proposed
 
 ## Context
 
-`fullsend admin install` copies ~60 files from the Go binary's embedded scaffold
+`fullsend admin install` copies ~80 files from the Go binary's embedded scaffold
 (`internal/scaffold/fullsend-repo/`) into each org's `.fullsend` repo. This
 includes agent workflows (78–305 lines each), four composite actions (`fullsend`,
 `mint-token`, `validate-enrollment`, `setup-gcp`), setup scripts, and a
@@ -50,9 +50,9 @@ duplicated in each org's workflow files.
 ### Option C: Reusable workflows + published composite actions
 
 Publish reusable workflows (`workflow_call`) and composite actions from
-`fullsend-ai/fullsend`. Agent workflows in `.fullsend` shrink to ~20 line thin
+`fullsend-ai/fullsend`. Agent workflows in `.fullsend` shrink to ~40 line thin
 callers that delegate infrastructure logic upstream via `workflow_call` with
-`secrets: inherit`. Org-specific content (agents, harness, env, policies,
+explicit secret passthrough. Org-specific content (agents, harness, env, policies,
 scripts) stays local.
 
 ## Decision
@@ -65,7 +65,9 @@ actions (`fullsend-ai/fullsend@v1`, plus `mint-token`, `validate-enrollment`,
 Thin callers in `.fullsend` use `workflow_call` to invoke upstream reusable
 workflows. Since `workflow_call` runs the callee in the caller's repo context,
 the reusable workflow has access to `.fullsend` secrets and checks out the
-config repo directly. Secrets pass via `secrets: inherit`. Org-specific `vars.*`
+config repo directly. Secrets pass via explicit `secrets:` declarations — each
+thin caller lists only the secrets the reusable workflow needs (GCP credentials),
+following least-privilege over blanket `secrets: inherit`. Org-specific `vars.*`
 values (mint URL, GCP region, auth mode) are automatically available in the
 reusable workflow from the caller's context, but thin callers pass them as
 explicit `inputs.*` to make the interface contract self-documenting, ensure
@@ -84,7 +86,7 @@ markers, so stage-based dispatch
 ([ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md))
 continues to work without modification.
 
-The dispatch chain uses 1 level of `workflow_call` nesting (limit is 10):
+The dispatch chain uses 1 level of `workflow_call` nesting (limit is 4):
 
 ```
 shim ──workflow_dispatch──> .fullsend/dispatch.yml
@@ -111,15 +113,17 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
 - Stage-based dispatch ([ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md)),
   shim workflows, and org-specific content (agents, harness, policies, scripts)
   are unchanged.
-- **Trust boundary shift:** `secrets: inherit` passes all caller secrets to
-  reusable workflow code hosted in `fullsend-ai/fullsend` (a public repo).
-  Under the scaffold-copy model, secrets are consumed by code in the org's
-  own repo. Under the reusable-workflow model, secrets flow to upstream code.
-  SHA pinning (not just tag pinning) gives orgs full control over which
-  upstream code runs with their secrets. This aligns with the project's
-  threat model priority on external injection — a compromised upstream ref
-  could affect all downstream orgs simultaneously, making SHA pinning the
-  recommended default for production installations.
+- **Trust boundary shift:** Thin callers pass GCP credential secrets to
+  reusable workflow code hosted in `fullsend-ai/fullsend` (a public repo)
+  via explicit `secrets:` declarations (not `secrets: inherit`, limiting
+  exposure to only the secrets the reusable workflow declares). Under the
+  scaffold-copy model, secrets are consumed by code in the org's own repo.
+  Under the reusable-workflow model, secrets flow to upstream code. SHA
+  pinning (not just tag pinning) gives orgs full control over which upstream
+  code runs with their secrets. This aligns with the project's threat model
+  priority on external injection — a compromised upstream ref could affect
+  all downstream orgs simultaneously, making SHA pinning the recommended
+  default for production installations.
 - **Upstream availability:** `fullsend-ai/fullsend` becomes a runtime
   dependency for all downstream orgs. If the repo is unavailable or a pinned
   ref is deleted, downstream workflow runs fail. Scaffold copies are immune
@@ -129,18 +133,17 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
   Developers must inspect both the thin caller and the upstream workflow to
   diagnose failures. GitHub's workflow run UI shows reusable workflow steps
   inline, which partially mitigates this.
-- **GitHub-specific mechanism:** `workflow_call` and `secrets: inherit` are
+- **GitHub-specific mechanism:** `workflow_call` and `secrets:` passthrough are
   GitHub Actions primitives with no direct equivalent in other CI systems.
   Multi-forge support ([ADR 0028](0028-gitlab-support.md)) will need its own
   distribution mechanism (e.g., GitLab CI/CD Components or `include:`)
   independent of this ADR.
 - **Scaffold output changes:** `fullsend admin install` will emit thin callers
-  (~20 lines each) instead of full agent workflows (78–305 lines each). This
+  (~40 lines each) instead of full agent workflows (78–305 lines each). This
   is a user-visible change — orgs running `admin install` after this change
   ships will see substantially different workflow files in `.fullsend`.
-- **Token generation is transitional:** The initial reusable workflows use
-  PEM-based token generation via `actions/create-github-app-token` with
-  secrets passed through `secrets: inherit`. The token mint migration
-  ([PR #655](https://github.com/fullsend-ai/fullsend/pull/655)) will replace
-  this with OIDC-based minting, changing the internal token generation
-  mechanism within the reusable workflows but not the thin caller interface.
+- **Token generation uses OIDC:** Reusable workflows use the `mint-token`
+  composite action for OIDC-based token minting
+  ([ADR 0029](0029-central-token-mint-secretless-fullsend.md)). Each
+  reusable workflow requests a scoped token for its role (triage, coder,
+  review, fix) — no PEMs or App secrets in the calling repo.
