@@ -1,5 +1,5 @@
 ---
-title: "30. Reusable workflows for action-installed distribution"
+title: "31. Reusable workflows for action-installed distribution"
 status: Proposed
 relates_to:
   - agent-infrastructure
@@ -10,7 +10,7 @@ topics:
   - composite-action
 ---
 
-# 30. Reusable workflows for action-installed distribution
+# 31. Reusable workflows for action-installed distribution
 
 Date: 2026-05-06
 
