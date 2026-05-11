@@ -79,22 +79,28 @@ func TestRunCommand_HasTargetRepoFlag(t *testing.T) {
 }
 
 func TestBuildClaudeCommand_Basic(t *testing.T) {
-	cmd := buildClaudeCommand("hello-world", "", "/tmp/workspace/repo")
+	cmd := buildClaudeCommand("hello-world", "", "/tmp/workspace/repo", nil)
 	assert.Contains(t, cmd, "cd /tmp/workspace/repo")
 	assert.Contains(t, cmd, "--agent 'hello-world'")
 	assert.NotContains(t, cmd, "--model")
+	assert.NotContains(t, cmd, "--plugin-dir")
 }
 
 func TestBuildClaudeCommand_WithModel(t *testing.T) {
-	cmd := buildClaudeCommand("hello-world", "sonnet", "/tmp/workspace/repo")
+	cmd := buildClaudeCommand("hello-world", "sonnet", "/tmp/workspace/repo", nil)
 	assert.Contains(t, cmd, "--model 'sonnet'")
 	assert.Contains(t, cmd, "--agent 'hello-world'")
 }
 
 func TestBuildClaudeCommand_EscapesQuotes(t *testing.T) {
-	cmd := buildClaudeCommand("test'name", "", "/tmp/workspace/repo")
+	cmd := buildClaudeCommand("test'name", "", "/tmp/workspace/repo", nil)
 	assert.NotContains(t, cmd, "'test'name'")
 	assert.Contains(t, cmd, "'test'\\''name'")
+}
+
+func TestBuildClaudeCommand_WithPluginDirs(t *testing.T) {
+	cmd := buildClaudeCommand("agent", "", "/tmp/workspace/repo", []string{"/tmp/claude-config/plugins/gopls-lsp"})
+	assert.Contains(t, cmd, "--plugin-dir '/tmp/claude-config/plugins/gopls-lsp'")
 }
 
 func TestBuildScanContextCommand_SourcesEnv(t *testing.T) {
