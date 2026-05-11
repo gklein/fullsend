@@ -707,22 +707,22 @@ func isInternalIP(ip net.IP) bool {
     if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
         return true
     }
-    
+
     // Additional ranges not covered by IsPrivate()
     _, currentNet, _ := net.ParseCIDR("0.0.0.0/8")       // Current network
     _, cgnNet, _ := net.ParseCIDR("100.64.0.0/10")       // Carrier-Grade NAT (RFC 6598)
     _, benchNet, _ := net.ParseCIDR("198.18.0.0/15")     // Benchmark testing (RFC 2544)
-    
+
     if currentNet.Contains(ip) || cgnNet.Contains(ip) || benchNet.Contains(ip) {
         return true
     }
-    
+
     // Block IPv4-mapped IPv6 addresses (::ffff:a.b.c.d) - these can bypass IPv4-only checks
     if len(ip) == net.IPv6len && ip.To4() != nil {
         // This is an IPv4-mapped IPv6 address - check the embedded IPv4 address
         return isInternalIP(ip.To4())
     }
-    
+
     return false
 }
 
