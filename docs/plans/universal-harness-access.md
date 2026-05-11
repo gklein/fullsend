@@ -887,26 +887,24 @@ func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, a
             return "", fmt.Errorf("remote resource %s must include integrity hash (#sha256=...)", ref)
         }
 
-        // Check cache first
-        if hasHash {
-            content, _, err := fetch.CacheGet(workspaceRoot, expectedHash)
-            if err != nil {
-                return "", fmt.Errorf("reading cache for %s: %w", cleanURL, err)
-            }
-            if content != nil {
-                return filepath.Join(fetch.CachePath(workspaceRoot, expectedHash), "content"), nil
-            }
+        // Check cache first (hasHash is guaranteed to be true here)
+        content, _, err := fetch.CacheGet(workspaceRoot, expectedHash)
+        if err != nil {
+            return "", fmt.Errorf("reading cache for %s: %w", cleanURL, err)
+        }
+        if content != nil {
+            return filepath.Join(fetch.CachePath(workspaceRoot, expectedHash), "content"), nil
         }
 
         // Fetch from URL
-        content, err := fetch.FetchURL(ctx, cleanURL, policy)
+        content, err = fetch.FetchURL(ctx, cleanURL, policy)
         if err != nil {
             return "", fmt.Errorf("fetching %s: %w", cleanURL, err)
         }
 
-        // Verify integrity hash
+        // Verify integrity hash (hasHash is guaranteed to be true here)
         actualHash := fetch.ComputeSHA256(content)
-        if hasHash && actualHash != expectedHash {
+        if actualHash != expectedHash {
             return "", fmt.Errorf("integrity hash mismatch for %s: expected %s, got %s", cleanURL, expectedHash, actualHash)
         }
 
