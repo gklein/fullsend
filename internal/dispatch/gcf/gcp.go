@@ -33,6 +33,11 @@ type OIDCProviderConfig struct {
 	AllowedAudiences   []string
 }
 
+// WIFProviderInfo holds metadata about a WIF OIDC provider.
+type WIFProviderInfo struct {
+	AttributeCondition string
+}
+
 // FunctionInfo holds metadata about a deployed Cloud Function.
 type FunctionInfo struct {
 	Name    string
@@ -59,6 +64,8 @@ type GCFClient interface {
 	// WIF operations
 	CreateWIFPool(ctx context.Context, projectNumber, poolID, displayName string) error
 	CreateWIFProvider(ctx context.Context, projectNumber, poolID, providerID string, cfg OIDCProviderConfig) error
+	GetWIFProvider(ctx context.Context, projectNumber, poolID, providerID string) (*WIFProviderInfo, error)
+	UpdateWIFProvider(ctx context.Context, projectNumber, poolID, providerID string, cfg OIDCProviderConfig) error
 
 	// Secret Manager
 	GetSecret(ctx context.Context, projectID, secretID string) error
@@ -196,7 +203,7 @@ func (c *LiveGCFClient) CreateWIFProvider(ctx context.Context, projectNumber, po
 
 	if resp.StatusCode == http.StatusConflict {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		return c.verifyWIFProviderCondition(ctx, projectNumber, poolID, providerID, cfg.AttributeCondition)
+		return c.UpdateWIFProvider(ctx, projectNumber, poolID, providerID, cfg)
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -209,33 +216,62 @@ func (c *LiveGCFClient) CreateWIFProvider(ctx context.Context, projectNumber, po
 	return nil
 }
 
-func (c *LiveGCFClient) verifyWIFProviderCondition(ctx context.Context, projectNumber, poolID, providerID, expectedCondition string) error {
+// GetWIFProvider reads an existing WIF OIDC provider's configuration.
+func (c *LiveGCFClient) GetWIFProvider(ctx context.Context, projectNumber, poolID, providerID string) (*WIFProviderInfo, error) {
 	getURL := fmt.Sprintf("https://iam.googleapis.com/v1/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s",
 		url.PathEscape(projectNumber), url.PathEscape(poolID), url.PathEscape(providerID))
 
 	resp, err := c.Client.DoRequest(ctx, http.MethodGet, getURL, "")
 	if err != nil {
-		return fmt.Errorf("verifying WIF provider: %w", err)
+		return nil, fmt.Errorf("getting WIF provider: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return fmt.Errorf("getting WIF provider returned %d: %s", resp.StatusCode, gcp.ExtractErrorMessage(body))
+		return nil, fmt.Errorf("getting WIF provider returned %d: %s", resp.StatusCode, gcp.ExtractErrorMessage(body))
 	}
 
 	var provider struct {
 		AttributeCondition string `json:"attributeCondition"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&provider); err != nil {
-		return fmt.Errorf("decoding WIF provider: %w", err)
+		return nil, fmt.Errorf("decoding WIF provider: %w", err)
 	}
 
-	if provider.AttributeCondition != expectedCondition {
-		return fmt.Errorf("existing WIF provider has attributeCondition %q, expected %q — delete and re-create the provider, or update it manually",
-			provider.AttributeCondition, expectedCondition)
+	return &WIFProviderInfo{AttributeCondition: provider.AttributeCondition}, nil
+}
+
+// UpdateWIFProvider patches an existing WIF OIDC provider's attribute condition.
+func (c *LiveGCFClient) UpdateWIFProvider(ctx context.Context, projectNumber, poolID, providerID string, cfg OIDCProviderConfig) error {
+	patchURL := fmt.Sprintf("https://iam.googleapis.com/v1/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s?updateMask=attributeCondition",
+		url.PathEscape(projectNumber), url.PathEscape(poolID), url.PathEscape(providerID))
+
+	payloadObj := map[string]interface{}{
+		"attributeCondition": cfg.AttributeCondition,
+	}
+	payloadBytes, err := json.Marshal(payloadObj)
+	if err != nil {
+		return fmt.Errorf("marshaling WIF provider update: %w", err)
 	}
 
+	resp, err := c.Client.DoRequest(ctx, http.MethodPatch, patchURL, string(payloadBytes))
+	if err != nil {
+		return fmt.Errorf("updating WIF provider: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return fmt.Errorf("unexpected status %d updating WIF provider: %s", resp.StatusCode, gcp.ExtractErrorMessage(body))
+	}
+
+	if err := c.waitForIAMOperation(ctx, resp.Body); err != nil {
+		return fmt.Errorf("waiting for WIF provider update: %w", err)
+	}
 	return nil
 }
 

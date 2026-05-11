@@ -59,6 +59,9 @@ type fakeGCFClient struct {
 
 	// Captured WIF provider config for assertion.
 	lastWIFProviderConfig OIDCProviderConfig
+
+	// WIF provider state for GetWIFProvider.
+	wifProvider *WIFProviderInfo
 }
 
 func newFakeGCFClient() *fakeGCFClient {
@@ -82,6 +85,17 @@ func (f *fakeGCFClient) CreateWIFPool(_ context.Context, _, _, _ string) error {
 func (f *fakeGCFClient) CreateWIFProvider(_ context.Context, _, _, _ string, cfg OIDCProviderConfig) error {
 	f.lastWIFProviderConfig = cfg
 	return f.record("CreateWIFProvider")
+}
+func (f *fakeGCFClient) GetWIFProvider(_ context.Context, _, _, _ string) (*WIFProviderInfo, error) {
+	f.calls = append(f.calls, "GetWIFProvider")
+	if err := f.errs["GetWIFProvider"]; err != nil {
+		return nil, err
+	}
+	return f.wifProvider, nil
+}
+func (f *fakeGCFClient) UpdateWIFProvider(_ context.Context, _, _, _ string, cfg OIDCProviderConfig) error {
+	f.lastWIFProviderConfig = cfg
+	return f.record("UpdateWIFProvider")
 }
 func (f *fakeGCFClient) GetSecret(_ context.Context, _, _ string) error {
 	f.calls = append(f.calls, "GetSecret")
@@ -214,8 +228,8 @@ func TestProvisioner_CustomConfig(t *testing.T) {
 }
 
 func TestSecretID(t *testing.T) {
-	assert.Equal(t, "fullsend-coder-app-pem", secretID("coder"))
-	assert.Equal(t, "fullsend-triage-app-pem", secretID("triage"))
+	assert.Equal(t, "fullsend-test-org--coder-app-pem", secretID("test-org", "coder"))
+	assert.Equal(t, "fullsend-acme--triage-app-pem", secretID("acme", "triage"))
 }
 
 // --- StoreAgentPEM tests ---
@@ -225,7 +239,7 @@ func TestStoreAgentPEM_CreatesNewSecret(t *testing.T) {
 	fake.errs["GetSecret"] = ErrSecretNotFound
 
 	p := newTestProvisioner(Config{ProjectID: "my-project"}, fake)
-	err := p.StoreAgentPEM(context.Background(), "coder", []byte("pem-data"))
+	err := p.StoreAgentPEM(context.Background(), "test-org", "coder", []byte("pem-data"))
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{
@@ -240,7 +254,7 @@ func TestStoreAgentPEM_ExistingSecretSkipsCreate(t *testing.T) {
 	fake := newFakeGCFClient()
 
 	p := newTestProvisioner(Config{ProjectID: "my-project"}, fake)
-	err := p.StoreAgentPEM(context.Background(), "coder", []byte("pem-data"))
+	err := p.StoreAgentPEM(context.Background(), "test-org", "coder", []byte("pem-data"))
 	require.NoError(t, err)
 
 	assert.Contains(t, fake.calls, "GetSecret")
@@ -251,7 +265,7 @@ func TestStoreAgentPEM_ExistingSecretSkipsCreate(t *testing.T) {
 
 func TestStoreAgentPEM_MissingProjectID(t *testing.T) {
 	p := newTestProvisioner(Config{}, newFakeGCFClient())
-	err := p.StoreAgentPEM(context.Background(), "coder", []byte("pem"))
+	err := p.StoreAgentPEM(context.Background(), "test-org", "coder", []byte("pem"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GCP project ID is required")
 }
@@ -259,12 +273,11 @@ func TestStoreAgentPEM_MissingProjectID(t *testing.T) {
 func TestStoreAgentPEM_InvalidRole(t *testing.T) {
 	p := newTestProvisioner(Config{ProjectID: "my-project"}, newFakeGCFClient())
 	for _, role := range []string{"CODER", "co der", "../escape", "role;drop"} {
-		err := p.StoreAgentPEM(context.Background(), role, []byte("pem"))
+		err := p.StoreAgentPEM(context.Background(), "test-org", role, []byte("pem"))
 		require.Error(t, err, "role %q should be rejected", role)
 		assert.Contains(t, err.Error(), "invalid role name")
 	}
-	// Valid roles should pass validation (may fail later on mock).
-	err := p.StoreAgentPEM(context.Background(), "coder", []byte("pem"))
+	err := p.StoreAgentPEM(context.Background(), "test-org", "coder", []byte("pem"))
 	require.NoError(t, err)
 }
 
@@ -273,7 +286,7 @@ func TestStoreAgentPEM_GetSecretNonNotFoundError(t *testing.T) {
 	fake.errs["GetSecret"] = fmt.Errorf("permission denied")
 
 	p := newTestProvisioner(Config{ProjectID: "my-project"}, fake)
-	err := p.StoreAgentPEM(context.Background(), "coder", []byte("pem"))
+	err := p.StoreAgentPEM(context.Background(), "test-org", "coder", []byte("pem"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "permission denied")
 }
@@ -304,6 +317,7 @@ func TestProvisioner_Provision_FullFlow(t *testing.T) {
 		"GetProjectNumber",
 		"CreateServiceAccount",
 		"CreateWIFPool",
+		"GetWIFProvider",
 		"CreateWIFProvider",
 		"GetSecret",
 		"CreateSecret",
@@ -414,13 +428,13 @@ func TestProvisioner_Provision_SkipsRedeployWhenUnchanged(t *testing.T) {
 		State: "ACTIVE",
 		URI:   "https://fullsend-mint-abc123.run.app",
 		EnvVars: map[string]string{
-			"GCP_PROJECT_NUMBER":  "123456789",
-			"WIF_POOL_NAME":      "fullsend-pool",
-			"WIF_PROVIDER_NAME":  "github-oidc",
-			"ALLOWED_ORGS":       "test-org",
-			"OIDC_AUDIENCE":      "fullsend-mint",
-			"ALLOWED_ROLES":      "coder",
-			"ROLE_APP_IDS":       `{"coder":"12345"}`,
+			"GCP_PROJECT_NUMBER":   "123456789",
+			"WIF_POOL_NAME":       "fullsend-pool",
+			"WIF_PROVIDER_NAME":   "github-oidc",
+			"ALLOWED_ORGS":        "test-org",
+			"OIDC_AUDIENCE":       "fullsend-mint",
+			"ALLOWED_ROLES":       "coder",
+			"ROLE_APP_IDS":        `{"test-org/coder":"12345"}`,
 			"FULLSEND_SOURCE_HASH": srcHash,
 		},
 	}
@@ -462,7 +476,7 @@ func TestProvisioner_Provision_ForceDeployAlwaysDeploys(t *testing.T) {
 			"ALLOWED_ORGS":        "test-org",
 			"OIDC_AUDIENCE":       "fullsend-mint",
 			"ALLOWED_ROLES":       "coder",
-			"ROLE_APP_IDS":        `{"coder":"12345"}`,
+			"ROLE_APP_IDS":        `{"test-org/coder":"12345"}`,
 			"FULLSEND_SOURCE_HASH": srcHash,
 		},
 	}
@@ -1167,7 +1181,7 @@ func TestProvisioner_Provision_MultiOrg_PEMStorage(t *testing.T) {
 	_, err := p.Provision(context.Background())
 	require.NoError(t, err)
 
-	// PEMs are stored once per role (not per org), so 1 role = 1 GetSecret + 1 AddSecretVersion.
+	// PEMs are stored per org×role (org-scoped secrets), so 2 orgs × 1 role = 2 GetSecret + 2 AddSecretVersion.
 	getSecretCount := 0
 	addVersionCount := 0
 	for _, call := range fake.calls {
@@ -1178,8 +1192,8 @@ func TestProvisioner_Provision_MultiOrg_PEMStorage(t *testing.T) {
 			addVersionCount++
 		}
 	}
-	assert.Equal(t, 1, getSecretCount, "expected GetSecret called once per role")
-	assert.Equal(t, 1, addVersionCount, "expected AddSecretVersion called once per role")
+	assert.Equal(t, 2, getSecretCount, "expected GetSecret called once per org×role")
+	assert.Equal(t, 2, addVersionCount, "expected AddSecretVersion called once per org×role")
 }
 
 // --- interface compliance ---
@@ -1188,7 +1202,7 @@ func TestProvisioner_ImplementsDispatcher(t *testing.T) {
 	var _ interface {
 		Name() string
 		Provision(context.Context) (map[string]string, error)
-		StoreAgentPEM(context.Context, string, []byte) error
+		StoreAgentPEM(context.Context, string, string, []byte) error
 		OrgSecretNames() []string
 		OrgVariableNames() []string
 	} = (*Provisioner)(nil)

@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,7 +37,6 @@ var requiredEnvVars = []string{
 	"GCP_PROJECT_NUMBER",
 	"WIF_POOL_NAME",
 	"WIF_PROVIDER_NAME",
-	"ALLOWED_ROLES",
 	"ROLE_APP_IDS",
 	"OIDC_AUDIENCE",
 }
@@ -136,12 +136,12 @@ type smPEMAccessor struct {
 	gcpProjectNum string
 }
 
-func (s *smPEMAccessor) AccessPEM(ctx context.Context, role string) ([]byte, error) {
+func (s *smPEMAccessor) AccessPEM(ctx context.Context, org, role string) ([]byte, error) {
 	if !rolePattern.MatchString(role) {
 		return nil, fmt.Errorf("invalid role name %q", role)
 	}
-	name := fmt.Sprintf("projects/%s/secrets/fullsend-%s-app-pem/versions/latest",
-		s.gcpProjectNum, role)
+	name := fmt.Sprintf("projects/%s/secrets/fullsend-%s--%s-app-pem/versions/latest",
+		s.gcpProjectNum, org, role)
 	token, err := metadataToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting metadata token: %w", err)
@@ -294,10 +294,10 @@ type installationTokenResponse struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// PEMAccessor retrieves agent PEM keys by role.
+// PEMAccessor retrieves agent PEM keys by org and role.
 // Implementations encapsulate the storage backend (GCP Secret Manager, etc.).
 type PEMAccessor interface {
-	AccessPEM(ctx context.Context, role string) ([]byte, error)
+	AccessPEM(ctx context.Context, org, role string) ([]byte, error)
 }
 
 // TokenValidator validates an OIDC token and returns an error if invalid.
@@ -351,21 +351,38 @@ func NewHandler(pemAccessor PEMAccessor, tokenValidator TokenValidator) *Handler
 		}
 	}
 
-	for _, entry := range strings.Split(os.Getenv("ALLOWED_ROLES"), ",") {
-		if trimmed := strings.TrimSpace(entry); trimmed != "" {
-			if !rolePattern.MatchString(trimmed) {
-				log.Fatalf("ALLOWED_ROLES contains invalid entry %q: must match %s", trimmed, rolePattern.String())
-			}
-			h.allowedRoles = append(h.allowedRoles, trimmed)
+	// Derive allowed roles from ROLE_APP_IDS keys (format: "org/role").
+	// If ALLOWED_ROLES env var is set, use it as an explicit allowlist
+	// (still validated against ROLE_APP_IDS).
+	roleSet := make(map[string]bool)
+	for key := range h.roleAppIDs {
+		if idx := strings.Index(key, "/"); idx >= 0 {
+			roleSet[key[idx+1:]] = true
 		}
+	}
+
+	if raw := os.Getenv("ALLOWED_ROLES"); raw != "" {
+		for _, entry := range strings.Split(raw, ",") {
+			if trimmed := strings.TrimSpace(entry); trimmed != "" {
+				if !rolePattern.MatchString(trimmed) {
+					log.Fatalf("ALLOWED_ROLES contains invalid entry %q: must match %s", trimmed, rolePattern.String())
+				}
+				h.allowedRoles = append(h.allowedRoles, trimmed)
+			}
+		}
+	} else {
+		for role := range roleSet {
+			h.allowedRoles = append(h.allowedRoles, role)
+		}
+		sort.Strings(h.allowedRoles)
 	}
 
 	for _, role := range h.allowedRoles {
 		if _, ok := rolePermissions[role]; !ok {
 			log.Fatalf("ALLOWED_ROLES contains %q but rolePermissions has no entry for it", role)
 		}
-		if _, ok := h.roleAppIDs[role]; !ok {
-			log.Fatalf("ALLOWED_ROLES contains %q but ROLE_APP_IDS has no entry for it", role)
+		if !roleSet[role] {
+			log.Fatalf("ALLOWED_ROLES contains %q but ROLE_APP_IDS has no org-scoped entry for it", role)
 		}
 	}
 
@@ -584,12 +601,12 @@ func (h *Handler) prevalidateOIDCToken(token string) (*oidcClaims, error) {
 // mintToken looks up the PEM for (org, role), generates a GitHub App JWT,
 // finds the installation, and creates an installation token.
 func (h *Handler) mintToken(ctx context.Context, org, role string, repos []string) (string, string, error) {
-	appID, err := h.lookupRoleAppID(role)
+	appID, err := h.lookupRoleAppID(org, role)
 	if err != nil {
 		return "", "", &mintError{status: http.StatusForbidden, msg: fmt.Sprintf("looking up app ID for role %s: %v", role, err)}
 	}
 
-	pemData, err := h.pemAccessor.AccessPEM(ctx, role)
+	pemData, err := h.pemAccessor.AccessPEM(ctx, org, role)
 	if err != nil {
 		return "", "", &mintError{status: http.StatusForbidden, msg: fmt.Sprintf("reading PEM secret for role %s: %v", role, err)}
 	}
@@ -788,16 +805,17 @@ func (h *Handler) checkAllowedRole(role string) bool {
 	return false
 }
 
-// lookupRoleAppID returns the GitHub App ID for the given role from the
-// cached ROLE_APP_IDS map (parsed once at init).
-func (h *Handler) lookupRoleAppID(role string) (string, error) {
+// lookupRoleAppID returns the GitHub App ID for the given org/role from the
+// cached ROLE_APP_IDS map (parsed once at init). Keys are "org/role" format.
+func (h *Handler) lookupRoleAppID(org, role string) (string, error) {
 	if h.roleAppIDs == nil {
 		return "", fmt.Errorf("ROLE_APP_IDS not set or invalid")
 	}
 
-	appID, ok := h.roleAppIDs[role]
+	key := org + "/" + role
+	appID, ok := h.roleAppIDs[key]
 	if !ok || appID == "" {
-		return "", fmt.Errorf("no app ID configured for role %q", role)
+		return "", fmt.Errorf("no app ID configured for role %q (org %q)", role, org)
 	}
 
 	return appID, nil

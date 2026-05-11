@@ -12,8 +12,7 @@ func TestMain(m *testing.M) {
 		"WIF_POOL_NAME":      "test-pool",
 		"WIF_PROVIDER_NAME":  "github-oidc",
 		"OIDC_AUDIENCE":      "fullsend-mint",
-		"ALLOWED_ROLES":      "triage,coder,review,fix,fullsend",
-		"ROLE_APP_IDS":       `{"triage":"100","coder":"200","review":"300","fix":"400","fullsend":"500"}`,
+		"ROLE_APP_IDS":       `{"test-org/triage":"100","test-org/coder":"200","test-org/review":"300","test-org/fix":"400","test-org/fullsend":"500"}`,
 	}
 	for k, v := range defaults {
 		if os.Getenv(k) == "" {

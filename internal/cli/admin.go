@@ -517,7 +517,7 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 	// Otherwise, check GitHub repo secrets.
 	if pemProvisioner != nil {
 		setup = setup.WithSecretExists(func(role string) (bool, error) {
-			return pemProvisioner.SecretExists(ctx, role)
+			return pemProvisioner.SecretExists(ctx, org, role)
 		})
 	} else {
 		setup = setup.WithSecretExists(func(role string) (bool, error) {
@@ -530,7 +530,7 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 	// Otherwise, store in GitHub repo secrets.
 	if pemProvisioner != nil {
 		setup = setup.WithStoreSecret(func(sctx context.Context, role, pem string) error {
-			return pemProvisioner.StoreAgentPEM(sctx, role, []byte(pem))
+			return pemProvisioner.StoreAgentPEM(sctx, org, role, []byte(pem))
 		})
 	} else {
 		setup = setup.WithStoreSecret(func(sctx context.Context, role, pem string) error {

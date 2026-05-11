@@ -128,7 +128,7 @@ func (d *e2eDispatcher) Provision(_ context.Context) (map[string]string, error) 
 	return map[string]string{"FULLSEND_MINT_URL": "https://e2e-test.example.com/mint"}, nil
 }
 
-func (d *e2eDispatcher) StoreAgentPEM(_ context.Context, _ string, _ []byte) error { return nil }
+func (d *e2eDispatcher) StoreAgentPEM(_ context.Context, _, _ string, _ []byte) error { return nil }
 
 func (d *e2eDispatcher) OrgSecretNames() []string { return nil }
 

@@ -128,14 +128,16 @@ func (p *Provisioner) OrgVariableNames() []string {
 	return []string{"FULLSEND_MINT_URL"}
 }
 
-// secretID returns the Secret Manager secret ID for the given role.
-func secretID(role string) string {
-	return fmt.Sprintf("fullsend-%s-app-pem", role)
+// secretID returns the Secret Manager secret ID for the given org and role.
+// Uses "--" as separator between org and role because GitHub org names
+// cannot contain consecutive hyphens.
+func secretID(org, role string) string {
+	return fmt.Sprintf("fullsend-%s--%s-app-pem", org, role)
 }
 
-// SecretExists checks whether the Secret Manager secret for the given role exists.
-func (p *Provisioner) SecretExists(ctx context.Context, role string) (bool, error) {
-	sid := secretID(role)
+// SecretExists checks whether the Secret Manager secret for the given org and role exists.
+func (p *Provisioner) SecretExists(ctx context.Context, org, role string) (bool, error) {
+	sid := secretID(org, role)
 	err := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, sid)
 	if err == nil {
 		return true, nil
@@ -146,17 +148,20 @@ func (p *Provisioner) SecretExists(ctx context.Context, role string) (bool, erro
 	return false, fmt.Errorf("checking secret %s: %w", sid, err)
 }
 
-// StoreAgentPEM persists a single role's PEM in Secret Manager.
+// StoreAgentPEM persists a single org/role's PEM in Secret Manager.
 // Called during App setup so each PEM is stored immediately after creation.
-func (p *Provisioner) StoreAgentPEM(ctx context.Context, role string, pemData []byte) error {
+func (p *Provisioner) StoreAgentPEM(ctx context.Context, org, role string, pemData []byte) error {
 	if p.cfg.ProjectID == "" {
 		return fmt.Errorf("GCP project ID is required")
+	}
+	if !githubOrgPattern.MatchString(org) {
+		return fmt.Errorf("invalid org name %q", org)
 	}
 	if !rolePattern.MatchString(role) {
 		return fmt.Errorf("invalid role name %q: must match %s", role, rolePattern.String())
 	}
 
-	sid := secretID(role)
+	sid := secretID(org, role)
 
 	secretErr := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, sid)
 	if secretErr != nil {
@@ -245,23 +250,25 @@ func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string
 		return nil, fmt.Errorf("MintURL %q must be a valid HTTPS URL", p.cfg.MintURL)
 	}
 
-	for _, role := range sortedByteMapKeys(p.cfg.AgentPEMs) {
-		if err := p.StoreAgentPEM(ctx, role, p.cfg.AgentPEMs[role]); err != nil {
-			return nil, fmt.Errorf("storing PEM for role %s: %w", role, err)
-		}
-	}
-
-	for _, role := range sortedStringMapKeys(p.cfg.AgentAppIDs) {
-		if _, hasPEM := p.cfg.AgentPEMs[role]; hasPEM {
-			continue
-		}
-		sid := secretID(role)
-		if err := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, sid); err != nil {
-			if errors.Is(err, ErrSecretNotFound) {
-				return nil, fmt.Errorf("role %q has no PEM and secret %s not found in project %s",
-					role, sid, p.cfg.ProjectID)
+	for _, org := range p.cfg.GitHubOrgs {
+		for _, role := range sortedByteMapKeys(p.cfg.AgentPEMs) {
+			if err := p.StoreAgentPEM(ctx, org, role, p.cfg.AgentPEMs[role]); err != nil {
+				return nil, fmt.Errorf("storing PEM for %s/%s: %w", org, role, err)
 			}
-			return nil, fmt.Errorf("checking secret %s for role %q: %w", sid, role, err)
+		}
+
+		for _, role := range sortedStringMapKeys(p.cfg.AgentAppIDs) {
+			if _, hasPEM := p.cfg.AgentPEMs[role]; hasPEM {
+				continue
+			}
+			sid := secretID(org, role)
+			if err := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, sid); err != nil {
+				if errors.Is(err, ErrSecretNotFound) {
+					return nil, fmt.Errorf("role %q has no PEM and secret %s not found in project %s",
+						role, sid, p.cfg.ProjectID)
+				}
+				return nil, fmt.Errorf("checking secret %s for role %q: %w", sid, role, err)
+			}
 		}
 	}
 
@@ -314,22 +321,31 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		return nil, fmt.Errorf("creating WIF pool: %w", err)
 	}
 
-	// Step 4: Create/verify WIF provider.
+	// Step 4: Create/verify WIF provider with merged org list.
 	for _, org := range p.cfg.GitHubOrgs {
 		if strings.ContainsAny(org, `'"`) {
 			return nil, fmt.Errorf("invalid GitHub org name %q: contains quotes", org)
 		}
 	}
-	var attrCondition string
-	if len(p.cfg.GitHubOrgs) == 1 {
-		attrCondition = fmt.Sprintf("assertion.repository_owner == '%s'", p.cfg.GitHubOrgs[0])
-	} else {
-		quoted := make([]string, len(p.cfg.GitHubOrgs))
-		for i, org := range p.cfg.GitHubOrgs {
-			quoted[i] = fmt.Sprintf("'%s'", org)
+
+	// Merge with existing WIF provider orgs if provider already exists.
+	existingProvider, getErr := p.gcpAPI.GetWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)
+	if getErr == nil && existingProvider != nil {
+		existingOrgs := parseConditionOrgs(existingProvider.AttributeCondition)
+		seen := make(map[string]bool)
+		for _, org := range p.cfg.GitHubOrgs {
+			seen[org] = true
 		}
-		attrCondition = fmt.Sprintf("assertion.repository_owner in [%s]", strings.Join(quoted, ", "))
+		for _, org := range existingOrgs {
+			if !seen[org] {
+				p.cfg.GitHubOrgs = append(p.cfg.GitHubOrgs, org)
+				seen[org] = true
+			}
+		}
+		sort.Strings(p.cfg.GitHubOrgs)
 	}
+
+	attrCondition := buildAttributeCondition(p.cfg.GitHubOrgs)
 	if err := p.gcpAPI.CreateWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider, OIDCProviderConfig{
 		IssuerURI:          oidcIssuer,
 		AttributeCondition: attrCondition,
@@ -338,35 +354,44 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		return nil, fmt.Errorf("creating WIF provider: %w", err)
 	}
 
-	// Step 5a: Store new agent PEMs.
-	for _, role := range sortedByteMapKeys(p.cfg.AgentPEMs) {
-		if err := p.StoreAgentPEM(ctx, role, p.cfg.AgentPEMs[role]); err != nil {
-			return nil, fmt.Errorf("storing PEM for role %s: %w", role, err)
+	// Step 5a: Store new agent PEMs (org-scoped).
+	for _, org := range p.cfg.GitHubOrgs {
+		for _, role := range sortedByteMapKeys(p.cfg.AgentPEMs) {
+			if err := p.StoreAgentPEM(ctx, org, role, p.cfg.AgentPEMs[role]); err != nil {
+				return nil, fmt.Errorf("storing PEM for %s/%s: %w", org, role, err)
+			}
 		}
 	}
 
 	// Step 5b: Verify secrets exist for roles without PEMs (re-install).
-	for _, role := range sortedStringMapKeys(p.cfg.AgentAppIDs) {
-		if _, hasPEM := p.cfg.AgentPEMs[role]; hasPEM {
-			continue
-		}
-		sid := secretID(role)
-		if err := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, sid); err != nil {
-			if errors.Is(err, ErrSecretNotFound) {
-				return nil, fmt.Errorf("role %q has no PEM and secret %s not found in project %s",
-					role, sid, p.cfg.ProjectID)
+	for _, org := range p.cfg.GitHubOrgs {
+		for _, role := range sortedStringMapKeys(p.cfg.AgentAppIDs) {
+			if _, hasPEM := p.cfg.AgentPEMs[role]; hasPEM {
+				continue
 			}
-			return nil, fmt.Errorf("checking secret %s for role %q: %w", sid, role, err)
+			sid := secretID(org, role)
+			if err := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, sid); err != nil {
+				if errors.Is(err, ErrSecretNotFound) {
+					return nil, fmt.Errorf("role %q has no PEM and secret %s not found in project %s",
+						role, sid, p.cfg.ProjectID)
+				}
+				return nil, fmt.Errorf("checking secret %s for role %q: %w", sid, role, err)
+			}
 		}
 	}
 
-	// Step 6: Build env vars and deploy Cloud Function.
-	roleAppIDsJSON, err := json.Marshal(p.cfg.AgentAppIDs)
+	// Step 6: Build org-scoped env vars and deploy Cloud Function.
+	orgScopedAppIDs := make(map[string]string)
+	for _, org := range p.cfg.GitHubOrgs {
+		for role, appID := range p.cfg.AgentAppIDs {
+			orgScopedAppIDs[org+"/"+role] = appID
+		}
+	}
+
+	roleAppIDsJSON, err := json.Marshal(orgScopedAppIDs)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling role app IDs: %w", err)
 	}
-
-	allowedRoles := sortedStringMapKeys(p.cfg.AgentAppIDs)
 
 	envVars := map[string]string{
 		"GCP_PROJECT_NUMBER": projectNumber,
@@ -374,7 +399,6 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		"WIF_PROVIDER_NAME":  p.cfg.WIFProvider,
 		"ALLOWED_ORGS":       strings.Join(p.cfg.GitHubOrgs, ","),
 		"OIDC_AUDIENCE":      oidcAudience,
-		"ALLOWED_ROLES":      strings.Join(allowedRoles, ","),
 		"ROLE_APP_IDS":       string(roleAppIDsJSON),
 	}
 
@@ -382,6 +406,14 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	if err != nil {
 		return nil, fmt.Errorf("checking existing function: %w", err)
 	}
+
+	// Merge with existing function config (additive multi-org support).
+	if existing != nil && existing.EnvVars != nil {
+		mergeAllowedOrgs(existing.EnvVars, envVars)
+		mergeRoleAppIDs(existing.EnvVars, envVars)
+	}
+
+	envVars["ALLOWED_ROLES"] = deriveAllowedRoles(envVars["ROLE_APP_IDS"])
 
 	if p.cfg.DeployMode == DeploySkip {
 		if existing == nil || existing.URI == "" {
@@ -455,6 +487,108 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	return map[string]string{
 		"FULLSEND_MINT_URL": mintURL,
 	}, nil
+}
+
+// mergeAllowedOrgs reads ALLOWED_ORGS from existing env vars and unions
+// with the desired env vars. Result is sorted and deduplicated.
+func mergeAllowedOrgs(existing, desired map[string]string) {
+	prev := existing["ALLOWED_ORGS"]
+	if prev == "" {
+		return
+	}
+	seen := make(map[string]bool)
+	var merged []string
+	for _, org := range strings.Split(desired["ALLOWED_ORGS"], ",") {
+		org = strings.TrimSpace(org)
+		if org != "" && !seen[org] {
+			seen[org] = true
+			merged = append(merged, org)
+		}
+	}
+	for _, org := range strings.Split(prev, ",") {
+		org = strings.TrimSpace(org)
+		if org != "" && !seen[org] {
+			seen[org] = true
+			merged = append(merged, org)
+		}
+	}
+	sort.Strings(merged)
+	desired["ALLOWED_ORGS"] = strings.Join(merged, ",")
+}
+
+// mergeRoleAppIDs reads ROLE_APP_IDS from existing env vars and merges with
+// desired. New org's entries are added; same org re-installing overwrites
+// its own entries.
+func mergeRoleAppIDs(existing, desired map[string]string) {
+	prev := existing["ROLE_APP_IDS"]
+	if prev == "" {
+		return
+	}
+	var prevMap map[string]string
+	if err := json.Unmarshal([]byte(prev), &prevMap); err != nil {
+		return
+	}
+	var desiredMap map[string]string
+	if err := json.Unmarshal([]byte(desired["ROLE_APP_IDS"]), &desiredMap); err != nil {
+		return
+	}
+	for key, appID := range prevMap {
+		if _, exists := desiredMap[key]; !exists {
+			desiredMap[key] = appID
+		}
+	}
+	merged, _ := json.Marshal(desiredMap)
+	desired["ROLE_APP_IDS"] = string(merged)
+}
+
+// deriveAllowedRoles extracts unique role names from org-scoped ROLE_APP_IDS
+// keys (format: "org/role") and returns them as a sorted comma-separated string.
+func deriveAllowedRoles(roleAppIDsJSON string) string {
+	var m map[string]string
+	if err := json.Unmarshal([]byte(roleAppIDsJSON), &m); err != nil {
+		return ""
+	}
+	roleSet := make(map[string]bool)
+	for key := range m {
+		if idx := strings.Index(key, "/"); idx >= 0 {
+			roleSet[key[idx+1:]] = true
+		}
+	}
+	roles := make([]string, 0, len(roleSet))
+	for role := range roleSet {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	return strings.Join(roles, ",")
+}
+
+// buildAttributeCondition constructs a WIF CEL condition from an org list.
+func buildAttributeCondition(orgs []string) string {
+	if len(orgs) == 1 {
+		return fmt.Sprintf("assertion.repository_owner == '%s'", orgs[0])
+	}
+	quoted := make([]string, len(orgs))
+	for i, org := range orgs {
+		quoted[i] = fmt.Sprintf("'%s'", org)
+	}
+	return fmt.Sprintf("assertion.repository_owner in [%s]", strings.Join(quoted, ", "))
+}
+
+// parseConditionOrgs extracts GitHub org names from a WIF attribute condition.
+// Supports both single-org ("assertion.repository_owner == 'org1'") and
+// multi-org ("assertion.repository_owner in ['org1', 'org2']") formats.
+func parseConditionOrgs(condition string) []string {
+	var orgs []string
+	for _, part := range strings.Split(condition, "'") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if githubOrgPattern.MatchString(part) {
+			orgs = append(orgs, part)
+		}
+	}
+	return orgs
 }
 
 // waitForReady polls the function until it responds with 200 OK, ensuring

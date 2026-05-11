@@ -160,9 +160,10 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 				w.WriteHeader(http.StatusConflict)
 				return
 			}
-			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Equal(t, http.MethodPatch, r.Method)
+			assert.Contains(t, r.URL.RawQuery, "updateMask=attributeCondition")
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprintln(w, `{"attributeCondition":"assertion.repository_owner == 'my-org'"}`)
+			fmt.Fprintln(w, `{}`)
 		}))
 		defer srv.Close()
 
@@ -173,7 +174,7 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 		assert.Equal(t, 2, callCount)
 	})
 
-	t.Run("already exists with mismatched condition", func(t *testing.T) {
+	t.Run("already exists update succeeds", func(t *testing.T) {
 		callCount := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callCount++
@@ -181,17 +182,17 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 				w.WriteHeader(http.StatusConflict)
 				return
 			}
+			assert.Equal(t, http.MethodPatch, r.Method)
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprintln(w, `{"attributeCondition":"assertion.repository_owner == 'other-org'"}`)
+			fmt.Fprintln(w, `{}`)
 		}))
 		defer srv.Close()
 
 		err := newTestClient(srv).CreateWIFProvider(context.Background(), "123", "pool", "gh-oidc", OIDCProviderConfig{
 			AttributeCondition: "assertion.repository_owner == 'my-org'",
 		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "expected")
-		assert.Contains(t, err.Error(), "other-org")
+		require.NoError(t, err)
+		assert.Equal(t, 2, callCount)
 	})
 }
 

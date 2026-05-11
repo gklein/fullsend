@@ -52,13 +52,14 @@ type fakePEMAccessor struct {
 	err  error
 }
 
-func (f *fakePEMAccessor) AccessPEM(_ context.Context, role string) ([]byte, error) {
+func (f *fakePEMAccessor) AccessPEM(_ context.Context, org, role string) ([]byte, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	data, ok := f.pems[role]
+	key := org + "/" + role
+	data, ok := f.pems[key]
 	if !ok {
-		return nil, fmt.Errorf("PEM not found for %s", role)
+		return nil, fmt.Errorf("PEM not found for %s", key)
 	}
 	return data, nil
 }
@@ -298,7 +299,7 @@ func TestHandler_InvalidRoleFormat(t *testing.T) {
 
 func TestHandler_RoleNotAllowed(t *testing.T) {
 	t.Setenv("ALLOWED_ROLES", "triage,coder")
-	t.Setenv("ROLE_APP_IDS", `{"triage":"100","coder":"200"}`)
+	t.Setenv("ROLE_APP_IDS", `{"test-org/triage":"100","test-org/coder":"200"}`)
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 
 	body := `{"role":"deploy"}`
@@ -313,6 +314,7 @@ func TestHandler_RoleNotAllowed(t *testing.T) {
 }
 
 func TestHandler_RoleAllowed(t *testing.T) {
+	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 
 	oidcToken := validOIDCToken()
@@ -336,7 +338,7 @@ func TestHandler_RoleAllowed(t *testing.T) {
 
 func TestHandler_InvalidRepoName(t *testing.T) {
 	t.Setenv("ALLOWED_ROLES", "coder")
-	t.Setenv("ROLE_APP_IDS", `{"coder":"200"}`)
+	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 
 	tests := []struct {
@@ -365,7 +367,7 @@ func TestHandler_InvalidRepoName(t *testing.T) {
 
 func TestHandler_EmptyRepos(t *testing.T) {
 	t.Setenv("ALLOWED_ROLES", "coder")
-	t.Setenv("ROLE_APP_IDS", `{"coder":"200"}`)
+	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 
 	body := `{"role":"coder"}`
@@ -386,7 +388,7 @@ func TestHandler_EmptyRepos(t *testing.T) {
 
 func TestHandler_TooManyRepos(t *testing.T) {
 	t.Setenv("ALLOWED_ROLES", "coder")
-	t.Setenv("ROLE_APP_IDS", `{"coder":"200"}`)
+	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 
 	repos := make([]string, maxRepos+1)
@@ -611,6 +613,7 @@ func TestHandler_OIDCPrevalidation_WorkflowAllowlist(t *testing.T) {
 }
 
 func TestHandler_OIDCValidationFailure(t *testing.T) {
+	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{err: fmt.Errorf("STS returned status 403")})
 
 	body := `{"role":"coder","repos":["test-repo"]}`
@@ -631,6 +634,7 @@ func TestHandler_OIDCValidationFailure(t *testing.T) {
 }
 
 func TestHandler_SecretAccessError(t *testing.T) {
+	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
 	h := NewHandler(&fakePEMAccessor{err: fmt.Errorf("access denied")}, &fakeTokenValidator{})
 
 	body := `{"role":"coder","repos":["test-repo"]}`
@@ -651,6 +655,8 @@ func TestHandler_SecretAccessError(t *testing.T) {
 }
 
 func TestHandler_FullFlow(t *testing.T) {
+	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
+
 	pemData, err := generateTestRSAKey()
 	if err != nil {
 		t.Fatalf("generating test key: %v", err)
@@ -681,7 +687,7 @@ func TestHandler_FullFlow(t *testing.T) {
 
 	pemAccessor := &fakePEMAccessor{
 		pems: map[string][]byte{
-			"coder": pemData,
+			"test-org/coder": pemData,
 		},
 	}
 
@@ -709,6 +715,8 @@ func TestHandler_FullFlow(t *testing.T) {
 }
 
 func TestHandler_FullFlowWithRepos(t *testing.T) {
+	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
+
 	pemData, err := generateTestRSAKey()
 	if err != nil {
 		t.Fatalf("generating test key: %v", err)
@@ -741,7 +749,7 @@ func TestHandler_FullFlowWithRepos(t *testing.T) {
 
 	h := NewHandler(&fakePEMAccessor{
 		pems: map[string][]byte{
-			"coder": pemData,
+			"test-org/coder": pemData,
 		},
 	}, &fakeTokenValidator{})
 	h.githubBaseURL = github.URL
@@ -774,6 +782,8 @@ func TestHandler_FullFlowWithRepos(t *testing.T) {
 }
 
 func TestHandler_InstallationNotFound(t *testing.T) {
+	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
+
 	pemData, err := generateTestRSAKey()
 	if err != nil {
 		t.Fatalf("generating test key: %v", err)
@@ -787,7 +797,7 @@ func TestHandler_InstallationNotFound(t *testing.T) {
 
 	h := NewHandler(&fakePEMAccessor{
 		pems: map[string][]byte{
-			"coder": pemData,
+			"test-org/coder": pemData,
 		},
 	}, &fakeTokenValidator{})
 	h.githubBaseURL = github.URL
@@ -867,8 +877,7 @@ func TestGenerateAppJWT_InvalidPEM(t *testing.T) {
 }
 
 func TestCheckAllowedRole(t *testing.T) {
-	t.Setenv("ALLOWED_ROLES", "triage,coder,review")
-	t.Setenv("ROLE_APP_IDS", `{"triage":"100","coder":"200","review":"300"}`)
+	t.Setenv("ROLE_APP_IDS", `{"test-org/triage":"100","test-org/coder":"200","test-org/review":"300"}`)
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 
 	if !h.checkAllowedRole("coder") {
@@ -881,18 +890,18 @@ func TestCheckAllowedRole(t *testing.T) {
 
 func TestCheckAllowedRole_Empty(t *testing.T) {
 	t.Setenv("ALLOWED_ROLES", "")
+	t.Setenv("ROLE_APP_IDS", "")
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 	if h.checkAllowedRole("coder") {
-		t.Fatal("should fail closed when ALLOWED_ROLES is empty")
+		t.Fatal("should fail closed when no roles configured")
 	}
 }
 
 func TestLookupRoleAppID(t *testing.T) {
-	t.Setenv("ALLOWED_ROLES", "triage,coder")
-	t.Setenv("ROLE_APP_IDS", `{"triage":"100","coder":"200"}`)
+	t.Setenv("ROLE_APP_IDS", `{"test-org/triage":"100","test-org/coder":"200"}`)
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 
-	id, err := h.lookupRoleAppID("coder")
+	id, err := h.lookupRoleAppID("test-org", "coder")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -900,9 +909,14 @@ func TestLookupRoleAppID(t *testing.T) {
 		t.Fatalf("expected 200, got %s", id)
 	}
 
-	_, err = h.lookupRoleAppID("deploy")
+	_, err = h.lookupRoleAppID("test-org", "deploy")
 	if err == nil {
 		t.Fatal("expected error for unknown role")
+	}
+
+	_, err = h.lookupRoleAppID("other-org", "coder")
+	if err == nil {
+		t.Fatal("expected error for wrong org")
 	}
 }
 
@@ -911,7 +925,7 @@ func TestLookupRoleAppID_NotSet(t *testing.T) {
 	t.Setenv("ROLE_APP_IDS", "")
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 
-	_, err := h.lookupRoleAppID("coder")
+	_, err := h.lookupRoleAppID("test-org", "coder")
 	if err == nil {
 		t.Fatal("expected error when ROLE_APP_IDS not set")
 	}
@@ -983,8 +997,7 @@ func TestHandler_MultiOrg_FullFlow(t *testing.T) {
 	t.Setenv("WIF_POOL_NAME", "test-pool")
 	t.Setenv("WIF_PROVIDER_NAME", "github-oidc")
 	t.Setenv("OIDC_AUDIENCE", "fullsend-mint")
-	t.Setenv("ALLOWED_ROLES", "triage,coder,review,fix,fullsend")
-	t.Setenv("ROLE_APP_IDS", `{"triage":"100","coder":"200","review":"300","fix":"400","fullsend":"500"}`)
+	t.Setenv("ROLE_APP_IDS", `{"test-org/triage":"100","test-org/coder":"200","test-org/review":"300","test-org/fix":"400","test-org/fullsend":"500","other-org/triage":"100","other-org/coder":"200","other-org/review":"300","other-org/fix":"400","other-org/fullsend":"500"}`)
 
 	pemData, err := generateTestRSAKey()
 	if err != nil {
@@ -1025,7 +1038,7 @@ func TestHandler_MultiOrg_FullFlow(t *testing.T) {
 
 	pemAccessor := &fakePEMAccessor{
 		pems: map[string][]byte{
-			"coder": pemData,
+			"other-org/coder": pemData,
 		},
 	}
 
@@ -1059,8 +1072,7 @@ func TestHandler_MultiOrg_WrongOrg(t *testing.T) {
 	t.Setenv("WIF_POOL_NAME", "test-pool")
 	t.Setenv("WIF_PROVIDER_NAME", "github-oidc")
 	t.Setenv("OIDC_AUDIENCE", "fullsend-mint")
-	t.Setenv("ALLOWED_ROLES", "triage,coder,review,fix,fullsend")
-	t.Setenv("ROLE_APP_IDS", `{"triage":"100","coder":"200","review":"300","fix":"400","fullsend":"500"}`)
+	t.Setenv("ROLE_APP_IDS", `{"test-org/triage":"100","test-org/coder":"200","test-org/review":"300","test-org/fix":"400","test-org/fullsend":"500","other-org/triage":"100","other-org/coder":"200","other-org/review":"300","other-org/fix":"400","other-org/fullsend":"500"}`)
 
 	oidcToken := makeTestOIDCToken(
 		"https://token.actions.githubusercontent.com",
