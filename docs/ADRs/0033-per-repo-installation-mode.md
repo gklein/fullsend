@@ -1,6 +1,6 @@
 ---
 title: "33. Per-repo installation mode"
-status: Proposed
+status: Accepted
 relates_to:
   - agent-infrastructure
   - agent-architecture
