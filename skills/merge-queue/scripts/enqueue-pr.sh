@@ -3,25 +3,25 @@
 # Usage: enqueue-pr.sh [PR_NUMBER_OR_URL]
 #
 # If no argument is given, uses the current branch's PR.
-# Requires: gh CLI authenticated with sufficient permissions.
+# Requires: gh CLI authenticated with sufficient permissions, and jq.
 
 set -euo pipefail
 
 pr="${1:-}"
 
-# Resolve PR number/URL to the full PR URL and extract owner/repo/number
+# Resolve PR to its URL and node ID in a single API call
 if [[ -z "$pr" ]]; then
-  pr_url="$(gh pr view --json url -q .url)"
+  pr_json="$(gh pr view --json url,id)"
 elif [[ "$pr" =~ ^[0-9]+$ ]]; then
-  pr_url="$(gh pr view "$pr" --json url -q .url)"
+  pr_json="$(gh pr view "$pr" --json url,id)"
 else
-  pr_url="$pr"
+  pr_json="$(gh pr view "$pr" --json url,id)"
 fi
 
-echo "Enqueuing: $pr_url"
+pr_url="$(echo "$pr_json" | jq -r .url)"
+pr_node_id="$(echo "$pr_json" | jq -r .id)"
 
-# Get the PR's node ID (required by the GraphQL mutation)
-pr_node_id="$(gh pr view "$pr_url" --json id -q .id)"
+echo "Enqueuing: $pr_url"
 
 # Enqueue the PR
 result="$(gh api graphql -f query='
@@ -35,10 +35,10 @@ result="$(gh api graphql -f query='
   }
 ' -f prId="$pr_node_id")"
 
-errors="$(echo "$result" | jq -r '.errors // empty')"
-if [[ -n "$errors" ]]; then
+# Check for GraphQL errors
+if echo "$result" | jq -e '.errors' >/dev/null 2>&1; then
   echo "GraphQL errors:" >&2
-  echo "$errors" | jq . >&2
+  echo "$result" | jq '.errors' >&2
   exit 1
 fi
 
