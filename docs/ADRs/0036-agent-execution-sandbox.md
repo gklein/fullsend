@@ -58,7 +58,7 @@ Package the entire agent execution environment (OpenShell, agent harness, tools,
 run-agent:
   image: ghcr.io/fullsend-ai/agent-sandbox:v1.2.3
   script:
-    - fullsend run $AGENT_NAME
+    - fullsend run $AGENT_NAME  # GitLab CI uses script: field for commands to run inside the container
 ```
 
 **Isolation mechanism:** Container runtime (Docker, Podman, GitLab's Docker executor). OpenShell creates nested sandboxes inside the container for individual agent processes.
@@ -78,7 +78,7 @@ run-agent:
 - GitLab shell executor cannot use this (no container runtime)
 
 **Image composition strategy:**
-- Base: OpenShell-enabled minimal Linux (Alpine or Ubuntu)
+- Base: OpenShell-enabled minimal Linux (Alpine or Ubuntu for Docker; Fedora/RHEL for Podman-based deployments)
 - Layer 1: Language runtimes (Go, Python, Node.js) — only what fullsend's built-in agents require, not arbitrary user code. Organizations implementing "Bring Your Own Agent" can build customized images with different runtime sets (see "Image Build and Distribution" in Open Questions).
 - Layer 2: Common tools (git, gh CLI, curl, jq)
 - Layer 3: Agent harness (`fullsend run` CLI)
@@ -181,12 +181,14 @@ A single container image (`ghcr.io/fullsend-ai/agent-sandbox`) contains OpenShel
 - GitHub Actions Windows/macOS runners (OpenShell Linux-only, not a current fullsend target)
 
 **Image composition:**
-- Base: Ubuntu 22.04 (OpenShell requires glibc, Alpine musl incompatible)
+- Base: Ubuntu 22.04 (OpenShell requires glibc, Alpine musl incompatible; Fedora/RHEL alternative for Podman-first environments)
 - OpenShell 0.0.37-dev+ with Podman support
-- Language runtimes: Go 1.23, Python 3.11, Node.js 20 (LTS)
+- Language runtimes: Go 1.23, Python 3.11, Node.js 20 (LTS) — built-in agent requirements only
 - Tools: git, gh CLI, curl, jq, yq
 - Agent harness: `fullsend run` CLI binary
 - Provider templates and L7 policy examples in `/opt/fullsend/policies/`
+
+**Note on "Bring Your Own Agent":** The reference image contains language runtimes for fullsend's built-in agents (triage, code, review, fix). Organizations implementing custom agents with different runtime requirements can build customized images from the base Dockerfile, replacing or extending the language runtime layer. See "Image Build and Distribution" in Open Questions for per-org image build strategies.
 
 **Why Docker-first over platform-specific (Option 2):**
 Maintaining environment parity across GitHub and GitLab is a security requirement, not just operational convenience. Security boundaries (L7 policies, credential isolation, filesystem restrictions) must behave identically on both platforms. Platform-specific implementations would require separate security reviews, separate penetration testing, and continuous validation that policy enforcement is equivalent. The container abstraction provides a single implementation of the security boundary.
