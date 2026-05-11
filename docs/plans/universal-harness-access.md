@@ -920,6 +920,11 @@ func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, a
     return ref, nil
 }
 
+// matchesAllowedPrefix checks if a URL matches any of the allowed prefixes.
+// IMPORTANT: This relies on the Validate() method enforcing trailing slashes on
+// allowed_remote_resources entries to prevent prefix confusion attacks
+// (e.g., "https://github.com/org/library-evil/" won't match prefix
+// "https://github.com/org/library/"). See ADR-0037 security analysis.
 func matchesAllowedPrefix(url string, allowedPrefixes []string) bool {
     for _, prefix := range allowedPrefixes {
         if strings.HasPrefix(url, prefix) {
@@ -947,7 +952,7 @@ if err := h.ResolveRelativeTo(absFullsendDir); err != nil {
 // NEW: Resolve remote resources
 fetchPolicy := fetch.DefaultPolicy
 // TODO: Load allowed domains from config.yaml
-resolved, err := resolve.ResolveHarness(ctx, h, fetchPolicy)
+resolved, err := resolve.ResolveHarness(ctx, workspaceRoot, h, fetchPolicy)
 if err != nil {
     return fmt.Errorf("resolving remote resources: %w", err)
 }
