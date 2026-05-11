@@ -23,7 +23,7 @@ Accepted
 
 ## Context
 
-Fullsend's installation model is per-org: `fullsend admin install` creates a dedicated `.fullsend` config repo, per-role GitHub Apps ([ADR 0007](0007-per-role-github-apps.md)), shim workflows in enrolled repos, and a central token mint for OIDC-based credential issuance ([ADR 0029](0029-central-token-mint-secretless-fullsend.md)). This requires org admin access and assumes all enrolled repos share agent configuration, credentials, and policies.
+Fullsend's installation model is per-org: `fullsend admin install` creates a dedicated `.fullsend` config repo, per-role GitHub Apps ([ADR 0007](0007-per-role-github-apps.md)), shim workflows in enrolled repos, and a central token mint for OIDC-based credential issuance (ADR 0029). This requires org admin access and assumes all enrolled repos share agent configuration, credentials, and policies.
 
 Some users cannot or do not want to use the per-org model:
 
@@ -35,10 +35,10 @@ Some users cannot or do not want to use the per-org model:
 
 Three ADRs and the implementation in PR 792 create the building blocks that make per-repo possible:
 
-- [ADR 0029](0029-central-token-mint-secretless-fullsend.md) replaces PEM secrets and dispatch PATs with OIDC-based credential issuance via a central token mint. The `mint-token` composite action takes a role name (triage, coder, review, fix) and returns a scoped GitHub App installation token — no PEMs or client IDs in the calling repo.
+- ADR 0029 replaces PEM secrets and dispatch PATs with OIDC-based credential issuance via a central token mint. The `mint-token` composite action takes a role name (triage, coder, review, fix) and returns a scoped GitHub App installation token — no PEMs or client IDs in the calling repo.
 - [ADR 0031](0031-reusable-workflows-for-action-installed-distribution.md) publishes five reusable workflows (`reusable-triage.yml`, `reusable-code.yml`, `reusable-review.yml`, `reusable-fix.yml`, `reusable-retro.yml`) and four composite actions (`fullsend`, `mint-token`, `validate-enrollment`, `setup-gcp`) from `fullsend-ai/fullsend`, enabling any repo to call fullsend infrastructure via `workflow_call` without copying workflow files. Scaffold stage workflows in `.fullsend` are now thin callers (41–66 lines) that delegate to these reusable workflows.
 - [ADR 0034](0034-centralized-shim-routing-via-dispatch.md) centralizes event-to-stage routing in `dispatch.yml` within the `.fullsend` config repo. The enrolled-repo shim (~70 lines) forwards raw event context to `dispatch.yml` via `workflow_call`; `dispatch.yml` (~370 lines) determines the stage, mints an OIDC dispatch token, validates the stage, checks the kill switch, and dispatches to the matching thin caller via `workflow_call`. Adding a new stage requires only a case branch in `dispatch.yml` — zero changes to enrolled repos.
-- [ADR 0035](0035-layered-content-resolution.md) introduces layered content resolution: upstream defaults (agents, skills, schemas, harness, policies, scripts) are sparse-checked from `fullsend-ai/fullsend` at runtime, then org overrides from `customized/` are copied on top. The scaffold installs only org-specific files (~23 files instead of ~68).
+- ADR 0035 introduces layered content resolution: upstream defaults (agents, skills, schemas, harness, policies, scripts) are sparse-checked from `fullsend-ai/fullsend` at runtime, then org overrides from `customized/` are copied on top. The scaffold installs only org-specific files (~23 files instead of ~68).
 
 The per-org flow after PR 792:
 
@@ -201,7 +201,7 @@ In per-org mode:
 
 ### 6. Credential models
 
-[ADR 0029](0029-central-token-mint-secretless-fullsend.md) defines three
+ADR 0029 defines three
 installation profiles based on who owns the GitHub Apps and the token mint.
 Role-only PEM naming (`fullsend-{role}-app-pem`, no org prefix) and
 `--public` Apps enable shared Apps across orgs — onboarding a new org to
@@ -336,7 +336,7 @@ Ordered by the project's threat priority (external injection > insider > drift >
 - [ADR 0007: Per-role GitHub Apps](0007-per-role-github-apps.md) — authentication model replicated in per-repo
 - [ADR 0008: workflow_dispatch for cross-repo dispatch](0008-workflow-dispatch-for-cross-repo-dispatch.md) — superseded by `workflow_call` (ADR 0034 centralizes routing)
 - [ADR 0026: Stage-based dispatch](0026-stage-based-dispatch-for-agent-workflow-decoupling.md) — stage model preserved in reusable workflows
-- [ADR 0029: Central token mint](0029-central-token-mint-secretless-fullsend.md) — default credential model for per-repo
+- ADR 0029: Central token mint — default credential model for per-repo
 - [ADR 0031: Reusable workflows](0031-reusable-workflows-for-action-installed-distribution.md) — publishes stage reusable workflows and composite actions
 - [ADR 0034: Centralized event routing](0034-centralized-shim-routing-via-dispatch.md) — routing logic in `dispatch.yml`, replicated as `reusable-dispatch.yml` for per-repo
-- [ADR 0035: Layered content resolution](0035-layered-content-resolution.md) — upstream defaults sparse-checked at runtime, overrides via `customized/` (per-org) or `.fullsend/` (per-repo)
+- ADR 0035: Layered content resolution — upstream defaults sparse-checked at runtime, overrides via `customized/` (per-org) or `.fullsend/` (per-repo)
