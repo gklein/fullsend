@@ -38,7 +38,7 @@ check_files() {
 
     # Check for per-file override
     max="${DEFAULT_MAX}"
-    override=$(grep -oP '# lint-workflow-size: max-lines=\K[0-9]+' "${file}" 2>/dev/null | tail -1 || true)
+    override=$(grep -o 'max-lines=[0-9]*' "${file}" 2>/dev/null | grep -o '[0-9]*' | tail -1 || true)
     if [[ -n "${override}" ]]; then
       max="${override}"
     fi
