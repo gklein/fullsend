@@ -1138,22 +1138,44 @@ func (c *LiveClient) DispatchWorkflow(ctx context.Context, owner, repo, workflow
 	return nil
 }
 
-// CreateIssue creates a new issue on a repository.
-func (c *LiveClient) CreateIssue(ctx context.Context, owner, repo, title, body string) (*forge.Issue, error) {
-	payload := map[string]string{"title": title, "body": body}
+// CreateIssue creates a new issue on a repository. Labels are best-effort:
+// if GitHub rejects the create because a label is unavailable in the target
+// repo, the request is retried without labels so issue creation still succeeds.
+func (c *LiveClient) CreateIssue(ctx context.Context, owner, repo, title, body string, labels ...string) (*forge.Issue, error) {
+	payload := map[string]any{"title": title, "body": body}
+	if len(labels) > 0 {
+		payload["labels"] = labels
+	}
 	resp, err := c.post(ctx, fmt.Sprintf("/repos/%s/%s/issues", owner, repo), payload)
 	if err != nil {
-		return nil, fmt.Errorf("create issue: %w", err)
+		var apiErr *APIError
+		if len(labels) == 0 || !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusUnprocessableEntity {
+			return nil, fmt.Errorf("create issue: %w", err)
+		}
+		resp, err = c.post(ctx, fmt.Sprintf("/repos/%s/%s/issues", owner, repo), map[string]any{"title": title, "body": body})
+		if err != nil {
+			return nil, fmt.Errorf("create issue without labels after label rejection: %w", err)
+		}
 	}
 	var result struct {
 		Number  int    `json:"number"`
 		Title   string `json:"title"`
+		Body    string `json:"body"`
 		HTMLURL string `json:"html_url"`
+		Labels  []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
 	}
 	if err := decodeJSON(resp, &result); err != nil {
 		return nil, fmt.Errorf("decode issue: %w", err)
 	}
-	return &forge.Issue{Number: result.Number, Title: result.Title, URL: result.HTMLURL}, nil
+	return &forge.Issue{
+		Number: result.Number,
+		Title:  result.Title,
+		Body:   result.Body,
+		URL:    result.HTMLURL,
+		Labels: labelNames(result.Labels),
+	}, nil
 }
 
 // CloseIssue closes an issue by number.
@@ -1164,6 +1186,59 @@ func (c *LiveClient) CloseIssue(ctx context.Context, owner, repo string, number 
 	}
 	resp.Body.Close()
 	return nil
+}
+
+func labelNames(labels []struct {
+	Name string `json:"name"`
+}) []string {
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		names = append(names, label.Name)
+	}
+	return names
+}
+
+// ListOpenIssues returns open issues on a repository, excluding pull requests.
+func (c *LiveClient) ListOpenIssues(ctx context.Context, owner, repo string) ([]forge.Issue, error) {
+	var result []forge.Issue
+
+	for page := 1; page <= 100; page++ {
+		resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/issues?state=open&per_page=100&page=%d", owner, repo, page))
+		if err != nil {
+			return nil, fmt.Errorf("list open issues page %d: %w", page, err)
+		}
+		var raw []struct {
+			Number      int    `json:"number"`
+			Title       string `json:"title"`
+			Body        string `json:"body"`
+			HTMLURL     string `json:"html_url"`
+			PullRequest *struct {
+				URL string `json:"url"`
+			} `json:"pull_request"`
+			Labels []struct {
+				Name string `json:"name"`
+			} `json:"labels"`
+		}
+		if err := decodeJSON(resp, &raw); err != nil {
+			return nil, fmt.Errorf("decode open issues page %d: %w", page, err)
+		}
+		for _, item := range raw {
+			if item.PullRequest != nil {
+				continue
+			}
+			result = append(result, forge.Issue{
+				Number: item.Number,
+				Title:  item.Title,
+				Body:   item.Body,
+				URL:    item.HTMLURL,
+				Labels: labelNames(item.Labels),
+			})
+		}
+		if len(raw) < 100 {
+			break
+		}
+	}
+	return result, nil
 }
 
 // ListIssueComments returns all comments on an issue, paginating automatically.
