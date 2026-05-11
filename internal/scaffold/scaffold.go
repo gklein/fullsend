@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"strings"
 )
 
 //go:embed all:fullsend-repo
@@ -47,9 +48,56 @@ func FileMode(path string) string {
 	return "100644"
 }
 
-// WalkFullsendRepo calls fn for each file in the fullsend-repo scaffold.
-// Paths passed to fn are relative to the fullsend-repo root.
+// layeredDirs contain upstream defaults provided at runtime via reusable
+// workflow workspace preparation. The scaffold does not install these —
+// orgs add overrides in customized/<dir>/ instead. See ADR 0035.
+var layeredDirs = []string{
+	"agents/",
+	"skills/",
+	"schemas/",
+	"harness/",
+	"policies/",
+	"scripts/",
+}
+
+// upstreamOnlyDirs are referenced directly from upstream in reusable
+// workflows. Never written to .fullsend.
+var upstreamOnlyDirs = []string{
+	".github/actions/",
+	".github/scripts/",
+}
+
+func isSkippedDir(path string) bool {
+	for _, prefix := range layeredDirs {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	for _, prefix := range upstreamOnlyDirs {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// WalkFullsendRepo calls fn for each file in the fullsend-repo scaffold
+// that should be installed into a .fullsend repo. Files in layered
+// directories (agents/, skills/, etc.) and upstream-only directories
+// (.github/actions/, .github/scripts/) are skipped — they are provided
+// at runtime by reusable workflows. See ADR 0035.
 func WalkFullsendRepo(fn func(path string, content []byte) error) error {
+	return walkFullsendRepo(fn, true)
+}
+
+// WalkFullsendRepoAll calls fn for every file in the fullsend-repo scaffold,
+// including layered and upstream-only files. Used by tests that validate
+// embedded content.
+func WalkFullsendRepoAll(fn func(path string, content []byte) error) error {
+	return walkFullsendRepo(fn, false)
+}
+
+func walkFullsendRepo(fn func(path string, content []byte) error, filter bool) error {
 	return fs.WalkDir(content, "fullsend-repo", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -57,12 +105,14 @@ func WalkFullsendRepo(fn func(path string, content []byte) error) error {
 		if d.IsDir() {
 			return nil
 		}
+		relPath := path[len("fullsend-repo/"):]
+		if filter && isSkippedDir(relPath) {
+			return nil
+		}
 		data, readErr := content.ReadFile(path)
 		if readErr != nil {
 			return fmt.Errorf("reading %s: %w", path, readErr)
 		}
-		// Strip the "fullsend-repo/" prefix so callers get repo-relative paths.
-		relPath := path[len("fullsend-repo/"):]
 		return fn(relPath, data)
 	})
 }

@@ -42,7 +42,7 @@ gets its own copy. Updates require re-running install in every org.
 
 ### Option B: Published composite actions only
 
-Publish the four composite actions at `fullsend-ai/fullsend@v1`. Agent workflows
+Publish the four composite actions at `fullsend-ai/fullsend@v0`. Agent workflows
 in `.fullsend` replace `uses: ./.github/actions/*` with published references.
 Infrastructure logic (checkout, token minting, GCP auth, sandbox setup) stays
 duplicated in each org's workflow files.
@@ -59,7 +59,7 @@ scripts) stays local.
 
 Use Option C. Publish reusable workflows
 (`fullsend-ai/fullsend/.github/workflows/reusable-{agent}.yml`) and composite
-actions (`fullsend-ai/fullsend@v1`, plus `mint-token`, `validate-enrollment`,
+actions (`fullsend-ai/fullsend@v0`, plus `mint-token`, `validate-enrollment`,
 `setup-gcp` under `.github/actions/`).
 
 Thin callers in `.fullsend` use `workflow_call` to invoke upstream reusable
@@ -92,7 +92,7 @@ The dispatch chain uses 1 level of `workflow_call` nesting (limit is 4):
 shim ──workflow_dispatch──> .fullsend/dispatch.yml
         ──workflow_dispatch──> .fullsend/code.yml (thin caller)
             ──workflow_call──> reusable-code.yml (level 1)
-                ──uses──> fullsend-ai/fullsend@v1 (composite action)
+                ──uses──> fullsend-ai/fullsend@v0 (composite action)
 ```
 
 ## Consequences
@@ -107,7 +107,7 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
   workflow's parameter contract visible in the caller's YAML, surfaces
   missing variables with explicit defaults instead of silent empty strings,
   and creates a natural review checkpoint when the upstream interface changes.
-- Thin callers pin upstream by tag (`@v1`) or SHA — orgs control when they
+- Thin callers pin upstream by tag (`@v0`) or SHA — orgs control when they
   adopt upstream changes. SHA pinning recommended for production since tags
   are mutable.
 - Stage-based dispatch ([ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md)),

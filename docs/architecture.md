@@ -324,6 +324,15 @@ AGENTS.md files follow the same layering. A repo's `.fullsend/AGENTS.md` gives a
 
 See [ADR 0003](ADRs/0003-org-config-repo-convention.md) for the config repo convention and [ADR 0024](ADRs/0024-harness-definitions.md) for harness definitions.
 
+**Decided:**
+
+- Layered content resolution: upstream defaults (agents, skills, schemas,
+  harness, policies, scripts) are provided at runtime via reusable workflow
+  sparse-checkout of `fullsend-ai/fullsend@v0`. The scaffold installs only
+  org-specific files and a `customized/` directory for org overrides. Org files
+  in `customized/` overwrite upstream defaults at runtime
+  ([ADR 0035](ADRs/0035-layered-content-resolution.md)).
+
 ## Multi-org deployment model
 
 Each organization that adopts fullsend operates independently. There is no shared control plane, no central service, and no relationship between orgs. Each org brings its own inference API keys and runs its own version of fullsend.

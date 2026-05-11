@@ -57,7 +57,6 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		".github/workflows/review.yml",
 		".github/workflows/fix.yml",
 		".github/workflows/repo-maintenance.yml",
-		".github/actions/fullsend/action.yml",
 		".github/actions/setup-gcp/action.yml",
 		".github/actions/validate-enrollment/action.yml",
 		".github/scripts/setup-agent-env.sh",
@@ -92,6 +91,7 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		"scripts/post-prioritize.sh",
 		".github/workflows/prioritize.yml",
 		".github/workflows/prioritize-scheduler.yml",
+		".github/actions/fullsend/action.yml",
 	}
 
 	for _, path := range expected {
@@ -105,83 +105,41 @@ func TestShimWorkflowCallTemplateContent(t *testing.T) {
 	content, err := FullsendRepoFile("templates/shim-workflow-call.yaml")
 	require.NoError(t, err)
 	s := string(content)
-	assert.Contains(t, s, "dispatch-triage")
-	assert.Contains(t, s, "dispatch-code")
-	assert.Contains(t, s, "dispatch-review")
-	assert.Contains(t, s, "dispatch-fix-bot")
-	assert.Contains(t, s, "dispatch-fix-human")
-	assert.Contains(t, s, "dispatch-prioritize")
-	assert.Contains(t, s, "dispatch-retro")
-	assert.Contains(t, s, "dispatch-stop-fix")
+	// ADR 34: shim has 2 jobs (dispatch + stop-fix), not per-stage jobs
+	assert.Contains(t, s, "dispatch:")
+	assert.Contains(t, s, "stop-fix:")
+	assert.Contains(t, s, "event_action:")
 	assert.Contains(t, s, "id-token: write")
-	assert.Contains(t, s, "workflow_call")
 	assert.Contains(t, s, "__ORG__/.fullsend/.github/workflows/dispatch.yml@main")
-	assert.Contains(t, s, "stage: triage")
-	assert.Contains(t, s, "stage: code")
-	assert.Contains(t, s, "stage: review")
-	assert.Contains(t, s, "stage: fix")
-	assert.Contains(t, s, "stage: retro")
-	assert.Contains(t, s, "stage: prioritize")
-	assert.Contains(t, s, "trigger_source:")
 	assert.Contains(t, s, "secrets: {}")
-	assert.Contains(t, s, "post-run-link:")
+	// Dispatch concurrency group (no cancel — thin callers handle per-stage cancellation)
+	assert.Contains(t, s, "fullsend-dispatch-${{")
+	assert.Contains(t, s, "cancel-in-progress: false")
+	// Event triggers
+	assert.Contains(t, s, "pull_request_target")
+	assert.Contains(t, s, "pull_request_review")
+	assert.Contains(t, s, "issue_comment")
+	assert.Contains(t, s, "issues:")
+	// Bot filter
+	assert.Contains(t, s, "comment.user.type != 'Bot'")
+	// stop-fix authorization
+	assert.Contains(t, s, "/stop-fix")
+	assert.Contains(t, s, "fullsend-no-fix")
+	// Per-stage jobs removed
+	assert.NotContains(t, s, "dispatch-triage")
+	assert.NotContains(t, s, "dispatch-code")
+	assert.NotContains(t, s, "dispatch-review")
+	assert.NotContains(t, s, "dispatch-fix-bot")
+	assert.NotContains(t, s, "dispatch-fix-human")
+	assert.NotContains(t, s, "dispatch-retro")
+	assert.NotContains(t, s, "stage: triage")
+	assert.NotContains(t, s, "stage: code")
+	assert.NotContains(t, s, "stage: review")
+	assert.NotContains(t, s, "stage: fix")
+	assert.NotContains(t, s, "stage: retro")
 	assert.NotContains(t, s, "FULLSEND_DISPATCH_TOKEN")
 	assert.NotContains(t, s, "FULLSEND_DISPATCH_URL")
 	assert.NotContains(t, s, "curl")
-}
-
-func TestShimWorkflowCallPostRunLink(t *testing.T) {
-	content, err := FullsendRepoFile("templates/shim-workflow-call.yaml")
-	require.NoError(t, err)
-	s := string(content)
-
-	// Verify post-run-link job exists
-	assert.Contains(t, s, "post-run-link:")
-
-	// Extract the post-run-link job block
-	idx := strings.Index(s, "post-run-link:")
-	require.NotEqual(t, -1, idx, "post-run-link job must exist")
-	block := s[idx:]
-
-	// Verify write permissions for issues and pull-requests
-	assert.Contains(t, block, "issues: write")
-	assert.Contains(t, block, "pull-requests: write")
-
-	// Verify it runs after all dispatch jobs
-	assert.Contains(t, block, "dispatch-triage")
-	assert.Contains(t, block, "dispatch-code")
-	assert.Contains(t, block, "dispatch-review")
-	assert.Contains(t, block, "dispatch-fix-bot")
-	assert.Contains(t, block, "dispatch-fix-human")
-	assert.Contains(t, block, "dispatch-retro")
-	assert.Contains(t, block, "dispatch-retro-command")
-	assert.Contains(t, block, "dispatch-prioritize")
-
-	// Verify it posts a comment with the run URL
-	assert.Contains(t, block, "gh issue comment")
-	assert.Contains(t, block, "fullsend ${AGENT}")
-	assert.Contains(t, block, "view logs")
-	assert.Contains(t, block, "SHIM_URL")
-	assert.Contains(t, block, "ITEM_NUMBER")
-}
-
-func TestShimWorkflowCallCodeExcludesPRContext(t *testing.T) {
-	content, err := FullsendRepoFile("templates/shim-workflow-call.yaml")
-	require.NoError(t, err)
-	s := string(content)
-
-	codeIdx := strings.Index(s, "dispatch-code:")
-	require.NotEqual(t, -1, codeIdx, "dispatch-code job must exist")
-
-	rest := s[codeIdx+len("dispatch-code:"):]
-	nextJob := strings.Index(rest, "\n  dispatch-")
-	if nextJob == -1 {
-		nextJob = len(rest)
-	}
-	codeBlock := rest[:nextJob]
-
-	assert.Contains(t, codeBlock, "!github.event.issue.pull_request",
-		"dispatch-code job must exclude PR contexts with !github.event.issue.pull_request guard")
 }
 
 func TestDispatchWorkflowContent(t *testing.T) {
@@ -190,7 +148,51 @@ func TestDispatchWorkflowContent(t *testing.T) {
 	s := string(content)
 	assert.Contains(t, s, "workflow_call:")
 	assert.NotContains(t, s, "workflow_dispatch:")
-	assert.Contains(t, s, "stage:")
+	// ADR 34: event_action input replaces stage input
+	assert.Contains(t, s, "event_action:")
+	assert.Contains(t, s, "required: true")
+	// Routing logic
+	assert.Contains(t, s, "Determine stage")
+	assert.Contains(t, s, "/triage")
+	assert.Contains(t, s, "/code")
+	assert.Contains(t, s, "/review")
+	assert.Contains(t, s, "/fix")
+	assert.Contains(t, s, "/retro")
+	assert.Contains(t, s, "/fullsend")
+	assert.Contains(t, s, "/prioritize")
+	assert.Contains(t, s, "ready-to-code")
+	assert.Contains(t, s, "ready-for-review")
+	assert.Contains(t, s, "TRIGGERING_LABEL")
+	assert.Contains(t, s, "pull_request_target")
+	assert.Contains(t, s, "pull_request_review")
+	assert.Contains(t, s, "changes_requested")
+	assert.Contains(t, s, "needs-info")
+	assert.Contains(t, s, "type/feature")
+	assert.Contains(t, s, "opened|synchronize|ready_for_review")
+	// /code must only run on issues, not PRs
+	assert.Contains(t, s, "ISSUE_HAS_PR")
+	// Author association checks
+	assert.Contains(t, s, "is_authorized")
+	assert.Contains(t, s, "OWNER|MEMBER|COLLABORATOR")
+	assert.Contains(t, s, `COMMENT_AUTHOR_ASSOC`)
+	// Auto-triage requires assoc != NONE or issue author
+	assert.Contains(t, s, "is_issue_author")
+	// Bot filtering
+	assert.Contains(t, s, `COMMENT_USER_TYPE`)
+	assert.Contains(t, s, `!= "Bot"`)
+	// No-fix label check (uses PR_LABELS for pull_request_review events)
+	assert.Contains(t, s, "fullsend-no-fix")
+	assert.Contains(t, s, "PR_LABELS")
+	// Fork PR detection
+	assert.Contains(t, s, "PR_HEAD_REPO")
+	assert.Contains(t, s, "PR_BASE_REPO")
+	// Kill switch and role check
+	assert.Contains(t, s, "kill_switch")
+	assert.Contains(t, s, "defaults.roles")
+	// Stage output
+	assert.Contains(t, s, "steps.route.outputs.stage")
+	assert.Contains(t, s, "trigger_source")
+	// Fan-out (unchanged)
 	assert.Contains(t, s, "# fullsend-stage:")
 	assert.Contains(t, s, "gh workflow run")
 	assert.Contains(t, s, "permissions: {}")
@@ -202,12 +204,8 @@ func TestDispatchWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "dispatched=0")
 	assert.Contains(t, s, "No workflows found for stage")
 	assert.Contains(t, s, "|| true")
-	assert.Contains(t, s, "Validate inputs")
 	assert.Contains(t, s, "Invalid stage name")
-	assert.Contains(t, s, `\([a-z][a-z0-9_-]*\)`)
 	assert.Contains(t, s, `^[a-z][a-z0-9_-]*$`)
-	assert.Contains(t, s, "trigger_source:")
-	assert.Contains(t, s, "required: false")
 	assert.Contains(t, s, "dispatch.yml")
 	assert.Contains(t, s, "self-dispatch guard")
 	assert.Contains(t, s, "Scanned")
@@ -233,7 +231,76 @@ func TestWalkFullsendRepo(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	assert.True(t, len(paths) >= 28, "expected at least 28 files, got %d", len(paths))
+	assert.True(t, len(paths) >= 15, "expected at least 15 installed files, got %d", len(paths))
+}
+
+func TestLayeredDirsNotInstalled(t *testing.T) {
+	skippedPrefixes := []string{
+		"agents/",
+		"skills/",
+		"schemas/",
+		"harness/",
+		"policies/",
+		"scripts/",
+		".github/actions/",
+		".github/scripts/",
+	}
+	err := WalkFullsendRepo(func(path string, _ []byte) error {
+		for _, prefix := range skippedPrefixes {
+			if strings.HasPrefix(path, prefix) {
+				t.Errorf("WalkFullsendRepo should not include %s (layered/upstream-only dir %s)", path, prefix)
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestCustomizedDirsInstalled(t *testing.T) {
+	expected := map[string]bool{
+		"customized/agents/.gitkeep":   false,
+		"customized/skills/.gitkeep":   false,
+		"customized/schemas/.gitkeep":  false,
+		"customized/harness/.gitkeep":  false,
+		"customized/policies/.gitkeep": false,
+		"customized/scripts/.gitkeep":  false,
+	}
+	err := WalkFullsendRepo(func(path string, _ []byte) error {
+		if _, ok := expected[path]; ok {
+			expected[path] = true
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	for path, found := range expected {
+		assert.True(t, found, "WalkFullsendRepo should include %s", path)
+	}
+}
+
+func TestWalkFullsendRepoAllIncludesEverything(t *testing.T) {
+	var filtered, all []string
+	err := WalkFullsendRepo(func(path string, _ []byte) error {
+		filtered = append(filtered, path)
+		return nil
+	})
+	require.NoError(t, err)
+	err = WalkFullsendRepoAll(func(path string, _ []byte) error {
+		all = append(all, path)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Greater(t, len(all), len(filtered),
+		"WalkFullsendRepoAll (%d files) should return more files than WalkFullsendRepo (%d files)",
+		len(all), len(filtered))
+	// All filtered paths must appear in the all set.
+	allSet := make(map[string]struct{}, len(all))
+	for _, p := range all {
+		allSet[p] = struct{}{}
+	}
+	for _, p := range filtered {
+		_, ok := allSet[p]
+		assert.True(t, ok, "WalkFullsendRepo path %s missing from WalkFullsendRepoAll", p)
+	}
 }
 
 func TestTriageWorkflowContent(t *testing.T) {
@@ -245,18 +312,20 @@ func TestTriageWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "event_type")
 	assert.Contains(t, s, "source_repo")
 	assert.Contains(t, s, "event_payload")
-	assert.Contains(t, s, "setup-agent-env.sh")
-	assert.Contains(t, s, "./.github/actions/mint-token")
-	assert.Contains(t, s, "role: triage")
+	assert.Contains(t, s, "fullsend-ai/fullsend/.github/workflows/reusable-triage.yml@v0")
 	assert.Contains(t, s, "FULLSEND_MINT_URL")
-	assert.Contains(t, s, "./.github/actions/setup-gcp")
-	assert.Contains(t, s, "./.github/actions/validate-enrollment")
-	assert.NotContains(t, s, "create-github-app-token")
-	assert.NotContains(t, s, "FULLSEND_TRIAGE_CLIENT_ID")
-	// Verify concurrency group prevents overlapping runs for same issue
+	assert.NotContains(t, s, "secrets: inherit")
+	assert.Contains(t, s, "FULLSEND_GCP_WIF_PROVIDER: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}")
+	assert.Contains(t, s, "FULLSEND_GCP_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}")
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-triage-")
 	assert.Contains(t, s, "cancel-in-progress: true")
+	// Permissions required by the reusable workflow
+	assert.Contains(t, s, "permissions:")
+	assert.Contains(t, s, "actions: write")
+	assert.Contains(t, s, "id-token: write")
+	assert.Contains(t, s, "issues: write")
+	assert.Contains(t, s, "contents: read")
 }
 
 func TestCompositeActionContent(t *testing.T) {
@@ -265,6 +334,7 @@ func TestCompositeActionContent(t *testing.T) {
 	s := string(content)
 	assert.Contains(t, s, "fullsend run")
 	assert.Contains(t, s, "openshell")
+	assert.Contains(t, s, "upload-artifact")
 }
 
 func TestCodeAgentContent(t *testing.T) {
@@ -280,22 +350,25 @@ func TestCodeWorkflowContent(t *testing.T) {
 	content, err := FullsendRepoFile(".github/workflows/code.yml")
 	require.NoError(t, err)
 	s := string(content)
+	assert.Contains(t, s, "# fullsend-stage: code")
 	assert.Contains(t, s, "workflow_dispatch")
-	assert.Contains(t, s, "pre-code.sh")
-	assert.Contains(t, s, "PUSH_TOKEN")
-	assert.Contains(t, s, "github-app")
-	assert.Contains(t, s, "./.github/actions/mint-token")
-	assert.Contains(t, s, "role: coder")
+	assert.Contains(t, s, "fullsend-ai/fullsend/.github/workflows/reusable-code.yml@v0")
 	assert.Contains(t, s, "FULLSEND_MINT_URL")
-	assert.Contains(t, s, "./.github/actions/setup-gcp")
-	assert.Contains(t, s, "./.github/actions/validate-enrollment")
-	assert.NotContains(t, s, "create-github-app-token")
-	assert.NotContains(t, s, "FULLSEND_CODER_CLIENT_ID")
+	assert.NotContains(t, s, "secrets: inherit")
+	assert.Contains(t, s, "FULLSEND_GCP_WIF_PROVIDER: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}")
+	assert.Contains(t, s, "FULLSEND_GCP_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}")
 	assert.NotContains(t, s, "GCP_WIF_SA_EMAIL")
-	// Verify concurrency group prevents overlapping runs for same issue
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-code-")
 	assert.Contains(t, s, "cancel-in-progress: true")
+	// Permissions required by the reusable workflow
+	assert.Contains(t, s, "permissions:")
+	assert.Contains(t, s, "actions: write")
+	assert.Contains(t, s, "contents: write")
+	assert.Contains(t, s, "id-token: write")
+	assert.Contains(t, s, "issues: write")
+	assert.Contains(t, s, "packages: read")
+	assert.Contains(t, s, "pull-requests: write")
 }
 
 func TestReviewWorkflowContent(t *testing.T) {
@@ -304,20 +377,21 @@ func TestReviewWorkflowContent(t *testing.T) {
 	s := string(content)
 	assert.Contains(t, s, "# fullsend-stage: review")
 	assert.Contains(t, s, "workflow_dispatch")
-	assert.Contains(t, s, "event_type")
-	assert.Contains(t, s, "source_repo")
-	assert.Contains(t, s, "event_payload")
-	assert.Contains(t, s, "./.github/actions/mint-token")
-	assert.Contains(t, s, "role: review")
+	assert.Contains(t, s, "fullsend-ai/fullsend/.github/workflows/reusable-review.yml@v0")
 	assert.Contains(t, s, "FULLSEND_MINT_URL")
-	assert.Contains(t, s, "./.github/actions/setup-gcp")
-	assert.Contains(t, s, "./.github/actions/validate-enrollment")
-	assert.NotContains(t, s, "create-github-app-token")
-	assert.NotContains(t, s, "FULLSEND_REVIEW_CLIENT_ID")
-	// Verify concurrency group prevents overlapping runs
+	assert.NotContains(t, s, "secrets: inherit")
+	assert.Contains(t, s, "FULLSEND_GCP_WIF_PROVIDER: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}")
+	assert.Contains(t, s, "FULLSEND_GCP_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}")
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-review-")
 	assert.Contains(t, s, "cancel-in-progress: true")
+	// Permissions required by the reusable workflow
+	assert.Contains(t, s, "permissions:")
+	assert.Contains(t, s, "actions: write")
+	assert.Contains(t, s, "contents: read")
+	assert.Contains(t, s, "id-token: write")
+	assert.Contains(t, s, "issues: write")
+	assert.Contains(t, s, "pull-requests: write")
 }
 
 func TestFixWorkflowContent(t *testing.T) {
@@ -326,21 +400,23 @@ func TestFixWorkflowContent(t *testing.T) {
 	s := string(content)
 	assert.Contains(t, s, "# fullsend-stage: fix")
 	assert.Contains(t, s, "workflow_dispatch")
-	assert.Contains(t, s, "event_type")
-	assert.Contains(t, s, "source_repo")
-	assert.Contains(t, s, "event_payload")
 	assert.Contains(t, s, "trigger_source")
-	assert.Contains(t, s, "./.github/actions/mint-token")
-	assert.Contains(t, s, "role: coder")
+	assert.Contains(t, s, "fullsend-ai/fullsend/.github/workflows/reusable-fix.yml@v0")
 	assert.Contains(t, s, "FULLSEND_MINT_URL")
-	assert.Contains(t, s, "./.github/actions/setup-gcp")
-	assert.Contains(t, s, "./.github/actions/validate-enrollment")
-	assert.NotContains(t, s, "create-github-app-token")
-	assert.NotContains(t, s, "FULLSEND_CODER_CLIENT_ID")
-	// Verify concurrency group prevents overlapping runs
+	assert.NotContains(t, s, "secrets: inherit")
+	assert.Contains(t, s, "FULLSEND_GCP_WIF_PROVIDER: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}")
+	assert.Contains(t, s, "FULLSEND_GCP_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}")
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-fix-")
 	assert.Contains(t, s, "cancel-in-progress: true")
+	// Permissions required by the reusable workflow
+	assert.Contains(t, s, "permissions:")
+	assert.Contains(t, s, "actions: write")
+	assert.Contains(t, s, "contents: write")
+	assert.Contains(t, s, "id-token: write")
+	assert.Contains(t, s, "issues: write")
+	assert.Contains(t, s, "packages: read")
+	assert.Contains(t, s, "pull-requests: write")
 }
 
 func TestRetroWorkflowContent(t *testing.T) {
@@ -349,18 +425,20 @@ func TestRetroWorkflowContent(t *testing.T) {
 	s := string(content)
 	assert.Contains(t, s, "# fullsend-stage: retro")
 	assert.Contains(t, s, "workflow_dispatch")
-	assert.Contains(t, s, "./.github/actions/validate-enrollment")
-	assert.Contains(t, s, "./.github/actions/mint-token")
-	assert.Contains(t, s, "role: retro")
+	assert.Contains(t, s, "fullsend-ai/fullsend/.github/workflows/reusable-retro.yml@v0")
 	assert.Contains(t, s, "FULLSEND_MINT_URL")
-	assert.Contains(t, s, ".fullsend")
-	assert.Contains(t, s, "./.github/actions/setup-gcp")
-	assert.Contains(t, s, "RETRO_TARGET_REPO_DIR: target-repo")
-	assert.NotContains(t, s, "create-github-app-token")
-	assert.NotContains(t, s, "FULLSEND_RETRO_CLIENT_ID")
+	assert.NotContains(t, s, "secrets: inherit")
+	assert.Contains(t, s, "FULLSEND_GCP_WIF_PROVIDER: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}")
+	assert.Contains(t, s, "FULLSEND_GCP_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}")
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-retro-")
 	assert.Contains(t, s, "cancel-in-progress: true")
+	// Permissions required by the reusable workflow
+	assert.Contains(t, s, "permissions:")
+	assert.Contains(t, s, "actions: write")
+	assert.Contains(t, s, "contents: read")
+	assert.Contains(t, s, "id-token: write")
+	assert.Contains(t, s, "issues: write")
 }
 
 func TestSetupGcpActionContent(t *testing.T) {
@@ -409,8 +487,11 @@ func TestValidateEnrollmentActionContent(t *testing.T) {
 	assert.Contains(t, s, "id: extract")
 	// Verify SOURCE_REPO env var wiring
 	assert.Contains(t, s, "SOURCE_REPO: ${{ inputs.source_repo }}")
-	// Verify enrollment validation script
-	assert.Contains(t, s, "validate-source-repo.sh")
+	// Verify enrollment validation is inlined (not a script reference that
+	// could be overwritten by customized/scripts/).
+	assert.NotContains(t, s, "validate-source-repo.sh")
+	assert.Contains(t, s, "config.yaml not found")
+	assert.Contains(t, s, "repo is not enabled in config.yaml")
 }
 
 func TestValidateSourceRepoContent(t *testing.T) {
@@ -498,7 +579,7 @@ func TestHarnessesLoadAndValidate(t *testing.T) {
 	// harness validation errors (e.g., missing fields, invalid combinations)
 	// the same way the runner would at startup.
 	dir := t.TempDir()
-	err := WalkFullsendRepo(func(path string, content []byte) error {
+	err := WalkFullsendRepoAll(func(path string, content []byte) error {
 		dest := filepath.Join(dir, path)
 		if mkErr := os.MkdirAll(filepath.Dir(dest), 0o755); mkErr != nil {
 			return mkErr
@@ -541,11 +622,15 @@ func TestRepoMaintenanceWorkflowContent(t *testing.T) {
 		"push trigger must include workflow_call shim template so changes propagate to enrolled repos")
 	assert.NotContains(t, s, "templates/shim-workflow.yaml",
 		"PAT shim template reference should be removed")
-	assert.Contains(t, s, "./.github/actions/mint-token")
+	assert.Contains(t, s, "fullsend-ai/fullsend/.github/actions/mint-token@v0")
+	assert.Contains(t, s, "Checkout upstream scripts")
+	assert.Contains(t, s, "Prepare scripts")
+	assert.Contains(t, s, "customized/scripts")
 	assert.Contains(t, s, "role: fullsend")
 	assert.Contains(t, s, "id-token: write")
 	assert.NotContains(t, s, "create-github-app-token")
 	assert.NotContains(t, s, "FULLSEND_FULLSEND_CLIENT_ID")
+	assert.NotContains(t, s, "./.github/actions/")
 }
 
 func TestMintTokenActionContent(t *testing.T) {
@@ -595,13 +680,17 @@ func TestPrioritizeWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "mkdir -p target-repo")
 	assert.Contains(t, s, "GITHUB_ISSUE_URL")
 	assert.Contains(t, s, "fromJSON(inputs.event_payload)")
-	assert.Contains(t, s, "./.github/actions/mint-token")
+	assert.Contains(t, s, "fullsend-ai/fullsend/.github/actions/mint-token@v0")
 	assert.Contains(t, s, "role: prioritize")
 	assert.Contains(t, s, "FULLSEND_MINT_URL")
-	assert.Contains(t, s, "./.github/actions/setup-gcp")
-	assert.Contains(t, s, "./.github/actions/validate-enrollment")
+	assert.Contains(t, s, "fullsend-ai/fullsend/.github/actions/setup-gcp@v0")
+	assert.Contains(t, s, "fullsend-ai/fullsend/.github/actions/validate-enrollment@v0")
+	assert.Contains(t, s, "Checkout upstream defaults")
+	assert.Contains(t, s, "Prepare workspace")
+	assert.Contains(t, s, "customized/")
 	assert.NotContains(t, s, "create-github-app-token")
 	assert.NotContains(t, s, "FULLSEND_PRIORITIZE_CLIENT_ID")
+	assert.NotContains(t, s, "./.github/actions/")
 }
 
 func TestPrioritizeSchedulerWorkflowContent(t *testing.T) {
@@ -621,11 +710,12 @@ func TestPrioritizeSchedulerWorkflowContent(t *testing.T) {
 	require.NotEqual(t, -1, guardIndex)
 	require.NotEqual(t, -1, projectViewIndex)
 	assert.Less(t, guardIndex, projectViewIndex, "PROJECT_NUMBER must be checked before gh project view")
-	assert.Contains(t, s, "./.github/actions/mint-token")
+	assert.Contains(t, s, "fullsend-ai/fullsend/.github/actions/mint-token@v0")
 	assert.Contains(t, s, "role: fullsend")
 	assert.Contains(t, s, "id-token: write")
 	assert.NotContains(t, s, "create-github-app-token")
 	assert.NotContains(t, s, "FULLSEND_FULLSEND_CLIENT_ID")
+	assert.NotContains(t, s, "./.github/actions/")
 }
 
 func TestPrioritizeSchedulerSkipsWhenProjectNumberUnset(t *testing.T) {

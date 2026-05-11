@@ -565,20 +565,27 @@ func (h *Handler) prevalidateOIDCToken(token string) (*oidcClaims, error) {
 		return nil, fmt.Errorf("repository_owner not in allowed orgs")
 	}
 
-	// Validate job_workflow_ref — only .fullsend workflows can request tokens.
-	// Use claims.RepositoryOwner (just validated against ALLOWED_ORGS) for the
-	// prefix check to ensure the workflow belongs to the caller's own .fullsend repo.
+	// Validate job_workflow_ref — only .fullsend or upstream fullsend-ai/fullsend
+	// workflows can request tokens. When reusable workflows are called via
+	// workflow_call, the OIDC job_workflow_ref reflects the reusable workflow's
+	// repo (fullsend-ai/fullsend), not the caller's (.fullsend).
 	if claims.JobWorkflowRef == "" {
 		return nil, fmt.Errorf("missing job_workflow_ref claim")
 	}
 	ref := strings.ToLower(claims.JobWorkflowRef)
-	expectedPrefix := strings.ToLower(claims.RepositoryOwner) + "/.fullsend/"
-	if !strings.HasPrefix(ref, expectedPrefix) {
-		return nil, fmt.Errorf("job_workflow_ref does not reference .fullsend repo")
+	configPrefix := strings.ToLower(claims.RepositoryOwner) + "/.fullsend/"
+	upstreamPrefix := "fullsend-ai/fullsend/"
+	var relPath string
+	switch {
+	case strings.HasPrefix(ref, configPrefix):
+		relPath = strings.TrimPrefix(ref, configPrefix)
+	case strings.HasPrefix(ref, upstreamPrefix):
+		relPath = strings.TrimPrefix(ref, upstreamPrefix)
+	default:
+		return nil, fmt.Errorf("job_workflow_ref does not reference .fullsend or upstream repo")
 	}
 
-	// Extract the workflow file path relative to .fullsend/ (before @ref).
-	relPath := strings.TrimPrefix(ref, expectedPrefix)
+	// Extract the workflow file path (before @ref).
 	if atIdx := strings.Index(relPath, "@"); atIdx > 0 {
 		relPath = relPath[:atIdx]
 	}

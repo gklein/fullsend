@@ -32,9 +32,33 @@ jobs:
           fi
           echo "names=$REPOS" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout upstream scripts
+        uses: actions/checkout@v6
+        with:
+          repository: fullsend-ai/fullsend
+          ref: v1
+          path: .defaults
+          sparse-checkout: |
+            internal/scaffold/fullsend-repo/scripts/
+
+      - name: Prepare scripts
+        run: |
+          set -euo pipefail
+          mkdir -p scripts
+          cp -rP ".defaults/internal/scaffold/fullsend-repo/scripts/." scripts/
+          if [[ -d "customized/scripts" ]]; then
+            find "customized/scripts" -type f ! -name '.gitkeep' -print0 \
+              | while IFS= read -r -d '' f; do
+                  rel="${f#customized/}"
+                  mkdir -p "$(dirname "${rel}")"
+                  cp "${f}" "${rel}"
+                done
+          fi
+          rm -rf .defaults
+
       - name: Mint fullsend token
         id: app-token
-        uses: ./.github/actions/mint-token
+        uses: fullsend-ai/fullsend/.github/actions/mint-token@v0
         with:
           role: fullsend
           repos: ${{ steps.repo-list.outputs.names }}
