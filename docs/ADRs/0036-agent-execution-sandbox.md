@@ -1,5 +1,5 @@
 ---
-title: "29. Agent Execution Sandbox Architecture"
+title: "36. Agent Execution Sandbox Architecture"
 status: Proposed
 relates_to:
   - agent-infrastructure
@@ -11,7 +11,7 @@ topics:
   - openshell
 ---
 
-# 29. Agent Execution Sandbox Architecture
+# 36. Agent Execution Sandbox Architecture
 
 Date: 2026-05-05
 
