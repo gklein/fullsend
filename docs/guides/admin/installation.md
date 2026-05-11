@@ -13,7 +13,13 @@ This guide walks through installing fullsend in a GitHub organization and enroll
 
   *Note*: If running from a local clone of the repository use `go run ./cmd/fullsend/main.go <command>`
 
-- **GCP project** with the [Vertex AI API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) enabled
+- **GCP project** with the following APIs enabled:
+  - [Vertex AI](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) (inference)
+  - [Cloud Functions](https://console.cloud.google.com/apis/library/cloudfunctions.googleapis.com) (token mint)
+  - [Cloud Run](https://console.cloud.google.com/apis/library/run.googleapis.com) (token mint runtime)
+  - [Secret Manager](https://console.cloud.google.com/apis/library/secretmanager.googleapis.com) (PEM storage)
+  - [IAM Credentials](https://console.cloud.google.com/apis/library/iamcredentials.googleapis.com) (WIF token exchange)
+  - [Cloud Resource Manager](https://console.cloud.google.com/apis/library/cloudresourcemanager.googleapis.com) (project number lookup)
 
 ### OAuth scope reference
 
@@ -23,10 +29,10 @@ The table below lists every scope the installer may request and why. You are nev
 |-------|-------------|-----|
 | `repo` | install, analyze | Read/write repository contents, manage repo-level secrets |
 | `workflow` | install | Create and update GitHub Actions workflow files in `.github/workflows/` |
-| `admin:org` | install, uninstall, analyze | Manage organization-level Actions secrets (the dispatch token) |
+| `admin:org` | install, uninstall, analyze | Manage organization-level Actions variables (the mint URL) |
 | `delete_repo` | uninstall | Delete the `.fullsend` config repository |
 
-The default region is `global`. For a list of all available regions, see the [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions).
+The `--gcp-region` flag is required when `--gcp-project` is set. Use `global` for the broadest model availability. For a list of all available regions, see the [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions).
 
 ## 1. Set up GCP authentication
 
@@ -134,7 +140,7 @@ During installation, you'll be prompted to choose repository enrollment:
 - **[a] Enroll all repositories** — immediately enrolls all org repos (excluding `.fullsend`)
 - **[n] Enroll no repositories** — skip enrollment during install; enroll repositories later using `fullsend admin enable repos`
 
-Near the end, the installer opens a browser to create a fine-grained personal access token (dispatch token). When creating it, make sure to grant **Actions: Read and write** permission scoped to the `.fullsend` repository — otherwise the verification step will fail with a 404.
+The installer creates the `.fullsend` config repo as **public** by default. This is required for cross-repo `workflow_call` to work with enrolled repos of any visibility (public, private, or internal) across all GitHub plan tiers. If an admin later makes `.fullsend` private, only other private repos in the org will be able to trigger agent workflows — public and internal repos will fail silently.
 
 If the installer fails partway through, run `fullsend admin uninstall "$ORG_NAME"` to clean up before retrying. The uninstall preflight will prompt you to add the `delete_repo` scope if it is missing.
 
@@ -145,8 +151,56 @@ fullsend admin install "$ORG_NAME" \
   --gcp-project "$GCP_PROJECT" \
   --gcp-region global \
   --gcp-wif-provider "$WIF_PROVIDER" \
-  --gcp-wif-sa-email "$WIF_SA_EMAIL"
+  --gcp-wif-sa-email "$WIF_SA_EMAIL" \
+  --mint-project "$GCP_PROJECT"
 ```
+
+`--mint-project` specifies the GCP project where the OIDC token mint Cloud Function is deployed. It can be the same project as `--gcp-project` or a separate project. The installer automatically provisions a Cloud Function, WIF pool (`fullsend-pool`), WIF provider (`github-oidc`), and Secret Manager secrets in the mint project. A service account (`fullsend-dispatch`) is also created as the Cloud Function's runtime identity to access Secret Manager — this is internal infrastructure and does not require any admin setup.
+
+Additional mint flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--mint-region` | `us-central1` | Cloud region for the token mint function |
+| `--mint-url` | | Use an existing mint at this URL instead of deploying one |
+| `--public` | `false` | Create public unlisted GitHub Apps (for multi-org) |
+| `--skip-mint-deploy` | `false` | Skip Cloud Function deployment, reuse existing mint URL |
+| `--force-mint-deploy` | `false` | Force Cloud Function redeployment even if unchanged |
+
+`--skip-mint-deploy` and `--force-mint-deploy` are mutually exclusive.
+
+### Multi-org setup
+
+A single token mint can serve multiple GitHub organizations. The first org deploys the mint infrastructure and creates **public unlisted** GitHub Apps; additional orgs reuse the existing mint and install the same apps.
+
+**First org (deploys mint + creates public apps):**
+
+```bash
+fullsend admin install "$FIRST_ORG" \
+  --gcp-project "$GCP_PROJECT" \
+  --gcp-region global \
+  --gcp-wif-provider "$WIF_PROVIDER" \
+  --gcp-wif-sa-email "$WIF_SA_EMAIL" \
+  --mint-project "$GCP_PROJECT" \
+  --public
+```
+
+The `--public` flag creates GitHub Apps as public unlisted — they won't appear in the marketplace but can be installed by other organizations via their installation URL.
+
+**Additional orgs (reuse existing mint):**
+
+```bash
+fullsend admin install "$ADDITIONAL_ORG" \
+  --gcp-project "$GCP_PROJECT" \
+  --gcp-region global \
+  --gcp-wif-provider "$WIF_PROVIDER" \
+  --gcp-wif-sa-email "$WIF_SA_EMAIL" \
+  --mint-url "$MINT_URL"
+```
+
+`--mint-url` skips Cloud Function deployment and stores PEMs in the existing mint's GCP project. Since PEMs use role-only naming (`fullsend-{role}-app-pem`), additional orgs with public apps require **zero Secret Manager work** — the PEMs are already stored and shared across orgs.
+
+> **Note:** Multi-org with `--public` requires all orgs to share the same GitHub Apps. Private apps (the default) are single-org only.
 
 **With SA key (legacy):**
 
@@ -154,7 +208,8 @@ fullsend admin install "$ORG_NAME" \
 fullsend admin install "$ORG_NAME" \
   --gcp-project "$GCP_PROJECT" \
   --gcp-region global \
-  --gcp-credentials-file sa-key.json
+  --gcp-credentials-file sa-key.json \
+  --mint-project "$GCP_PROJECT"
 rm sa-key.json
 ```
 
@@ -170,11 +225,12 @@ If you already have fullsend installed with a service account key:
      --gcp-project "$GCP_PROJECT" \
      --gcp-region global \
      --gcp-wif-provider "$WIF_PROVIDER" \
-     --gcp-wif-sa-email "$WIF_SA_EMAIL"
+     --gcp-wif-sa-email "$WIF_SA_EMAIL" \
+     --mint-project "$GCP_PROJECT"
    ```
 3. Verify a workflow run succeeds with WIF auth (check for "Authenticated using Workload Identity Federation" in the auth step output)
 4. Delete the old SA key: `gcloud iam service-accounts keys delete <KEY_ID> --iam-account=...`
-5. Remove the `FULLSEND_GCP_SA_KEY_JSON` secret from the `.fullsend` repo settings
+5. Remove the `FULLSEND_GCP_SA_KEY_JSON` secret from the `.fullsend` repo settings once the scaffolded agent workflows have been updated to use WIF (re-running `fullsend admin install` with `--skip-app-setup` updates the workflows)
 
 ## 3. Merge enrollment PRs
 

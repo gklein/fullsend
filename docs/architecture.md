@@ -38,9 +38,9 @@ Infrastructure platform choice and configuration are specified in the adopting o
 **Decided:**
 
 - Forge abstraction: all forge operations go through the `forge.Client` interface, keeping the rest of the codebase forge-agnostic ([ADR 0005](ADRs/0005-forge-abstraction-layer.md)).
-- Installation model: ordered layer stack (install forward, uninstall reverse, analyze for status reporting) with idempotent operations. Current stack: config-repo → workflows → secrets → inference → dispatch-token → enrollment ([ADR 0006](ADRs/0006-ordered-layer-model.md)).
-- Cross-repo dispatch: per-role `workflow_dispatch` workflows (`triage.yml`, `code.yml`, `review.yml`) with an org-level dispatch token, keeping App PEM secrets in the config repo ([ADR 0008](ADRs/0008-workflow-dispatch-for-cross-repo-dispatch.md)).
-- Shim workflow security: `pull_request_target` prevents PR authors from modifying the shim to exfiltrate the dispatch token ([ADR 0009](ADRs/0009-pull-request-target-in-shim-workflows.md)).
+- Installation model: ordered layer stack (install forward, uninstall reverse, analyze for status reporting) with idempotent operations. Current stack: config-repo → workflows → secrets → inference → dispatch → enrollment ([ADR 0006](ADRs/0006-ordered-layer-model.md)).
+- Cross-repo dispatch: enrolled repos call `.fullsend` via `workflow_call`; a dispatch workflow mints OIDC tokens exchanged at a central token mint (GCP Cloud Function) for scoped GitHub App installation tokens per agent role. App PEM secrets are stored in Secret Manager, not the config repo ([ADR 0008](ADRs/0008-workflow-dispatch-for-cross-repo-dispatch.md)).
+- Shim workflow security: `pull_request_target` prevents PR authors from modifying the shim workflow. No long-lived secrets flow through the shim — OIDC tokens are issued by the GitHub runtime and scoped to the workflow run ([ADR 0009](ADRs/0009-pull-request-target-in-shim-workflows.md)).
 - Repo maintenance: a workflow in `.fullsend` (`.github/workflows/repo-maintenance.yml`) reconciles enrollment shims in target repos when `config.yaml` changes or on manual dispatch. The CLI's `EnrollmentLayer.Install()` dispatches this workflow via `workflow_dispatch` and monitors it for completion, then reports any enrollment PRs created in target repos.
 - Installer scaffold: the `WorkflowsLayer` deploys content from an embedded scaffold (`internal/scaffold/`), keeping deployable files as real files under version control rather than Go string constants.
 
@@ -112,7 +112,7 @@ Identity is not the same as trust. An agent's identity lets it authenticate to e
 **Decided:**
 
 - Credential delivery model: four tiers — (1) prefetch + post-process for agents with enumerable inputs (zero credential access), (2) OpenShell providers + L7 egress policies for static token auth (credentials never enter sandbox), (3) host-side REST server for request-body credential injection or response transformation, (4) host files + L7 policies for complex auth requiring in-sandbox credential files. L7 policies enforce both method + path and binary-level restrictions. Providers are preferred over REST servers when viable ([ADR 0017](ADRs/0017-credential-isolation-for-sandboxed-agents.md), extended by [ADR 0025](ADRs/0025-provider-credential-delivery-for-sandboxed-agents.md)).
-- Per-role GitHub Apps with manifest-based creation. Each agent role gets its own app with scoped permissions. PEMs stored as repo secrets on `.fullsend` ([ADR 0007](ADRs/0007-per-role-github-apps.md)).
+- Per-role GitHub Apps with manifest-based creation. Each agent role gets its own app with scoped permissions. PEMs stored in Secret Manager as `fullsend-{role}-app-pem` — role-only naming so one PEM per role is shared across all orgs in a GCP project ([ADR 0007](ADRs/0007-per-role-github-apps.md)).
 
 One concrete implementation option is [`oidcx`](https://github.com/oxidecomputer/oidcx): a service that accepts OIDC identity tokens and exchanges them for short-lived access tokens. It can mint tokens scoped to selected GitHub repositories and permissions, or to selected Oxide silos and permissions, and it also ships with a GitHub Action wrapper. In a Fullsend deployment, this can be used by the sandbox entrypoint to narrow a broad GitHub App identity down to only the specific permissions an agent needs for the current run.
 
@@ -496,14 +496,23 @@ The same wrapping structure, with each layer mapped to its concrete technology.
 ```
 GitHub event ──► SHIM WORKFLOW (fullsend.yml in enrolled repo)
                  Evaluates dispatch conditions (event type, labels, /slash commands).
-                 Sends workflow_dispatch to .fullsend repo via FULLSEND_DISPATCH_TOKEN.
+                 Calls workflow_call to .fullsend repo (dispatch.yml).
                        │
                        ▼
                  ╔═══════════════════════════════════════════════════════════════╗
-                 ║ GITHUB ACTIONS JOB (.fullsend repo, e.g. code.yml)            ║
+                 ║ DISPATCH WORKFLOW (.fullsend repo, dispatch.yml)              ║
+                 ║                                                               ║
+                 ║ Mints OIDC token → Cloud Function (token mint) → scoped      ║
+                 ║ GitHub App installation token per agent role.                  ║
+                 ║ Dispatches per-role agent workflows (code.yml, triage.yml).   ║
+                 ╚═══════════════════════════════════════════════════════════════╝
+                       │
+                       ▼
+                 ╔═══════════════════════════════════════════════════════════════╗
+                 ║ AGENT WORKFLOW (.fullsend repo, e.g. code.yml)               ║
                  ║                                                               ║
                  ║ Validates source repo is enrolled in config.yaml.             ║
-                 ║ Generates scoped GitHub App tokens:                           ║
+                 ║ Uses scoped GitHub App tokens:                                ║
                  ║   read-only token → enters sandbox (clone, read issues)       ║
                  ║   read-write token → stays on runner (push, create PR)        ║
                  ║ Checks out .fullsend repo + target repo.                      ║
@@ -582,7 +591,7 @@ GitHub event ──► SHIM WORKFLOW (fullsend.yml in enrolled repo)
 
 | Abstract layer | MVP technology | ADR |
 |---|---|---|
-| Dispatcher | Shim workflow (`fullsend.yml`) in enrolled repo → `workflow_dispatch` to `.fullsend` | [ADR 0008](ADRs/0008-workflow-dispatch-for-cross-repo-dispatch.md) |
+| Dispatcher | Shim workflow (`fullsend.yml`) in enrolled repo → `workflow_call` to `.fullsend/dispatch.yml` → OIDC mint → per-role agent workflows | [ADR 0008](ADRs/0008-workflow-dispatch-for-cross-repo-dispatch.md) |
 | Agent runner | GitHub Actions job → `fullsend run` CLI (via `.github/actions/fullsend` composite action) | |
 | Harness store | YAML files in `.fullsend/harness/` (e.g. `code.yaml`, `triage.yaml`) | |
 | Sandbox | OpenShell with per-agent L7 network policies (endpoint + binary restrictions) | |
