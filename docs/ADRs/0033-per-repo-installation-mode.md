@@ -37,7 +37,7 @@ Three ADRs and the implementation in PR 792 create the building blocks that make
 
 - [ADR 0029](0029-central-token-mint-secretless-fullsend.md) replaces PEM secrets and dispatch PATs with OIDC-based credential issuance via a central token mint. The `mint-token` composite action takes a role name (triage, coder, review, fix) and returns a scoped GitHub App installation token — no PEMs or client IDs in the calling repo.
 - [ADR 0031](0031-reusable-workflows-for-action-installed-distribution.md) publishes five reusable workflows (`reusable-triage.yml`, `reusable-code.yml`, `reusable-review.yml`, `reusable-fix.yml`, `reusable-retro.yml`) and four composite actions (`fullsend`, `mint-token`, `validate-enrollment`, `setup-gcp`) from `fullsend-ai/fullsend`, enabling any repo to call fullsend infrastructure via `workflow_call` without copying workflow files. Scaffold stage workflows in `.fullsend` are now thin callers (41–66 lines) that delegate to these reusable workflows.
-- [ADR 0034](0034-centralized-event-routing.md) centralizes event-to-stage routing in `dispatch.yml` within the `.fullsend` config repo. The enrolled-repo shim (~70 lines) forwards raw event context to `dispatch.yml` via `workflow_call`; `dispatch.yml` (~370 lines) determines the stage, mints an OIDC dispatch token, validates the stage, checks the kill switch, and dispatches to the matching thin caller via `gh workflow run`. Adding a new stage requires only a case branch in `dispatch.yml` — zero changes to enrolled repos.
+- [ADR 0034](0034-centralized-shim-routing-via-dispatch.md) centralizes event-to-stage routing in `dispatch.yml` within the `.fullsend` config repo. The enrolled-repo shim (~70 lines) forwards raw event context to `dispatch.yml` via `workflow_call`; `dispatch.yml` (~370 lines) determines the stage, mints an OIDC dispatch token, validates the stage, checks the kill switch, and dispatches to the matching thin caller via `gh workflow run`. Adding a new stage requires only a case branch in `dispatch.yml` — zero changes to enrolled repos.
 - [ADR 0035](0035-layered-content-resolution.md) introduces layered content resolution: upstream defaults (agents, skills, schemas, harness, policies, scripts) are sparse-checked from `fullsend-ai/fullsend` at runtime, then org overrides from `customized/` are copied on top. The scaffold installs only org-specific files (~23 files instead of ~68).
 
 The per-org flow after PR 792:
@@ -64,7 +64,7 @@ Run `fullsend admin install` targeting a single repo instead of an org. Copy all
 
 Use one GitHub App for triage, code, review, and fix roles to simplify per-repo setup.
 
-**Rejected**: GitHub suppresses `pull_request_target` events when the triggering token belongs to the same App that owns the workflow. The fix→review loop requires the coder/fix agent to push commits that trigger review — if both roles share one App, the event is silently suppressed and the feedback cycle breaks. At minimum, coder and review must be separate Apps.
+**Rejected**: GitHub suppresses events triggered by pushes made with any `GITHUB_TOKEN` or GitHub App installation token, to prevent infinite loops. Two separate Apps work because a push made with App-A's token _does_ generate events that trigger workflows authenticated as App-B. The fix→review loop requires the coder/fix agent to push commits that trigger review — if both roles share one App, the push token matches the workflow's App and the event is silently suppressed, breaking the feedback cycle. At minimum, coder and review must be separate Apps.
 
 ### Alternative 3: Per-repo as a separate codebase
 
@@ -162,6 +162,8 @@ fullsend-ai/fullsend defaults  <  .fullsend/customized/  <  AGENTS.md
 ```
 
 The org-level `.fullsend` config repo tier is skipped — the in-repo `.fullsend/` directory serves as the config workspace. The reusable workflows' "Prepare workspace" step is parameterized by root directory: `.` for per-org (the `.fullsend` repo checkout), `.fullsend/` for per-repo. In both modes, it sparse-checkouts upstream defaults into `{root}/agents/`, `{root}/skills/`, etc., then copies `{root}/customized/*` on top — identical code path, different root.
+
+**Git ref for config reads**: In per-repo mode, `.fullsend/`, `AGENTS.md`, and `.github/workflows/fullsend.yml` are always read from the **base branch** (the default branch of the repository), not the PR head branch. This is enforced by `pull_request_target`, which checks out the base branch by default. The reusable workflows do not check out the PR head ref for config or agent instructions — only the target repo's source code is checked out from the PR head for the agent to operate on. This prevents PR authors from injecting modified agent instructions, policies, or workflow files via their PR — the project's #1 threat category (external prompt injection).
 
 ### 4. The `reusable-dispatch.yml` workflow
 
@@ -289,17 +291,24 @@ Migration between models is straightforward:
 - **Org admin still needed for App installation**: While per-repo removes the need for org admin to run `fullsend admin install`, an org admin must still approve the GitHub App installation on the repo.
 - **Config governance weaker**: In per-org, agent config lives in a separate repo with its own CODEOWNERS. In per-repo, `.fullsend/` config lives alongside code — a code contributor could modify agent behavior in a PR (mitigated by CODEOWNERS on `.fullsend/` and base-branch checkout).
 - **No centralized policy**: Per-repo users set their own policies. An org cannot enforce uniform agent behavior across independently-installed repos.
+- **Credential separation collapses**: In per-org mode (ADR 0008), the dispatch PAT only grants `actions:write` on `.fullsend` — enrolled repos can trigger dispatch but never access PEM secrets. In per-repo mode, the repo that triggers workflows IS the repo holding secrets (WIF provider, SA key, or GCP project ID), eliminating this credential separation. A compromised repo contributor with write access could potentially access secrets stored at the repo level. The token mint mitigates this partially — PEMs remain in Secret Manager, not in the repo — but repo-level secrets (`FULLSEND_GCP_WIF_PROVIDER`, `FULLSEND_GCP_PROJECT_ID`) are still co-located with the code.
 - **Self-managed profile increases burden**: Users who opt for self-managed (own mint + own Apps) manage their own App PEM rotation and GCP Secret Manager project. The SaaS profile avoids this entirely.
 
 ### Risks
 
-- **`pull_request_target` misconfiguration**: Per-repo workflows MUST use `pull_request_target` (not `pull_request`) to prevent PR authors from modifying the workflow to exfiltrate secrets. The workflow template enforces this, but users could edit it.
+Ordered by the project's threat priority (external injection > insider > drift > supply chain):
+
+- **External injection — `pull_request_target` misconfiguration**: Per-repo workflows MUST use `pull_request_target` (not `pull_request`) to prevent PR authors from modifying the workflow to exfiltrate secrets. In per-repo mode, the workflow file lives in the same repo as the code — unlike per-org where the shim is pushed by the orchestrator app. A contributor with write access could change `pull_request_target` to `pull_request` in a PR, and if that PR is merged, subsequent PRs could exfiltrate secrets. The workflow template enforces `pull_request_target`, but users could edit it.
+- **External injection — untrusted code checkout**: `pull_request_target` triggers reusable workflows that check out and execute against the PR's head ref for source code — the classic "pwn request" surface. This is distinct from workflow modification risk: even with the correct trigger, the agent sandbox executes untrusted code from the PR. The agent sandbox, restricted tool permissions, and base-branch-only config reads (see Config layering) mitigate this surface.
+- **Insider — workflow and config modification**: In per-repo mode, `.github/workflows/fullsend.yml` and `.fullsend/` live alongside code. A contributor with write access could modify agent behavior, sandbox policies, or the workflow trigger in a PR. Without CODEOWNERS protection, these changes could be merged by any approver.
 - **`event_payload` size**: Per-org's `dispatch.yml` builds a minimal payload from `$GITHUB_EVENT_PATH` (extracting only `issue`, `pull_request`, and `comment` fields), avoiding the 65KB `workflow_call` input limit. Per-repo's shim forwards `event_action` via `workflow_call` and `reusable-dispatch.yml` reads remaining context from `github.event.*` expressions, following the same pattern. Large PR event payloads are unlikely to be an issue since the shim does not pass the full payload as an input.
 - **App identity confusion**: Users unfamiliar with the fix→review loop requirement may attempt a single-App setup and get silent failures (no review triggered after fix pushes).
 
 ### Mitigations
 
-- **Template validation**: `fullsend admin install` generates the workflow file with `pull_request_target` — users who modify it are warned in documentation. CODEOWNERS on `.github/workflows/fullsend.yml` prevents unauthorized changes.
+- **CODEOWNERS on workflow and config**: `fullsend admin install` should add CODEOWNERS entries protecting `.github/workflows/fullsend.yml` and `.fullsend/` so that changes to the workflow trigger, agent config, and sandbox policies require approval from designated owners. This is the primary defense against both workflow misconfiguration and insider modification of agent behavior. In per-org mode, the `.fullsend` config repo has its own CODEOWNERS; per-repo must replicate this governance at the file level.
+- **Base-branch config reads**: Reusable workflows read `.fullsend/`, `AGENTS.md`, and workflow files from the base branch only (enforced by `pull_request_target`). PR authors cannot inject modified agent instructions or policies via their PR.
+- **Template validation**: `fullsend admin install` generates the workflow file with `pull_request_target`. Users who modify it are warned in documentation.
 - **Minimal payload**: Following per-org `dispatch.yml`, `reusable-dispatch.yml` reads event context from `github.event.*` expressions (available in `workflow_call` callee context) rather than passing the full payload as an input.
 - **Clear error messages**: Credential auto-detection reports why coder and review Apps must be separate, with a link to setup documentation.
 - **Migration path**: Per-repo users who outgrow the model can migrate to per-org without changing agent behavior — the same reusable workflows power both modes.
@@ -329,5 +338,5 @@ Migration between models is straightforward:
 - [ADR 0026: Stage-based dispatch](0026-stage-based-dispatch-for-agent-workflow-decoupling.md) — stage model preserved in reusable workflows
 - [ADR 0029: Central token mint](0029-central-token-mint-secretless-fullsend.md) — default credential model for per-repo
 - [ADR 0031: Reusable workflows](0031-reusable-workflows-for-action-installed-distribution.md) — publishes stage reusable workflows and composite actions
-- [ADR 0034: Centralized event routing](0034-centralized-event-routing.md) — routing logic in `dispatch.yml`, replicated as `reusable-dispatch.yml` for per-repo
+- [ADR 0034: Centralized event routing](0034-centralized-shim-routing-via-dispatch.md) — routing logic in `dispatch.yml`, replicated as `reusable-dispatch.yml` for per-repo
 - [ADR 0035: Layered content resolution](0035-layered-content-resolution.md) — upstream defaults sparse-checked at runtime, overrides via `customized/` (per-org) or `.fullsend/` (per-repo)
