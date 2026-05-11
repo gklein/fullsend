@@ -117,6 +117,23 @@ func getRepoCreatedAt(ctx context.Context, token, org, repo string) (time.Time, 
 	return result.CreatedAt, nil
 }
 
+// e2eDispatcher is a no-op dispatch.Dispatcher for e2e tests. It returns a
+// dummy mint URL so the OIDC dispatch layer can create org variables without
+// provisioning real cloud infrastructure.
+type e2eDispatcher struct{}
+
+func (d *e2eDispatcher) Name() string { return "e2e-test" }
+
+func (d *e2eDispatcher) Provision(_ context.Context) (map[string]string, error) {
+	return map[string]string{"FULLSEND_MINT_URL": "https://e2e-test.example.com/mint"}, nil
+}
+
+func (d *e2eDispatcher) StoreAgentPEM(_ context.Context, _ string, _ []byte) error { return nil }
+
+func (d *e2eDispatcher) OrgSecretNames() []string { return nil }
+
+func (d *e2eDispatcher) OrgVariableNames() []string { return []string{"FULLSEND_MINT_URL"} }
+
 // retryOnNotFound retries an operation up to maxAttempts times with exponential
 // backoff when it returns a not-found error (GitHub eventual consistency).
 func retryOnNotFound(ctx context.Context, maxAttempts int, fn func() error) error {

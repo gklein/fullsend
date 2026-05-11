@@ -5,12 +5,17 @@
 package appsetup
 
 import (
+	"bufio"
 	"context"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"html"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -37,6 +42,7 @@ type AppCredentials struct {
 type Prompter interface {
 	WaitForEnter(prompt string) error
 	Confirm(prompt string) (bool, error)
+	ReadLine(prompt string) (string, error)
 }
 
 // BrowserOpener opens URLs in the user's browser.
@@ -98,6 +104,18 @@ func (StdinPrompter) Confirm(prompt string) (bool, error) {
 	return input == "" || input == "y" || input == "yes", nil
 }
 
+func (StdinPrompter) ReadLine(prompt string) (string, error) {
+	fmt.Print(prompt)
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("no input provided")
+	}
+	return strings.TrimSpace(scanner.Text()), nil
+}
+
 // Setup orchestrates the creation or reuse of GitHub Apps for agent roles.
 type Setup struct {
 	client       forge.Client
@@ -108,6 +126,7 @@ type Setup struct {
 	secretExists SecretExistsFunc
 	storeSecret  StoreSecretFunc
 	permErrors   []string
+	publicApps   bool
 }
 
 // NewSetup creates a new Setup instance.
@@ -141,6 +160,13 @@ func (s *Setup) WithStoreSecret(fn StoreSecretFunc) *Setup {
 	return s
 }
 
+// WithPublicApps sets whether created apps should be public (unlisted).
+// Public apps can be installed by any org via URL.
+func (s *Setup) WithPublicApps(public bool) *Setup {
+	s.publicApps = public
+	return s
+}
+
 // Run creates or reuses a GitHub App for the given org and role.
 //
 // The flow:
@@ -152,7 +178,7 @@ func (s *Setup) WithStoreSecret(fn StoreSecretFunc) *Setup {
 //  5. If not found, run the manifest flow to create a new app.
 //  6. After creation, store the PEM immediately, then install on the org.
 func (s *Setup) Run(ctx context.Context, org, role string) (*AppCredentials, error) {
-	slug := ExpectedAppSlug(org, role)
+	slug := AppSlug(role)
 	s.ui.StepStart(fmt.Sprintf("Checking for existing app: %s", slug))
 
 	inst, found, err := s.findExistingInstallation(ctx, org, role, slug)
@@ -279,6 +305,100 @@ func (s *Setup) findExistingInstallation(
 	return nil, false, nil
 }
 
+// ValidateRSAPEM checks that data contains a valid RSA private key in PEM format.
+func ValidateRSAPEM(data []byte) error {
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return fmt.Errorf("no PEM block found in data")
+	}
+	if _, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return nil
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("not a valid RSA private key (tried PKCS#1 and PKCS#8)")
+	}
+	if _, ok := key.(*rsa.PrivateKey); !ok {
+		return fmt.Errorf("PEM contains a %T key, expected RSA", key)
+	}
+	return nil
+}
+
+// recoverPEM guides the user through providing or generating a private key
+// for an existing GitHub App whose key is missing from Secret Manager.
+func (s *Setup) recoverPEM(ctx context.Context, org, slug, role string) (string, error) {
+	s.ui.StepInfo(fmt.Sprintf("App %s exists but its private key is missing.", slug))
+
+	hasKey, err := s.prompter.Confirm("Do you already have the .pem file?")
+	if err != nil {
+		return "", fmt.Errorf("prompting for existing key: %w", err)
+	}
+
+	if !hasKey {
+		generate, err := s.prompter.Confirm("Open GitHub to generate a new key?")
+		if err != nil {
+			return "", fmt.Errorf("prompting for key generation: %w", err)
+		}
+		if !generate {
+			return "", nil
+		}
+
+		settingsURL := fmt.Sprintf(
+			"https://github.com/organizations/%s/settings/apps/%s", org, slug)
+		s.ui.StepInfo("Opening app settings page...")
+		s.ui.StepInfo(fmt.Sprintf("URL: %s", settingsURL))
+		s.ui.StepInfo("Scroll to 'Private keys' and click 'Generate a private key'.")
+		s.ui.StepInfo("Save the downloaded .pem file and provide the path below.")
+
+		if err := s.browser.Open(ctx, settingsURL); err != nil {
+			s.ui.StepWarn(fmt.Sprintf("Could not open browser: %v", err))
+			s.ui.StepInfo(fmt.Sprintf("Please open this URL manually: %s", settingsURL))
+		}
+	}
+
+	path, err := s.prompter.ReadLine("Path to .pem file: ")
+	if err != nil {
+		return "", fmt.Errorf("reading PEM file path: %w", err)
+	}
+	if path == "" {
+		return "", fmt.Errorf("no file path provided")
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("checking PEM file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("PEM path %s must be a regular file", path)
+	}
+
+	pemData, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading PEM file: %w", err)
+	}
+	defer func() {
+		for i := range pemData {
+			pemData[i] = 0
+		}
+	}()
+
+	if err := ValidateRSAPEM(pemData); err != nil {
+		return "", fmt.Errorf("invalid PEM file %s: %w", path, err)
+	}
+
+	pemStr := string(pemData)
+
+	if s.storeSecret != nil {
+		s.ui.StepStart(fmt.Sprintf("Storing recovered private key for %s", role))
+		if err := s.storeSecret(ctx, role, pemStr); err != nil {
+			return "", fmt.Errorf("storing recovered secret for %s: %w", role, err)
+		}
+		s.ui.StepDone(fmt.Sprintf("Stored recovered private key for %s", role))
+	}
+
+	return pemStr, nil
+}
+
 // handleExistingApp reuses an existing app if its credentials are still
 // available, or reports that the private key is lost.
 //
@@ -286,7 +406,8 @@ func (s *Setup) findExistingInstallation(
 // manifest code exchange (POST /app-manifests/{code}/conversions) is the
 // one and only time the PEM is returned. If the secret wasn't stored or
 // was deleted, the key is lost and the app must be deleted and recreated.
-// This is why we check RepoSecretExists before reusing.
+// The secretExists callback checks the appropriate backend (Secret Manager
+// in OIDC mint mode, GitHub repo secrets otherwise).
 //
 // When an existing app is found with valid credentials, it is reused
 // automatically. To get fresh apps, run uninstall first, then install.
@@ -316,13 +437,29 @@ func (s *Setup) handleExistingApp(ctx context.Context, inst *forge.Installation,
 			}, nil
 		}
 
-		// Secret doesn't exist — private key is lost.
-		return nil, fmt.Errorf(
-			"app %s exists but its private key secret is missing; "+
-				"run 'fullsend admin uninstall' first, then delete the app at "+
-				"https://github.com/apps/%s and re-run install",
-			inst.AppSlug, inst.AppSlug,
-		)
+		// Secret doesn't exist — try to recover by generating a new key.
+		pemStr, recoverErr := s.recoverPEM(ctx, org, inst.AppSlug, role)
+		if recoverErr != nil {
+			return nil, fmt.Errorf("recovering PEM for %s: %w", inst.AppSlug, recoverErr)
+		}
+		if pemStr == "" {
+			return nil, fmt.Errorf(
+				"app %s exists but its private key secret is missing; "+
+					"run 'fullsend admin uninstall' first, then delete the app at "+
+					"https://github.com/apps/%s and re-run install",
+				inst.AppSlug, inst.AppSlug,
+			)
+		}
+
+		s.checkPermissions(inst, org, role)
+		s.ui.StepDone(fmt.Sprintf("Recovered private key for %s", inst.AppSlug))
+		return &AppCredentials{
+			AppID:    inst.AppID,
+			Slug:     inst.AppSlug,
+			Name:     inst.AppSlug,
+			PEM:      pemStr,
+			ClientID: clientID,
+		}, nil
 	}
 
 	// No secretExists function — can't check, assume reuse.
@@ -409,6 +546,7 @@ func (s *Setup) runManifestFlow(ctx context.Context, org, role string) (*AppCred
 	// inside the JSON manifest, not as a separate form field.
 	appCfg := ghTypes.AgentAppConfig(org, role)
 	appCfg.RedirectURL = callbackURL
+	appCfg.Public = s.publicApps
 	manifest, err := json.Marshal(appCfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling app manifest: %w", err)
@@ -612,9 +750,7 @@ func (s *Setup) ensureInstalled(ctx context.Context, org, slug string) error {
 	}
 }
 
-// ExpectedAppSlug returns the conventional app slug for a given org and role.
-// The convention is simply <org>-<role> for all roles.
-// Used during uninstall to infer app names when config.yaml is unavailable.
-func ExpectedAppSlug(org, role string) string {
-	return org + "-" + role
+// AppSlug returns the conventional app slug for a given role.
+func AppSlug(role string) string {
+	return "fullsend-" + role
 }

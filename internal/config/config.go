@@ -19,6 +19,8 @@ type AgentEntry struct {
 // DispatchConfig configures how agent work is dispatched.
 type DispatchConfig struct {
 	Platform string `yaml:"platform"`
+	Mode     string `yaml:"mode,omitempty"`     // "oidc-mint"
+	MintURL  string `yaml:"mint_url,omitempty"` // informational, set when mode=oidc-mint
 }
 
 // InferenceConfig configures the inference provider used by agents.
@@ -52,7 +54,7 @@ type OrgConfig struct {
 
 // ValidRoles returns the set of recognized agent roles.
 func ValidRoles() []string {
-	return []string{"fullsend", "triage", "coder", "review", "fix", "prioritize"}
+	return []string{"fullsend", "triage", "coder", "review", "fix", "retro", "prioritize"}
 }
 
 // ValidProviders returns the set of recognized inference providers.
@@ -127,14 +129,22 @@ func (c *OrgConfig) Validate() error {
 	if c.Dispatch.Platform != "github-actions" {
 		return fmt.Errorf("unsupported platform %q: must be \"github-actions\"", c.Dispatch.Platform)
 	}
+	if c.Dispatch.Mode != "" && c.Dispatch.Mode != "oidc-mint" {
+		return fmt.Errorf("unsupported dispatch mode %q: must be \"oidc-mint\"", c.Dispatch.Mode)
+	}
 	if c.Defaults.MaxImplementationRetries < 0 {
 		return fmt.Errorf("max_implementation_retries must be >= 0, got %d", c.Defaults.MaxImplementationRetries)
 	}
 	valid := ValidRoles()
+	seen := make(map[string]bool, len(c.Defaults.Roles))
 	for _, role := range c.Defaults.Roles {
 		if !slices.Contains(valid, role) {
 			return fmt.Errorf("invalid role %q: must be one of %s", role, strings.Join(valid, ", "))
 		}
+		if seen[role] {
+			return fmt.Errorf("duplicate role %q in defaults.roles", role)
+		}
+		seen[role] = true
 	}
 	if c.Inference.Provider != "" {
 		validProviders := ValidProviders()

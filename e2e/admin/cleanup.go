@@ -30,7 +30,7 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, page playwr
 		}
 	}
 
-	// 2. Delete stale FULLSEND_DISPATCH_TOKEN org secret if it exists.
+	// 2. Delete stale FULLSEND_DISPATCH_TOKEN org secret if it exists (legacy PAT mode artifact).
 	dispatchExists, dispatchErr := client.OrgSecretExists(ctx, testOrg, "FULLSEND_DISPATCH_TOKEN")
 	if dispatchErr != nil {
 		t.Logf("[cleanup] Warning: could not check dispatch token org secret: %v", dispatchErr)
@@ -69,13 +69,7 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, page playwr
 		}
 	}
 
-	// 4. Delete any stale dispatch PATs from previous runs.
-	// Use bulk deletion to clean up all accumulated dispatch PATs — if too
-	// many accumulate, GitHub enforces a 50-token limit and blocks creation.
-	t.Log("[cleanup] Cleaning up stale dispatch PATs...")
-	deleteAllDispatchPATs(page, testOrg, screenshotDir, t.Logf)
-
-	// 5. Ensure test-repo exists (needed for enrollment testing).
+	// 4. Ensure test-repo exists (needed for enrollment testing).
 	_, err = client.GetRepo(ctx, testOrg, testRepo)
 	if forge.IsNotFound(err) {
 		t.Logf("[cleanup] Creating missing %s repo", testRepo)
@@ -84,15 +78,15 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, page playwr
 		}
 	}
 
-	// 6. Delete stale enrollment and unenrollment branches from test-repo.
+	// 5. Delete stale enrollment and unenrollment branches from test-repo.
 	deleteBranch(ctx, token, testOrg, testRepo, "fullsend/onboard", t)
 	deleteBranch(ctx, token, testOrg, testRepo, "fullsend/offboard", t)
 
-	// 7. Delete shim workflow from test-repo's default branch (left behind
+	// 6. Delete shim workflow from test-repo's default branch (left behind
 	// when a previous run merged the enrollment PR in Phase 2.5).
 	deleteShimWorkflow(ctx, token, testOrg, testRepo, t)
 
-	// 8. Close any open fullsend-related PRs in test-repo.
+	// 7. Close any open fullsend-related PRs in test-repo.
 	prs, err := client.ListRepoPullRequests(ctx, testOrg, testRepo)
 	if err != nil {
 		t.Logf("[cleanup] Warning: could not list PRs: %v", err)

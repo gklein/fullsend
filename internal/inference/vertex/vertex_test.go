@@ -11,14 +11,14 @@ import (
 
 // fakeGCPClient is a test double for GCPClient.
 type fakeGCPClient struct {
-	existingSAs     map[string]bool // key: "projectID/saName"
-	createdSAs      []string        // "projectID/saName"
-	createdKeys     []string        // "projectID/saEmail"
-	keyData         []byte
-	getErr          error
-	createErr       error
-	createKeyErr    error
-	alreadyExists   bool // simulate 409 Conflict (SA already exists → success)
+	existingSAs   map[string]bool // key: "projectID/saName"
+	createdSAs    []string        // "projectID/saName"
+	createdKeys   []string        // "projectID/saEmail"
+	keyData       []byte
+	getErr        error
+	createErr     error
+	createKeyErr  error
+	alreadyExists bool // simulate 409 Conflict (SA already exists → success)
 }
 
 func newFakeGCPClient() *fakeGCPClient {
