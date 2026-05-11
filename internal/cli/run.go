@@ -899,9 +899,13 @@ func runAgentWithProgress(sandboxName, claudeCmd string, timeout time.Duration, 
 	return exitCode, nil
 }
 
-const heartbeatInterval = 30 * time.Second
+var heartbeatInterval = 30 * time.Second
 
 func runHeartbeat(printer *ui.Printer, start time.Time, timeout time.Duration, done <-chan struct{}) {
+	runHeartbeatTo(os.Stderr, printer, start, timeout, done)
+}
+
+func runHeartbeatTo(w io.Writer, printer *ui.Printer, start time.Time, timeout time.Duration, done <-chan struct{}) {
 	ticker := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
 
@@ -910,14 +914,15 @@ func runHeartbeat(printer *ui.Printer, start time.Time, timeout time.Duration, d
 	for {
 		select {
 		case <-done:
+			if isCI {
+				elapsed := time.Since(start).Truncate(time.Second)
+				fmt.Fprintf(w, "::notice::Agent completed (%s)\n", elapsed)
+			}
 			return
 		case <-ticker.C:
 			elapsed := time.Since(start).Truncate(time.Second)
 			remaining := (timeout - elapsed).Truncate(time.Second)
 			msg := fmt.Sprintf("Agent running (%s elapsed, %s remaining)", elapsed, remaining)
-			if isCI {
-				fmt.Fprintf(os.Stderr, "::notice::%s\n", msg)
-			}
 			printer.Heartbeat(msg)
 		}
 	}

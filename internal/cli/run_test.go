@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -471,6 +472,79 @@ func TestRunOIDCRefresh_TicksAndStops(t *testing.T) {
 	}
 
 	assert.GreaterOrEqual(t, calls.Load(), int32(2))
+}
+
+func TestRunHeartbeat_SingleNoticeOnCompletion(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+
+	// Use a very short heartbeat interval so ticks happen quickly.
+	origInterval := heartbeatInterval
+	heartbeatInterval = 50 * time.Millisecond
+	defer func() { heartbeatInterval = origInterval }()
+
+	var buf bytes.Buffer
+	printer := ui.New(io.Discard)
+	done := make(chan struct{})
+	start := time.Now()
+
+	finished := make(chan struct{})
+	go func() {
+		runHeartbeatTo(&buf, printer, start, 10*time.Minute, done)
+		close(finished)
+	}()
+
+	// Let it tick several times.
+	time.Sleep(200 * time.Millisecond)
+	close(done)
+
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runHeartbeat did not exit after done was closed")
+	}
+
+	output := buf.String()
+
+	// Should contain exactly one ::notice:: line — the completion notice.
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	var noticeLines []string
+	for _, line := range lines {
+		if strings.Contains(line, "::notice::") {
+			noticeLines = append(noticeLines, line)
+		}
+	}
+	assert.Len(t, noticeLines, 1, "expected exactly one ::notice:: annotation, got: %v", noticeLines)
+	assert.Contains(t, noticeLines[0], "Agent completed (")
+}
+
+func TestRunHeartbeat_NoNoticeWhenNotCI(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "false")
+
+	origInterval := heartbeatInterval
+	heartbeatInterval = 50 * time.Millisecond
+	defer func() { heartbeatInterval = origInterval }()
+
+	var buf bytes.Buffer
+	printer := ui.New(io.Discard)
+	done := make(chan struct{})
+	start := time.Now()
+
+	finished := make(chan struct{})
+	go func() {
+		runHeartbeatTo(&buf, printer, start, 10*time.Minute, done)
+		close(finished)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	close(done)
+
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runHeartbeat did not exit after done was closed")
+	}
+
+	assert.Empty(t, buf.String(), "should not emit any ::notice:: when not in CI")
 }
 
 func TestDownloadChecksumForAsset_ParsesLine(t *testing.T) {
