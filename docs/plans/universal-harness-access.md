@@ -218,11 +218,15 @@ The URL fetch mechanism must prevent Server-Side Request Forgery attacks.
    **Layered security model:** The domain allowlist is a **coarse first filter** (e.g., "allow anything from github.com"). The `allowed_remote_resources` URL prefix allowlist (per-harness) is the **fine-grained security boundary** (e.g., "allow only https://github.com/fullsend-ai/skills/"). Both layers must pass for a resource to be fetched.
 3. **No redirects:** HTTP 3xx responses are rejected. The URL must return 200 OK directly.
 4. **Internal IP rejection:** Refuse to fetch from:
+   - `0.0.0.0/8` (current network — `curl http://0.0.0.0:8080` hits localhost on Linux)
    - `127.0.0.0/8` (loopback)
    - `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (RFC 1918 private)
+   - `100.64.0.0/10` (Carrier-Grade NAT / shared address space, RFC 6598)
    - `169.254.0.0/16` (link-local)
+   - `198.18.0.0/15` (benchmark testing, RFC 2544)
    - `fc00::/7` (IPv6 ULA)
    - `::1` (IPv6 loopback)
+   - IPv4-mapped IPv6 addresses (e.g., `::ffff:127.0.0.1` can bypass IPv4-only checks)
 5. **DNS rebinding protection (REQUIRED):** To prevent DNS rebinding attacks, the implementation MUST:
    - Resolve the domain to IP addresses before making the HTTP request
    - Validate all returned IPs against the internal IP blocklist
@@ -696,9 +700,30 @@ func isAllowedDomain(hostname string, allowed []string) bool {
     return false
 }
 
-// isInternalIP returns true if ip is a loopback, private, or link-local address.
+// isInternalIP returns true if ip is an internal/reserved address that should be blocked for SSRF protection.
+// This checks beyond Go's stdlib helpers to catch ranges that IsPrivate() misses.
 func isInternalIP(ip net.IP) bool {
-    return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+    // Standard checks (covers loopback, RFC1918, link-local)
+    if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+        return true
+    }
+    
+    // Additional ranges not covered by IsPrivate()
+    _, currentNet, _ := net.ParseCIDR("0.0.0.0/8")       // Current network
+    _, cgnNet, _ := net.ParseCIDR("100.64.0.0/10")       // Carrier-Grade NAT (RFC 6598)
+    _, benchNet, _ := net.ParseCIDR("198.18.0.0/15")     // Benchmark testing (RFC 2544)
+    
+    if currentNet.Contains(ip) || cgnNet.Contains(ip) || benchNet.Contains(ip) {
+        return true
+    }
+    
+    // Block IPv4-mapped IPv6 addresses (::ffff:a.b.c.d) - these can bypass IPv4-only checks
+    if len(ip) == net.IPv6len && ip.To4() != nil {
+        // This is an IPv4-mapped IPv6 address - check the embedded IPv4 address
+        return isInternalIP(ip.To4())
+    }
+    
+    return false
 }
 
 // ComputeSHA256 returns the hex-encoded SHA256 hash of data.
