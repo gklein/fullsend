@@ -236,7 +236,11 @@ func decodeJSON(resp *http.Response, v any) error {
 	return json.NewDecoder(resp.Body).Decode(v)
 }
 
-// ListOrgRepos returns all non-archived, non-fork repositories for an org.
+// ListOrgRepos returns public, non-archived, non-fork repositories for an org.
+//
+// Private repos are excluded because the default .fullsend config repo is
+// public and agent workflow logs are visible to anyone. Enrolling a private
+// repo would expose its code in those public logs.
 //
 // Forks are excluded because fullsend's trust model assumes org-owned repos
 // where CODEOWNERS governance and org-level permissions control agent
@@ -267,7 +271,7 @@ func (c *LiveClient) ListOrgRepos(ctx context.Context, org string) ([]forge.Repo
 		}
 
 		for _, r := range repos {
-			if r.Archived || r.Fork {
+			if r.Archived || r.Fork || r.Private {
 				continue
 			}
 			result = append(result, forge.Repository{
@@ -866,6 +870,23 @@ func (c *LiveClient) ListRepoPullRequests(ctx context.Context, owner, repo strin
 	}
 
 	return result, nil
+}
+
+// GetOrgPlan returns the billing plan name for the org (e.g. "free", "team", "enterprise").
+func (c *LiveClient) GetOrgPlan(ctx context.Context, org string) (string, error) {
+	resp, err := c.get(ctx, fmt.Sprintf("/orgs/%s", org))
+	if err != nil {
+		return "", fmt.Errorf("get org plan: %w", err)
+	}
+	var orgResp struct {
+		Plan struct {
+			Name string `json:"name"`
+		} `json:"plan"`
+	}
+	if err := decodeJSON(resp, &orgResp); err != nil {
+		return "", fmt.Errorf("decode org plan: %w", err)
+	}
+	return orgResp.Plan.Name, nil
 }
 
 // GetAuthenticatedUser returns the login of the authenticated user.
@@ -1568,9 +1589,9 @@ func (c *LiveClient) CreateOrgSecret(ctx context.Context, org, name, value strin
 		selectedRepoIDs = []int64{}
 	}
 	payload := map[string]any{
-		"encrypted_value":       base64.StdEncoding.EncodeToString(encrypted),
-		"key_id":                pubKey.KeyID,
-		"visibility":            "selected",
+		"encrypted_value":         base64.StdEncoding.EncodeToString(encrypted),
+		"key_id":                  pubKey.KeyID,
+		"visibility":              "selected",
 		"selected_repository_ids": selectedRepoIDs,
 	}
 
@@ -1659,6 +1680,80 @@ func (c *LiveClient) SetOrgSecretRepos(ctx context.Context, org, name string, re
 	}
 	resp.Body.Close()
 	return nil
+}
+
+// CreateOrUpdateOrgVariable creates or updates an org-level Actions variable
+// scoped to the given repository IDs.
+func (c *LiveClient) CreateOrUpdateOrgVariable(ctx context.Context, org, name, value string, selectedRepoIDs []int64) error {
+	if selectedRepoIDs == nil {
+		selectedRepoIDs = []int64{}
+	}
+
+	// Try PATCH first (update existing).
+	patchPayload := map[string]any{
+		"value":                   value,
+		"visibility":              "selected",
+		"selected_repository_ids": selectedRepoIDs,
+	}
+
+	resp, err := c.patch(ctx, fmt.Sprintf("/orgs/%s/actions/variables/%s", org, name), patchPayload)
+	if err == nil {
+		resp.Body.Close()
+		return nil
+	}
+
+	// If the variable doesn't exist (404), create it.
+	if !isNotFound(err) {
+		return fmt.Errorf("update org variable %s: %w", name, err)
+	}
+
+	createPayload := map[string]any{
+		"name":                    name,
+		"value":                   value,
+		"visibility":              "selected",
+		"selected_repository_ids": selectedRepoIDs,
+	}
+	resp2, err := c.post(ctx, fmt.Sprintf("/orgs/%s/actions/variables", org), createPayload)
+	if err != nil {
+		return fmt.Errorf("create org variable %s: %w", name, err)
+	}
+	resp2.Body.Close()
+	return nil
+}
+
+// OrgVariableExists checks if an org-level variable exists.
+func (c *LiveClient) OrgVariableExists(ctx context.Context, org, name string) (bool, error) {
+	resp, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/orgs/%s/actions/variables/%s", org, name), nil)
+	if err != nil {
+		return false, fmt.Errorf("check org variable %s: %w", name, err)
+	}
+	resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	case http.StatusForbidden:
+		return false, &APIError{StatusCode: http.StatusForbidden, Message: "insufficient permissions to check org variable (missing admin:org scope?)"}
+	default:
+		return false, &APIError{StatusCode: resp.StatusCode, Message: "unexpected status checking org variable"}
+	}
+}
+
+// DeleteOrgVariable deletes an org-level variable. It is idempotent: a 404
+// (variable already gone) is not treated as an error.
+func (c *LiveClient) DeleteOrgVariable(ctx context.Context, org, name string) error {
+	resp, err := c.do(ctx, http.MethodDelete, fmt.Sprintf("/orgs/%s/actions/variables/%s", org, name), nil)
+	if err != nil {
+		return fmt.Errorf("delete org variable %s: %w", name, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return &APIError{StatusCode: resp.StatusCode, Message: "unexpected status deleting org variable"}
 }
 
 // isNotFound checks whether an error is a 404 API error.

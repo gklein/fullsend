@@ -31,11 +31,12 @@ func TestListOrgRepos(t *testing.T) {
 
 		page++
 		if page == 1 {
-			// First page: 3 repos (one archived, one fork)
+			// First page: 4 repos (one archived, one fork, one private)
 			json.NewEncoder(w).Encode([]map[string]any{
 				{"name": "repo1", "full_name": "org/repo1", "default_branch": "main", "private": false, "archived": false, "fork": false},
 				{"name": "archived-repo", "full_name": "org/archived-repo", "default_branch": "main", "private": false, "archived": true, "fork": false},
 				{"name": "forked-repo", "full_name": "org/forked-repo", "default_branch": "main", "private": false, "archived": false, "fork": true},
+				{"name": "private-repo", "full_name": "org/private-repo", "default_branch": "main", "private": true, "archived": false, "fork": false},
 			})
 		} else {
 			// Second page: empty → stops pagination
@@ -783,6 +784,151 @@ func TestSetOrgSecretRepos(t *testing.T) {
 	client := newTestClient(t, srv)
 	err := client.SetOrgSecretRepos(context.Background(), "myorg", "TOKEN", []int64{10, 20, 30})
 	require.NoError(t, err)
+}
+
+func TestCreateOrUpdateOrgVariable_Create(t *testing.T) {
+	callNum := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callNum++
+		switch callNum {
+		case 1:
+			// PATCH (update) → 404 (variable doesn't exist yet)
+			assert.Equal(t, "PATCH", r.Method)
+			assert.Equal(t, "/orgs/myorg/actions/variables/DISPATCH_URL", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+		case 2:
+			// POST (create)
+			assert.Equal(t, "POST", r.Method)
+			assert.Equal(t, "/orgs/myorg/actions/variables", r.URL.Path)
+
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			assert.Equal(t, "DISPATCH_URL", body["name"])
+			assert.Equal(t, "https://func.example.com", body["value"])
+			assert.Equal(t, "selected", body["visibility"])
+
+			repoIDs, ok := body["selected_repository_ids"].([]any)
+			require.True(t, ok)
+			assert.Len(t, repoIDs, 2)
+			assert.Equal(t, float64(100), repoIDs[0])
+			assert.Equal(t, float64(200), repoIDs[1])
+
+			w.WriteHeader(http.StatusCreated)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	err := client.CreateOrUpdateOrgVariable(context.Background(), "myorg", "DISPATCH_URL", "https://func.example.com", []int64{100, 200})
+	require.NoError(t, err)
+}
+
+func TestCreateOrUpdateOrgVariable_Update(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// PATCH (update) → 200 (variable exists)
+		assert.Equal(t, "PATCH", r.Method)
+		assert.Equal(t, "/orgs/myorg/actions/variables/DISPATCH_URL", r.URL.Path)
+
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		assert.Equal(t, "https://new-url.example.com", body["value"])
+		assert.Equal(t, "selected", body["visibility"])
+
+		repoIDs, ok := body["selected_repository_ids"].([]any)
+		require.True(t, ok)
+		assert.Len(t, repoIDs, 1)
+
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	err := client.CreateOrUpdateOrgVariable(context.Background(), "myorg", "DISPATCH_URL", "https://new-url.example.com", []int64{300})
+	require.NoError(t, err)
+}
+
+func TestCreateOrUpdateOrgVariable_NilRepoIDs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// PATCH → 404 → POST
+		if r.Method == "PATCH" {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+			return
+		}
+		assert.Equal(t, "POST", r.Method)
+
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		assert.Equal(t, "selected", body["visibility"])
+		repoIDs, ok := body["selected_repository_ids"].([]any)
+		require.True(t, ok, "selected_repository_ids should be an empty array, not nil")
+		assert.Empty(t, repoIDs)
+
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	err := client.CreateOrUpdateOrgVariable(context.Background(), "myorg", "VAR", "value", nil)
+	require.NoError(t, err)
+}
+
+func TestOrgVariableExists(t *testing.T) {
+	t.Run("exists", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "GET", r.Method)
+			assert.Equal(t, "/orgs/myorg/actions/variables/DISPATCH_URL", r.URL.Path)
+			json.NewEncoder(w).Encode(map[string]any{"name": "DISPATCH_URL"})
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv)
+		exists, err := client.OrgVariableExists(context.Background(), "myorg", "DISPATCH_URL")
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
+
+	t.Run("not exists", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv)
+		exists, err := client.OrgVariableExists(context.Background(), "myorg", "MISSING")
+		require.NoError(t, err)
+		assert.False(t, exists)
+	})
+}
+
+func TestDeleteOrgVariable(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "DELETE", r.Method)
+			assert.Equal(t, "/orgs/myorg/actions/variables/DISPATCH_URL", r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv)
+		err := client.DeleteOrgVariable(context.Background(), "myorg", "DISPATCH_URL")
+		require.NoError(t, err)
+	})
+
+	t.Run("idempotent 404", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "DELETE", r.Method)
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv)
+		err := client.DeleteOrgVariable(context.Background(), "myorg", "ALREADY_GONE")
+		require.NoError(t, err)
+	})
 }
 
 func TestListOrgRepos_Pagination(t *testing.T) {

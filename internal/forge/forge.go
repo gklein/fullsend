@@ -96,8 +96,15 @@ type TreeFile struct {
 // Implementations exist for GitHub (and eventually GitLab, Forgejo).
 type Client interface {
 	// Repository operations
-	// ListOrgRepos returns repositories eligible for fullsend installation.
-	// It excludes archived repos (no active development) and forks.
+	// ListOrgRepos returns repositories eligible for fullsend enrollment.
+	// It excludes archived repos (no active development), forks, and
+	// private repos.
+	//
+	// Private repos are excluded because the default .fullsend config repo
+	// is public, and agent workflows dispatched to it run with public logs.
+	// Enrolling a private repo would expose its code in those logs when
+	// agents check out and process the repo content. Private repo support
+	// requires per-repo .fullsend mode where agents run on the target repo.
 	//
 	// Forks are excluded because fullsend's trust model is org-centric:
 	// trust derives from org repository permissions and CODEOWNERS
@@ -140,6 +147,10 @@ type Client interface {
 	CreateChangeProposal(ctx context.Context, owner, repo, title, body, head, base string) (*ChangeProposal, error)
 	ListRepoPullRequests(ctx context.Context, owner, repo string) ([]ChangeProposal, error)
 
+	// Organization metadata
+	// GetOrgPlan returns the billing plan name for the org (e.g. "free", "team", "enterprise").
+	GetOrgPlan(ctx context.Context, org string) (string, error)
+
 	// Authentication
 	GetAuthenticatedUser(ctx context.Context) (string, error)
 
@@ -162,6 +173,11 @@ type Client interface {
 	// GetOrgSecretRepos returns the list of repository IDs that have access
 	// to the given org-level secret.
 	GetOrgSecretRepos(ctx context.Context, org, name string) ([]int64, error)
+
+	// Org-level variables (for dispatch function URL)
+	CreateOrUpdateOrgVariable(ctx context.Context, org, name, value string, selectedRepoIDs []int64) error
+	OrgVariableExists(ctx context.Context, org, name string) (bool, error)
+	DeleteOrgVariable(ctx context.Context, org, name string) error
 
 	// CI/Workflow operations
 	GetLatestWorkflowRun(ctx context.Context, owner, repo, workflowFile string) (*WorkflowRun, error)

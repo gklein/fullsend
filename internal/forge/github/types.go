@@ -58,8 +58,7 @@ func AgentAppConfig(org, role string) AppConfig {
 		},
 	}
 
-	// App naming convention: <org>-<role> for all roles.
-	base.Name = fmt.Sprintf("%s-%s", org, role)
+	base.Name = fmt.Sprintf("fullsend-%s", role)
 
 	switch role {
 	case "fullsend":
@@ -80,14 +79,15 @@ func AgentAppConfig(org, role string) AppConfig {
 	case "triage":
 		base.Description = fmt.Sprintf("Fullsend triage agent for %s", org)
 		base.Permissions = AppPermissions{
-			Issues: "write",
+			Contents: "read",
+			Issues:   "write",
 		}
 		base.Events = []string{"issues", "issue_comment"}
 
 	case "coder":
 		base.Description = fmt.Sprintf("Fullsend coder agent for %s", org)
 		base.Permissions = AppPermissions{
-			Issues:       "read",
+			Issues:       "write",
 			Contents:     "write",
 			PullRequests: "write",
 			Checks:       "read",
@@ -100,13 +100,32 @@ func AgentAppConfig(org, role string) AppConfig {
 			PullRequests: "write",
 			Contents:     "read",
 			Checks:       "read",
-			Issues:       "read",
+			Issues:       "write",
 		}
 		base.Events = []string{"pull_request"}
+
+	case "fix":
+		base.Description = fmt.Sprintf("Fullsend fix agent for %s", org)
+		base.Permissions = AppPermissions{
+			Contents:     "write",
+			PullRequests: "write",
+			Issues:       "write",
+		}
+		base.Events = []string{"issues", "issue_comment", "pull_request"}
+
+	case "retro":
+		base.Description = fmt.Sprintf("Fullsend retro agent for %s", org)
+		base.Permissions = AppPermissions{
+			Contents:     "read",
+			PullRequests: "read",
+			Issues:       "write",
+		}
+		base.Events = []string{"issues", "pull_request"}
 
 	case "prioritize":
 		base.Description = fmt.Sprintf("Fullsend prioritize agent for %s", org)
 		base.Permissions = AppPermissions{
+			Contents: "read",
 			// Organization-level Projects V2 read/write for scoring and ranking.
 			// Important: this is "organization_projects", NOT "projects" (which
 			// is the legacy classic projects permission at the repository level).
