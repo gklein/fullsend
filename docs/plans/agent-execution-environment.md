@@ -919,7 +919,7 @@ spec:
 
 ## References
 
-- [ADR-0029: Agent Execution Sandbox Architecture](../ADRs/0029-agent-execution-sandbox.md)
+- [ADR-0036: Agent Execution Sandbox Architecture](../ADRs/0036-agent-execution-sandbox.md)
 - [ADR-0017: Credential Isolation for Sandboxed Agents](../ADRs/0017-credential-isolation-for-sandboxed-agents.md)
 - [ADR-0025: Provider Credential Delivery](../ADRs/0025-provider-credential-delivery-for-sandboxed-agents.md)
 - [ADR-0028: GitLab Support Architecture](../ADRs/0028-gitlab-support.md)

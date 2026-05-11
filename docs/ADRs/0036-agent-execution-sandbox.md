@@ -289,5 +289,6 @@ The implementation document is structured for iterative evolution as the sandbox
 - ADR-0017: Credential isolation for sandboxed agents (zero credentials in sandbox)
 - ADR-0025: Provider credential delivery (OpenShell providers for credential injection)
 - [ADR-0028: GitLab Support Architecture](0028-gitlab-support.md) (dispatch pipelines, explicitly deferred agent execution environment)
+- ADR-0030: OpenShell sandbox interaction model (defines the agent-harness communication protocol)
 - [agent-infrastructure.md](../problems/agent-infrastructure.md): Infrastructure layer exploration, SIG Agent Sandbox evaluation
 - [OpenShell](https://github.com/NVIDIA/OpenShell): Sandbox runtime with L7 network policy enforcement
