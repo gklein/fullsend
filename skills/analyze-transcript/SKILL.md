@@ -97,7 +97,7 @@ breakdown, and stop reasons.
 
 Use the appropriate subcommand:
 
-**Full conversation flow:**
+**Full conversation flow (alias: `conv`):**
 ```bash
 python3 <base-dir>/analyze-transcript.py conversation <path> | head -100
 ```
@@ -132,7 +132,7 @@ Regex search across all tool results and assistant text.
 python3 <base-dir>/analyze-transcript.py conversation <path> --lines 50-100
 ```
 
-**JSON output (for programmatic use):**
+**JSON output (available on `summary`, `tools`, and `network`):**
 ```bash
 python3 <base-dir>/analyze-transcript.py summary <path> --json
 ```
@@ -142,7 +142,7 @@ python3 <base-dir>/analyze-transcript.py summary <path> --json
 The `openshell-sandbox.log` contains OCSF events for all network connections,
 HTTP requests, process launches, and policy decisions made inside the sandbox.
 
-**Network summary:**
+**Network summary (alias: `net`):**
 ```bash
 python3 <base-dir>/analyze-transcript.py network <sandbox-log>
 ```
