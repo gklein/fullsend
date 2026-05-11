@@ -15,7 +15,7 @@ on:
         type: string
 
 concurrency:
-  group: fullsend-triage-${{ fromJSON(inputs.event_payload).issue.number }}
+  group: fullsend-triage-${{ inputs.source_repo }}-${{ fromJSON(inputs.event_payload).issue.number }}
   cancel-in-progress: true
 
 jobs:
@@ -33,17 +33,18 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Validate enrollment and extract repo metadata
+        id: repo-parts
         uses: ./.github/actions/validate-enrollment
         with:
           source_repo: ${{ inputs.source_repo }}
 
-      - name: Generate app token
+      - name: Mint triage token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: ./.github/actions/mint-token
         with:
-          client-id: ${{ vars.FULLSEND_TRIAGE_CLIENT_ID }}
-          private-key: ${{ secrets.FULLSEND_TRIAGE_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
+          role: triage
+          repos: ${{ steps.repo-parts.outputs.name }}
+          mint_url: ${{ vars.FULLSEND_MINT_URL }}
 
       - name: Checkout target repository
         uses: actions/checkout@v6
