@@ -218,7 +218,7 @@ Emits framework-native test snippets and attachment bundles. ([Architecture](../
 
 ### 8. implementation agent runtime
 
-Git operations (token-scoped), patch application, local test runner integration. ([Architecture](../architecture.md#8-implementation-agent-runtime))
+Git operations (token-scoped), patch application, local test runner integration. ([Architecture](../architecture.md#8-code-agent-runtime))
 
 ### 9. PR sandbox / CI mirror
 

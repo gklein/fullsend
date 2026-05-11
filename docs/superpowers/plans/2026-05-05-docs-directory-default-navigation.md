@@ -318,7 +318,7 @@ git commit -m "feat(docs): resolve directory hashes to BFS default page and sync
 
 - Modify: `docs/superpowers/specs/2026-05-05-docs-nav-layout-and-directory-hash-design.md`
 
-- [ ] **Step 1:** After the title block, add one sentence: directory **article** behavior (“option C”) is superseded by [2026-05-05-docs-directory-default-navigation-design.md](./2026-05-05-docs-directory-default-navigation-design.md).
+- [ ] **Step 1:** After the title block, add one sentence: directory **article** behavior (“option C”) is superseded by this plan.
 
 - [ ] **Step 2: Commit**
 

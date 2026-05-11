@@ -85,3 +85,10 @@ repos:
         language: script
         pass_filenames: false
         always_run: true
+
+      - id: lint-md-links
+        name: lint markdown links
+        entry: lychee --offline --no-progress --include-fragments '**/*.md'
+        language: system
+        pass_filenames: false
+        always_run: true

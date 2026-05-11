@@ -152,7 +152,7 @@ The `stage` input to `dispatch.yml` becomes optional. When provided
 - This decision is sequenced after the token mint migration. The token mint
   provides `workflow_call`; this ADR uses it to simplify routing.
 - **Per-repo installation
-  ([ADR 0033](0033-per-repo-installation-mode.md))** needs the same routing
+  ([ADR 0033](https://github.com/fullsend-ai/fullsend/pull/707))** needs the same routing
   logic but published upstream as `reusable-fullsend.yml` in
   `fullsend-ai/fullsend`. Per-repo repos have no `.fullsend/dispatch.yml` —
   their thin `fullsend.yml` calls `reusable-fullsend.yml` directly, which

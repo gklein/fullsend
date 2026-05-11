@@ -144,6 +144,6 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
   ships will see substantially different workflow files in `.fullsend`.
 - **Token generation uses OIDC:** Reusable workflows use the `mint-token`
   composite action for OIDC-based token minting
-  ([ADR 0029](0029-central-token-mint-secretless-fullsend.md)). Each
+  ([ADR 0029](https://github.com/fullsend-ai/fullsend/pull/655)). Each
   reusable workflow requests a scoped token for its role (triage, coder,
   review, fix) — no PEMs or App secrets in the calling repo.
