@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +50,14 @@ func (c *LiveClient) WithBaseURL(url string) *LiveClient {
 type APIError struct {
 	StatusCode int
 	Message    string
+	Errors     []APIErrorDetail
+}
+
+// APIErrorDetail is one validation error entry returned by GitHub.
+type APIErrorDetail struct {
+	Resource string `json:"resource"`
+	Field    string `json:"field"`
+	Code     string `json:"code"`
 }
 
 func (e *APIError) Error() string {
@@ -164,10 +173,11 @@ func checkStatus(resp *http.Response, acceptable ...int) error {
 	data, _ := io.ReadAll(resp.Body)
 
 	var msg struct {
-		Message string `json:"message"`
+		Message string           `json:"message"`
+		Errors  []APIErrorDetail `json:"errors"`
 	}
 	if json.Unmarshal(data, &msg) == nil && msg.Message != "" {
-		return &APIError{StatusCode: resp.StatusCode, Message: msg.Message}
+		return &APIError{StatusCode: resp.StatusCode, Message: msg.Message, Errors: msg.Errors}
 	}
 	return &APIError{StatusCode: resp.StatusCode, Message: http.StatusText(resp.StatusCode)}
 }
@@ -1149,7 +1159,7 @@ func (c *LiveClient) CreateIssue(ctx context.Context, owner, repo, title, body s
 	resp, err := c.post(ctx, fmt.Sprintf("/repos/%s/%s/issues", owner, repo), payload)
 	if err != nil {
 		var apiErr *APIError
-		if len(labels) == 0 || !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusUnprocessableEntity {
+		if len(labels) == 0 || !errors.As(err, &apiErr) || !isValidationErrorForField(apiErr, "labels") {
 			return nil, fmt.Errorf("create issue: %w", err)
 		}
 		resp, err = c.post(ctx, fmt.Sprintf("/repos/%s/%s/issues", owner, repo), map[string]any{"title": title, "body": body})
@@ -1198,12 +1208,32 @@ func labelNames(labels []struct {
 	return names
 }
 
+func isValidationErrorForField(err *APIError, field string) bool {
+	if err == nil || err.StatusCode != http.StatusUnprocessableEntity {
+		return false
+	}
+	for _, detail := range err.Errors {
+		if detail.Field == field {
+			return true
+		}
+	}
+	return false
+}
+
 // ListOpenIssues returns open issues on a repository, excluding pull requests.
-func (c *LiveClient) ListOpenIssues(ctx context.Context, owner, repo string) ([]forge.Issue, error) {
+// When labels are provided, GitHub filters to issues carrying those labels.
+func (c *LiveClient) ListOpenIssues(ctx context.Context, owner, repo string, labels ...string) ([]forge.Issue, error) {
 	var result []forge.Issue
 
 	for page := 1; page <= 100; page++ {
-		resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/issues?state=open&per_page=100&page=%d", owner, repo, page))
+		query := url.Values{}
+		query.Set("state", "open")
+		query.Set("per_page", "100")
+		query.Set("page", strconv.Itoa(page))
+		if len(labels) > 0 {
+			query.Set("labels", strings.Join(labels, ","))
+		}
+		resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/issues?%s", owner, repo, query.Encode()))
 		if err != nil {
 			return nil, fmt.Errorf("list open issues page %d: %w", page, err)
 		}

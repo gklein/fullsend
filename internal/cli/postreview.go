@@ -329,15 +329,19 @@ func postApprovedFollowUpIssues(ctx context.Context, client forge.Client, owner,
 		return nil
 	}
 
+	markers := make(map[string]ReviewFinding, len(actionable))
+	for _, finding := range actionable {
+		markers[reviewFollowupIssueMarker(owner, repo, finding)] = finding
+	}
+
 	printer.StepStart("Checking for existing review follow-up issues")
-	openIssues, err := client.ListOpenIssues(ctx, owner, repo)
+	openIssues, err := client.ListOpenIssues(ctx, owner, repo, "type/chore")
 	if err != nil {
 		return fmt.Errorf("listing open issues for review follow-up duplicate detection: %w", err)
 	}
 	existingByMarker := map[string]forge.Issue{}
 	for _, issue := range openIssues {
-		for _, finding := range actionable {
-			marker := reviewFollowupIssueMarker(owner, repo, finding)
+		for marker := range markers {
 			if strings.Contains(issue.Body, marker) {
 				existingByMarker[marker] = issue
 			}
@@ -481,13 +485,17 @@ func compactWhitespace(s string) string {
 }
 
 func truncate(s string, max int) string {
-	if len(s) <= max {
+	runes := []rune(s)
+	if len(runes) <= max {
 		return s
 	}
-	if max <= 3 {
-		return s[:max]
+	if max <= 0 {
+		return ""
 	}
-	return strings.TrimSpace(s[:max-3]) + "..."
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return strings.TrimSpace(string(runes[:max-3])) + "..."
 }
 
 // dismissStaleRequestChanges dismisses the most recent CHANGES_REQUESTED

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -669,6 +670,7 @@ func TestPostApprovedFollowUpIssues_UsesExistingDuplicate(t *testing.T) {
 				Title:  "Existing follow-up",
 				Body:   marker + "\n\nAlready tracked.",
 				URL:    "https://github.com/acme/repo/issues/12",
+				Labels: []string{"type/chore"},
 			},
 		},
 	}
@@ -704,6 +706,7 @@ func TestPostApprovedFollowUpIssues_DedupesAcrossPRs(t *testing.T) {
 				Title:  "Existing follow-up from earlier PR",
 				Body:   marker + "\n\nOriginally filed from PR #9.",
 				URL:    "https://github.com/acme/repo/issues/12",
+				Labels: []string{"type/chore"},
 			},
 		},
 	}
@@ -740,4 +743,58 @@ func TestPostApprovedFollowUpIssues_DryRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, fc.CreatedIssues)
 	assert.Empty(t, fc.IssueComments)
+}
+
+func TestPostApprovedFollowUpIssues_ListOpenIssuesError(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.Errors["ListOpenIssues"] = fmt.Errorf("boom")
+	printer := ui.New(io.Discard)
+	parsed := ReviewResult{
+		Action: "approve",
+		Findings: []ReviewFinding{
+			{
+				Severity:    "low",
+				Category:    "docs",
+				File:        "README.md",
+				Description: "Document the behavior.",
+				Actionable:  true,
+			},
+		},
+	}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, false, printer)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate detection")
+	assert.Empty(t, fc.CreatedIssues)
+	assert.Empty(t, fc.IssueComments)
+}
+
+func TestReviewFollowupIssueMarkerGolden(t *testing.T) {
+	finding := ReviewFinding{
+		Severity:    "low",
+		Category:    "docs",
+		File:        "README.md",
+		Line:        7,
+		Description: "Document the new flag.",
+		Actionable:  true,
+	}
+
+	assert.Equal(t,
+		"<!-- fullsend:review-follow-up:2dda9f082af27ccb771d0345fa8840f7f0ae71547ef1366c4bcfc87e48fdd20d -->",
+		reviewFollowupIssueMarker("acme", "repo", finding),
+	)
+}
+
+func TestCompactWhitespace(t *testing.T) {
+	assert.Equal(t, "one two three", compactWhitespace(" one\n\ttwo   three "))
+	assert.Equal(t, "", compactWhitespace(" \n\t "))
+}
+
+func TestTruncate(t *testing.T) {
+	assert.Equal(t, "", truncate("", 10))
+	assert.Equal(t, "", truncate("abcdef", 0))
+	assert.Equal(t, "ab", truncate("abcdef", 2))
+	assert.Equal(t, "ab...", truncate("abcdef", 5))
+	assert.Equal(t, "éé...", truncate("éééééé", 5))
+	assert.True(t, utf8.ValidString(truncate("abéé", 4)))
 }

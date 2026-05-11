@@ -659,7 +659,7 @@ func (f *FakeClient) CloseIssue(_ context.Context, _, _ string, _ int) error {
 	return f.err("CloseIssue")
 }
 
-func (f *FakeClient) ListOpenIssues(_ context.Context, owner, repo string) ([]Issue, error) {
+func (f *FakeClient) ListOpenIssues(_ context.Context, owner, repo string, labels ...string) ([]Issue, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if e := f.err("ListOpenIssues"); e != nil {
@@ -669,7 +669,29 @@ func (f *FakeClient) ListOpenIssues(_ context.Context, owner, repo string) ([]Is
 		return nil, nil
 	}
 	issues := f.OpenIssues[owner+"/"+repo]
-	return append([]Issue(nil), issues...), nil
+	if len(labels) == 0 {
+		return append([]Issue(nil), issues...), nil
+	}
+	filtered := make([]Issue, 0, len(issues))
+	for _, issue := range issues {
+		if issueHasLabels(issue, labels) {
+			filtered = append(filtered, issue)
+		}
+	}
+	return filtered, nil
+}
+
+func issueHasLabels(issue Issue, labels []string) bool {
+	present := make(map[string]struct{}, len(issue.Labels))
+	for _, label := range issue.Labels {
+		present[label] = struct{}{}
+	}
+	for _, label := range labels {
+		if _, ok := present[label]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (f *FakeClient) ListIssueComments(_ context.Context, owner, repo string, number int) ([]IssueComment, error) {

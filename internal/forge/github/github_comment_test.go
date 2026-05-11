@@ -56,7 +56,10 @@ func TestCreateIssueRetriesWithoutLabelsOnValidationError(t *testing.T) {
 		if call == 1 {
 			assert.Equal(t, []any{"missing-label"}, body["labels"])
 			w.WriteHeader(http.StatusUnprocessableEntity)
-			json.NewEncoder(w).Encode(map[string]any{"message": "Validation Failed"})
+			json.NewEncoder(w).Encode(map[string]any{
+				"message": "Validation Failed",
+				"errors":  []map[string]any{{"field": "labels", "code": "invalid"}},
+			})
 			return
 		}
 
@@ -77,6 +80,29 @@ func TestCreateIssueRetriesWithoutLabelsOnValidationError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 78, issue.Number)
 	assert.Equal(t, 2, call)
+}
+
+func TestCreateIssueDoesNotRetryNonLabelValidationErrors(t *testing.T) {
+	call := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		json.NewEncoder(w).Encode(map[string]any{
+			"message": "Validation Failed",
+			"errors":  []map[string]any{{"field": "title", "code": "missing"}},
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	_, err := client.CreateIssue(context.Background(), "owner", "repo", "Follow-up", "Body", "type/chore")
+	require.Error(t, err)
+	assert.Equal(t, 1, call)
+	var apiErr *APIError
+	require.True(t, errors.As(err, &apiErr))
+	assert.Equal(t, http.StatusUnprocessableEntity, apiErr.StatusCode)
+	require.Len(t, apiErr.Errors, 1)
+	assert.Equal(t, "title", apiErr.Errors[0].Field)
 }
 
 func TestCreateIssueReturnsNonLabelErrors(t *testing.T) {
@@ -127,6 +153,32 @@ func TestListOpenIssuesSkipsPullRequests(t *testing.T) {
 	require.Len(t, issues, 1)
 	assert.Equal(t, 1, issues[0].Number)
 	assert.Equal(t, "Issue body", issues[0].Body)
+	assert.Equal(t, []string{"type/chore"}, issues[0].Labels)
+}
+
+func TestListOpenIssuesFiltersByLabels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "GET", r.Method)
+		assert.Equal(t, "/repos/owner/repo/issues", r.URL.Path)
+		assert.Equal(t, "open", r.URL.Query().Get("state"))
+		assert.Equal(t, "type/chore", r.URL.Query().Get("labels"))
+
+		json.NewEncoder(w).Encode([]map[string]any{
+			{
+				"number":   1,
+				"title":    "Issue",
+				"body":     "Issue body",
+				"html_url": "https://github.com/owner/repo/issues/1",
+				"labels":   []map[string]any{{"name": "type/chore"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	issues, err := client.ListOpenIssues(context.Background(), "owner", "repo", "type/chore")
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
 	assert.Equal(t, []string{"type/chore"}, issues[0].Labels)
 }
 
