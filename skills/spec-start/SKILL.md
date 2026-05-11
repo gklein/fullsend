@@ -1,6 +1,12 @@
 ---
 name: spec-start
-description: Runs one headless pass that turns an underspecified prompt into a topic directory under docs/plans/ with spec.md and qna.md only, using the same design discipline as an interactive brainstorm but without blocking questions. Use for one-shot spec generation, GitHub-bound planning agents, or when the user invokes spec-start without back-and-forth clarification.
+description: >-
+  Runs one headless pass that turns an underspecified prompt into a topic
+  directory under docs/plans/ with spec.md and qna.md only, using the same
+  design discipline as an interactive brainstorm but without blocking questions.
+  Use for one-shot spec generation, GitHub-bound planning agents, or when the
+  user invokes spec-start without back-and-forth clarification.
+# Cursor Agent Skills: prefer explicit @-style invocation; other tooling may ignore.
 disable-model-invocation: true
 ---
 
@@ -100,6 +106,8 @@ Pick a short **topic slug** from the user prompt (kebab-case, lowercase). Use **
 Create a **topic directory** (create parent directories as needed):
 
 `docs/plans/YYYY-MM-DD-<topic>/`
+
+The repo may already contain **flat** Markdown files under `docs/plans/`; this layout is the convention for **new** topics produced by this skill so each topic can grow a folder (`spec.md`, `qna.md`, optional assets) without colliding with those files.
 
 Within it, for this skill’s initial pass, you **must** create these files (each ending with a newline):
 
