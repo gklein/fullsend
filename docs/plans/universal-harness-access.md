@@ -1198,4 +1198,4 @@ Universal harness access enables a composable, shareable ecosystem of agents, sk
 4. **Transitive closure applies uniformly**
 5. **Offline mode supports CI/CD environments**
 
-This design should be reviewed for security implications before acceptance. See [ADR-0029](../ADRs/0029-universal-harness-access.md) for the decision record.
+This design should be reviewed for security implications before acceptance. See [ADR-0037](../ADRs/0037-universal-harness-access.md) for the decision record.

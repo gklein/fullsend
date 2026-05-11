@@ -1,5 +1,5 @@
 ---
-title: "29. Universal harness access via URLs and paths"
+title: "37. Universal harness access via URLs and paths"
 status: Proposed
 relates_to:
   - agent-architecture
@@ -12,7 +12,7 @@ topics:
   - remote-resources
 ---
 
-# 29. Universal harness access via URLs and paths
+# 37. Universal harness access via URLs and paths
 
 Date: 2026-05-07
 
