@@ -19,7 +19,7 @@ Date: 2026-05-06
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -76,7 +76,7 @@ Build a standalone per-repo tool or action that does not share infrastructure wi
 
 Reduce per-repo to two Apps instead of matching the full per-org app set.
 
-**Rejected**: Dropping the triage App forces triage to share one of the other App identities, which conflates permissions (triage only needs `issues:write`, while coder has `contents:write`). The full per-role model (ADR 0007) provides least-privilege isolation. CLI automation (`fullsend init`) makes creating the Apps straightforward.
+**Rejected**: Dropping the triage App forces triage to share one of the other App identities, which conflates permissions (triage only needs `issues:write`, while coder has `contents:write`). The full per-role model (ADR 0007) provides least-privilege isolation. CLI automation (`fullsend admin install`) makes creating the Apps straightforward.
 
 ## Decision
 
@@ -183,7 +183,7 @@ In per-org mode, `dispatch.yml` routes events and dispatches to thin callers via
 
 ### 5. Per-repo mode detection
 
-Reusable workflows detect per-repo mode when `source_repo == github.repository` — the calling repo IS the target repo.
+Reusable workflows accept an `install_mode` input (`per-org` default; `per-repo` switches behavior). The shim passes `install_mode: per-repo` to `reusable-dispatch.yml`, which propagates it to per-stage reusable workflows. The `validate-enrollment` action also accepts `install_mode` and skips `config.yaml` enrollment checks in per-repo mode.
 
 In per-repo mode:
 - Enrollment validation is skipped (always self-enrolled).
@@ -212,7 +212,7 @@ Per-repo maps to these profiles:
 |---------|------------------------|--------------------|
 | **SaaS** (default) | Platform operator (fullsend-ai) pre-provisions shared public Apps and mint | Install shared Apps on repo, set `FULLSEND_MINT_URL` |
 | **Bundled** | Enterprise admin runs one mint + shared `--public` Apps for multiple orgs | Install shared Apps on repo, point at enterprise mint URL |
-| **Self-managed** | Per-repo user deploys own mint + own Apps | `fullsend init --mint-project=my-proj` creates everything |
+| **Self-managed** | Per-repo user deploys own mint + own Apps | `fullsend admin install owner/repo --mint-project=my-proj` creates everything |
 
 **SaaS profile (default)**: The simplest path. Shared public Apps
 (`fullsend-triage`, `fullsend-coder`, `fullsend-review`) are pre-created
@@ -224,8 +224,8 @@ secrets in the repo. The mint looks up the PEM via role-only naming
 
 **Self-managed profile**: For users who want full control — same per-role
 Apps ([ADR 0007](0007-per-role-github-apps.md)), but user-owned. The user
-deploys their own mint and creates their own Apps via `fullsend init
---mint-project=my-proj`.
+deploys their own mint and creates their own Apps via `fullsend admin
+install owner/repo --mint-project=my-proj`.
 
 The mint's `job_workflow_ref` validation accepts both patterns:
 - `{org}/.fullsend/.github/workflows/*.yml@*` (per-org)
@@ -234,32 +234,33 @@ The mint's `job_workflow_ref` validation accepts both patterns:
 The `repository_owner` claim scopes tokens to the calling org/user.
 `ALLOWED_ORGS` on the mint controls which orgs may request tokens.
 
-### 7. CLI support: `fullsend init`
+### 7. CLI support: `fullsend admin install <owner/repo>`
 
-A new CLI command for per-repo setup:
+The existing `fullsend admin install` command handles both per-org and per-repo modes. The argument format determines the mode:
 
 ```
-fullsend init [--mint-url URL] [--mint-project PROJECT]
+fullsend admin install <org>            # per-org installation
+fullsend admin install <owner/repo>     # per-repo installation
 ```
 
-**SaaS profile (default)**:
+Per-repo flags (only valid with `owner/repo` argument):
+- `--mint-url` — token mint URL for OIDC token exchange (required)
+- `--gcp-auth-mode` — GCP authentication mode: `wif` or `sa_key` (default: `sa_key`)
+- `--scaffold-customized` — create `.fullsend/customized/` directory structure
 
-1. Generates `.github/workflows/fullsend.yml` from template.
-2. Sets `FULLSEND_MINT_URL` as a repo variable (default: platform mint).
-3. Guides user to install the shared public fullsend Apps on their repo.
-4. Optionally creates `.fullsend/` directory with default config.
+Per-org-only flags (`--mint-project`, `--mint-region`, `--public`, etc.) are rejected when an `owner/repo` argument is given.
 
-No Apps to create, no PEMs to manage, no GCP project required for
-credentials. The platform operator's shared Apps and mint handle everything.
+**Per-repo install steps**:
 
-**Self-managed profile** (`--mint-project`):
+1. Generates `.github/workflows/fullsend.yml` from the per-repo shim template.
+2. Generates `.fullsend/config.yaml` with agent roles and kill switch.
+3. Optionally creates `.fullsend/customized/` directory structure (`--scaffold-customized`).
+4. Commits all scaffold files to the target repo via the GitHub API.
+5. Sets repository variables (`FULLSEND_MINT_URL`, `FULLSEND_GCP_REGION`, `FULLSEND_GCP_AUTH_MODE`).
+6. Sets repository secrets (`FULLSEND_GCP_PROJECT_ID`, and either WIF credentials or SA key JSON depending on `--gcp-auth-mode`).
+7. In WIF mode, auto-provisions WIF pool/provider/service account if `--gcp-wif-provider` is omitted.
 
-1. Deploys a mint to the user's GCP project.
-2. Creates per-role Apps via the manifest flow (`fullsend-triage`,
-   `fullsend-coder`, `fullsend-review`) and stores PEMs in Secret Manager
-   using role-only naming (`fullsend-{role}-app-pem`).
-3. Generates the shim workflow and sets `FULLSEND_MINT_URL` to the
-   user's mint.
+Per-repo install requires only `repo` and `workflow` OAuth scopes (no `admin:org`).
 
 ### 8. Coexistence
 
@@ -298,29 +299,28 @@ Migration between models is straightforward:
 
 ### Mitigations
 
-- **Template validation**: `fullsend init` generates the workflow file with `pull_request_target` — users who modify it are warned in documentation. CODEOWNERS on `.github/workflows/fullsend.yml` prevents unauthorized changes.
+- **Template validation**: `fullsend admin install` generates the workflow file with `pull_request_target` — users who modify it are warned in documentation. CODEOWNERS on `.github/workflows/fullsend.yml` prevents unauthorized changes.
 - **Minimal payload**: Following per-org `dispatch.yml`, `reusable-dispatch.yml` reads event context from `github.event.*` expressions (available in `workflow_call` callee context) rather than passing the full payload as an input.
 - **Clear error messages**: Credential auto-detection reports why coder and review Apps must be separate, with a link to setup documentation.
 - **Migration path**: Per-repo users who outgrow the model can migrate to per-org without changing agent behavior — the same reusable workflows power both modes.
 
-## Open Questions
+## Resolved Questions
 
 ### `reusable-dispatch.yml` dispatch mechanism
 
-Per-org `dispatch.yml` uses `gh workflow run` to fan out to thin caller stage workflows. `reusable-dispatch.yml` for per-repo needs a different mechanism since there are no thin callers in the target repo. Two options:
-
-1. **Conditional `workflow_call` jobs**: `reusable-dispatch.yml` defines one job per stage, each with an `if:` condition based on the routing output. Only the matched stage job runs. This keeps the pipeline within `workflow_call` but means `reusable-dispatch.yml` has ~5 job definitions.
-2. **Single job with composite action**: Route in a step, then call the matched reusable workflow dynamically. GitHub Actions does not support dynamic `uses:` values, so this would require a wrapper action.
-
-Option 1 is simpler and stays within GitHub Actions' native capabilities.
+**Resolved (PR #799):** Option 1 — conditional `workflow_call` jobs. `reusable-dispatch.yml` defines one job per stage (`triage`, `code`, `review`, `fix`, `retro`), each with an `if:` condition based on the routing output. Only the matched stage job runs. This keeps the pipeline within `workflow_call` and stays within GitHub Actions' native capabilities. The nesting depth is 3 levels (shim → `reusable-dispatch.yml` → `reusable-{stage}.yml`), within GitHub's 4-level limit.
 
 ### Concurrency groups
 
-Per-org thin callers define per-stage concurrency groups (e.g., `fullsend-code-{repo}-{issue}`). In per-repo, `reusable-dispatch.yml` handles routing and dispatch — concurrency should be set at the per-stage job level inside `reusable-dispatch.yml` to match the per-org behavior.
+**Resolved (PR #799):** Concurrency groups are set at the per-stage job level inside `reusable-dispatch.yml`, matching the per-org behavior.
 
 ### `stop-fix` job placement
 
-The per-org shim includes a `stop-fix` job that adds the `fullsend-no-fix` label. For per-repo, this job should live in the target repo's shim workflow (same location as per-org) since it only needs the default `GITHUB_TOKEN` — no mint or reusable workflow involvement.
+**Resolved (PR #799):** The `stop-fix` job lives in the target repo's shim workflow (same location as per-org) since it only needs the default `GITHUB_TOKEN` — no mint or reusable workflow involvement.
+
+### CLI command design
+
+**Resolved (PR #799):** Per-repo uses the existing `fullsend admin install` command rather than a separate `fullsend init` subcommand. The argument format determines the mode: `fullsend admin install <org>` for per-org, `fullsend admin install <owner/repo>` for per-repo. Per-org-only and per-repo-only flags are validated and rejected when used with the wrong mode.
 
 ## References
 
