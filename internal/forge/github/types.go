@@ -135,6 +135,17 @@ func AgentAppConfig(org, role string) AppConfig {
 		// No webhook events — this agent runs on a cron schedule, not events.
 		base.Events = []string{}
 
+	case "retro":
+		base.Description = fmt.Sprintf("Fullsend retro agent for %s", org)
+		base.Permissions = AppPermissions{
+			Actions:      "read",
+			Contents:     "read",
+			PullRequests: "read",
+			Issues:       "write",
+		}
+		// No webhook events — triggered via workflow_dispatch from other agents.
+		base.Events = []string{}
+
 	default:
 		base.Description = fmt.Sprintf("Fullsend %s agent for %s", role, org)
 		base.Permissions = AppPermissions{
