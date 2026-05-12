@@ -1250,6 +1250,7 @@ func TestProvisioner_Provision_MultiOrg_MergeDoesNotOverwriteExistingPEMs(t *tes
 	require.NoError(t, err)
 
 	// PEMs must only be stored for new-org, not for existing-org.
+	require.NotEmpty(t, fake.secretVersionNames, "expected at least one PEM to be stored")
 	for _, name := range fake.secretVersionNames {
 		assert.Contains(t, name, "new-org", "PEM should only be stored for installing org")
 		assert.NotContains(t, name, "existing-org", "PEM must not overwrite existing org's secrets")

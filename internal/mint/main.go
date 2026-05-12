@@ -137,10 +137,10 @@ type smPEMAccessor struct {
 }
 
 func (s *smPEMAccessor) AccessPEM(ctx context.Context, org, role string) ([]byte, error) {
-	if !githubOrgPattern.MatchString(org) {
+	if !githubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
 		return nil, fmt.Errorf("invalid org name %q", org)
 	}
-	if !rolePattern.MatchString(role) {
+	if !rolePattern.MatchString(role) || strings.Contains(role, "--") {
 		return nil, fmt.Errorf("invalid role name %q", role)
 	}
 	name := fmt.Sprintf("projects/%s/secrets/fullsend-%s--%s-app-pem/versions/latest",

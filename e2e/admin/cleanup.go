@@ -66,9 +66,9 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, page playwr
 		t.Logf("[cleanup] Warning: could not list installations: %v", err)
 	} else {
 		for _, inst := range installations {
-			isStale := strings.HasPrefix(inst.AppSlug, "fullsend-"+testOrg) || // old: fullsend-halfsend-*
-				strings.HasPrefix(inst.AppSlug, testOrg+"-") || // v6: halfsend-*
-				strings.HasPrefix(inst.AppSlug, "fullsend-") // OIDC: fullsend-triage, etc.
+			// Safe: testOrg is a dedicated E2E org with no production apps.
+			isStale := strings.HasPrefix(inst.AppSlug, testOrg+"-") || // v6: halfsend-*
+				strings.HasPrefix(inst.AppSlug, "fullsend-") // OIDC + old: fullsend-triage, fullsend-halfsend-*, etc.
 			if isStale {
 				t.Logf("[cleanup] Deleting stale installed app: %s", inst.AppSlug)
 				if delErr := deleteAppViaPlaywright(page, inst.AppSlug, t.Logf, screenshotDir); delErr != nil {

@@ -47,8 +47,9 @@ func DefaultFunctionSourceDir() string {
 	return filepath.Join("internal", "mint")
 }
 
-// githubOrgPattern validates GitHub organization names.
-var githubOrgPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$`)
+// githubOrgPattern validates GitHub organization names: alphanumeric or single
+// hyphens, cannot start or end with a hyphen, max 39 characters.
+var githubOrgPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$`)
 
 // gcpProjectIDPattern validates GCP project IDs (6-30 chars).
 var gcpProjectIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
@@ -154,10 +155,10 @@ func (p *Provisioner) StoreAgentPEM(ctx context.Context, org, role string, pemDa
 	if p.cfg.ProjectID == "" {
 		return fmt.Errorf("GCP project ID is required")
 	}
-	if !githubOrgPattern.MatchString(org) {
+	if !githubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
 		return fmt.Errorf("invalid org name %q", org)
 	}
-	if !rolePattern.MatchString(role) {
+	if !rolePattern.MatchString(role) || strings.Contains(role, "--") {
 		return fmt.Errorf("invalid role name %q: must match %s", role, rolePattern.String())
 	}
 
@@ -209,7 +210,7 @@ func (p *Provisioner) Provision(ctx context.Context) (map[string]string, error) 
 	}
 	seen := make(map[string]bool)
 	for i, org := range p.cfg.GitHubOrgs {
-		if !githubOrgPattern.MatchString(org) {
+		if !githubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
 			return nil, fmt.Errorf("invalid GitHub org name: %q", org)
 		}
 		lower := strings.ToLower(org)
