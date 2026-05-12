@@ -1034,12 +1034,16 @@ func matchesAllowedPrefix(rawURL string, allowedPrefixes []string) bool {
         return false
     }
 
-    // Normalize: decode percent-encoding, resolve . and .. in path
-    // url.Parse already decodes percent-encoding in Path, but we need to
-    // reconstruct the canonical URL for prefix matching
-    canonicalURL := fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, path.Clean(u.Path))
-    if u.RawQuery != "" {
-        canonicalURL += "?" + u.RawQuery
+    // Normalize URL using RFC 3986 semantics via url.ResolveReference
+    // This properly handles percent-encoding, empty segments, and path normalization
+    // without applying POSIX-specific path.Clean() semantics
+    base := &url.URL{Scheme: u.Scheme, Host: u.Host}
+    resolved := base.ResolveReference(u)
+
+    // Build canonical URL from normalized components
+    canonicalURL := resolved.Scheme + "://" + resolved.Host + resolved.EscapedPath()
+    if resolved.RawQuery != "" {
+        canonicalURL += "?" + resolved.RawQuery
     }
 
     for _, prefix := range allowedPrefixes {
