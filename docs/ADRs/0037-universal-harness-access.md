@@ -125,8 +125,6 @@ All resources remain local paths. Sharing requires manual copy-paste.
 
 **Hybrid approach: Option A for declarative resources combined with Option C's restriction on executable resources:**
 
-**Hybrid approach: Option A for declarative resources combined with Option C's restriction on executable resources:**
-
 - Support URLs, absolute paths, and relative paths uniformly for **declarative** harness resources (agents, skills, policies, schemas)
 - **Executable resources (scripts, binaries) must be local files** (Option C restriction) to preserve auditability and prevent direct code execution from untrusted sources
 - Fetch and cache remote resources content-addressed by SHA256
