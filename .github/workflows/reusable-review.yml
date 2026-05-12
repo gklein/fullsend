@@ -108,6 +108,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           path: target-repo
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Setup GCP and prepare credentials
         uses: fullsend-ai/fullsend/.github/actions/setup-gcp@v0

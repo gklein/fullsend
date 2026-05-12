@@ -50,7 +50,7 @@ duplicated in each org's workflow files.
 ### Option C: Reusable workflows + published composite actions
 
 Publish reusable workflows (`workflow_call`) and composite actions from
-`fullsend-ai/fullsend`. Agent workflows in `.fullsend` shrink to ~40 line thin
+`fullsend-ai/fullsend`. Agent workflows in `.fullsend` shrink to ~40–70 line thin
 callers that delegate infrastructure logic upstream via `workflow_call` with
 explicit secret passthrough. Org-specific content (agents, harness, env, policies,
 scripts) stays local.
@@ -76,10 +76,11 @@ auditable manifest of configuration flowing across the trust boundary. Each
 reusable workflow also declares agent-specific inputs (e.g., `trigger_source`,
 `pr_number`, `instruction` for the fix workflow) beyond the common set.
 
-Composite actions referenced via `uses: ./` in reusable workflows resolve to the
-upstream repo (`fullsend-ai/fullsend`), not the caller's repo. This is why the
-four composite actions must live upstream. `run:` steps execute in the caller's
-workspace, so scripts in `.fullsend/scripts/` remain accessible.
+Composite actions referenced via fully-qualified paths
+(`fullsend-ai/fullsend/.github/actions/*@v0`) in reusable workflows resolve to
+the upstream repo, not the caller's repo. This is why the four composite actions
+must live upstream. `run:` steps execute in the caller's workspace, so scripts
+in `.fullsend/scripts/` remain accessible.
 
 `dispatch.yml` stays unchanged — thin callers retain `# fullsend-stage:`
 markers, so stage-based dispatch
@@ -89,11 +90,16 @@ continues to work without modification.
 The dispatch chain uses 1 level of `workflow_call` nesting (limit is 4):
 
 ```
-shim ──workflow_dispatch──> .fullsend/dispatch.yml
+shim ──workflow_call──> .fullsend/dispatch.yml
         ──workflow_dispatch──> .fullsend/code.yml (thin caller)
             ──workflow_call──> reusable-code.yml (level 1)
                 ──uses──> fullsend-ai/fullsend@v0 (composite action)
 ```
+
+The `workflow_dispatch` from dispatch to thin caller is an API call (`gh workflow
+run`), which starts a new workflow run and resets the `workflow_call` nesting
+counter. The reusable workflow sees only 1 level of nesting from the thin
+caller's perspective.
 
 ## Consequences
 
@@ -139,11 +145,12 @@ shim ──workflow_dispatch──> .fullsend/dispatch.yml
   distribution mechanism (e.g., GitLab CI/CD Components or `include:`)
   independent of this ADR.
 - **Scaffold output changes:** `fullsend admin install` will emit thin callers
-  (~40 lines each) instead of full agent workflows (78–305 lines each). This
+  (~40–70 lines each) instead of full agent workflows (78–305 lines each). This
   is a user-visible change — orgs running `admin install` after this change
   ships will see substantially different workflow files in `.fullsend`.
 - **Token generation uses OIDC:** Reusable workflows use the `mint-token`
   composite action for OIDC-based token minting
   ([ADR 0029](https://github.com/fullsend-ai/fullsend/pull/655)). Each
   reusable workflow requests a scoped token for its role (triage, coder,
-  review, fix) — no PEMs or App secrets in the calling repo.
+  review, fullsend) — no PEMs or App secrets in the calling repo. The fix
+  workflow reuses the coder role.

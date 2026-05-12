@@ -24,7 +24,7 @@ Proposed
 [ADR 0003](0003-org-config-repo-convention.md) designed a three-tier layering
 model — `fullsend defaults < org .fullsend config < per-repo overrides` — but
 the runtime never implemented it. The scaffold (`internal/scaffold/scaffold.go`)
-copies all ~68 files from `internal/scaffold/fullsend-repo/` into every
+copies all ~82 files from `internal/scaffold/fullsend-repo/` into every
 `.fullsend` repo via the Git Trees API, including agents, skills, harness
 configs, policies, and schemas that are identical across orgs.
 
@@ -49,7 +49,7 @@ populated at runtime from upstream.
 
 **B. Runtime layering via reusable workflows.** Each reusable workflow adds a
 "Prepare workspace" step that sparse-checkouts upstream defaults from
-`fullsend-ai/fullsend@v0`, copies them into the main dirs (`agents/`, `skills/`,
+`fullsend-ai/fullsend@v1`, copies them into the main dirs (`agents/`, `skills/`,
 etc.), then copies `customized/*` on top so org files overwrite upstream
 defaults. The harness sees a single flat workspace — no changes to
 `ResolveRelativeTo()` or `--fullsend-dir`.
@@ -62,12 +62,11 @@ in layered directories (`agents/`, `skills/`, `schemas/`, `harness/`,
 
 File categories after this change:
 
-- **Org-only** (~17 files): `env/`, `dispatch.yml`, thin callers, shim
-  template, `AGENTS.md`, `CODEOWNERS` — always installed, never overwritten by
-  upstream.
+- **Org-only** (~18 files): `env/`, `dispatch.yml`, thin callers, shim
+  template, `AGENTS.md` — always installed, never overwritten by upstream.
 - **Org overrides** (6 `.gitkeep` files): `customized/{agents,skills,...}/` —
   scaffold creates the structure, orgs add real files.
-- **Upstream defaults** (~48 files): agents, skills, schemas, harness,
+- **Upstream defaults** (~53 files): agents, skills, schemas, harness,
   policies, scripts — authoritative in `fullsend-ai/fullsend`, provided at
   runtime via sparse checkout of the release tag.
 - **Upstream infrastructure** (~5 files): composite actions,
@@ -75,7 +74,7 @@ File categories after this change:
 
 ## Consequences
 
-- Fresh install produces a slim `.fullsend` repo (~23 files instead of ~68).
+- Fresh install produces a slim `.fullsend` repo (~24 files instead of ~82).
 - Upgrades never overwrite org content — the installer does not touch
   customizable content.
 - Upstream improvements to agents, skills, and schemas appear automatically at
