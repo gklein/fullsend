@@ -67,9 +67,11 @@ Extend every path field in the harness schema to support three forms:
 
 1. **Absolute file path:** `/opt/fullsend/agents/code.md`
 2. **Relative file path:** `agents/code.md` (resolved against `.fullsend` base)
-3. **HTTP(S) URL:** `https://github.com/fullsend-ai/library/agents/code.md`
+3. **HTTP(S) URL:** `https://raw.githubusercontent.com/fullsend-ai/library/8cd3799.../agents/code.md#sha256=abc123...`
 
 When the runner encounters a URL, it fetches the resource, caches it locally (content-addressed by SHA256), and validates its integrity before use. All referenced resources (skills, policies, scripts, binaries) support the same three forms, creating a uniform resolution model.
+
+**Note on URL immutability:** Example URLs in this ADR use GitHub `raw.githubusercontent.com` URLs with commit SHAs (e.g., `8cd3799...`) to ensure immutability. Branch-based URLs like `https://github.com/fullsend-ai/library/blob/main/agents/code.md` point to mutable content—the branch advances as commits are added. For production use, always use commit-pinned URLs or rely on the mandatory `#sha256=...` integrity hash to detect changes.
 
 **Transitive closure:** A URL-referenced skill that itself references `policy: https://example.com/policy.yaml` triggers a recursive fetch. The runner builds a complete dependency graph before sandbox creation.
 
@@ -149,7 +151,7 @@ If Option A (URL support everywhere with security extensions) is accepted:
 
 - **Harness schema:** Every path field (`agent`, `policy`, `skills[]`, `host_files[].src`, `pre_script`, `post_script`, etc.) accepts URLs.
 - **Resolution logic:** The runner resolves URLs by fetching, caching (content-addressed), and validating before use.
-- **Transitive closure:** Referenced resources (skills, policies) are parsed to extract their own references, which are recursively fetched. To prevent infinite recursion and circular dependencies:
+- **Transitive closure (Phase 2 feature):** URL-referenced resources can themselves reference other resources via URL, creating a dependency tree. Phase 1 implementation limits URL references to single-level only (harness can reference URL-based resources, but those resources cannot reference additional URLs). Phase 2 adds full transitive resolution with:
   - **Visited node tracking:** The resolver maintains a set of already-visited URLs. If a URL is encountered twice in the same dependency chain, the resolver returns an error indicating a circular dependency.
   - **Max depth limit:** Dependency resolution is bounded by a configurable maximum depth (default: 10 levels). This prevents both cycles and pathologically deep dependency trees from consuming excessive time or memory.
   - **Breadth limits:** A maximum number of dependencies per resource (default: 50) prevents dependency explosion attacks.
@@ -254,12 +256,13 @@ This approach follows the GitHub Actions model: you can use actions from anywher
 
 ### Open questions
 
+- **Insider threat: allowed_remote_resources governance:** The `allowed_remote_resources` list in harness YAML is editable by any team member with write access to `.fullsend`. An insider (or compromised credential) can add `https://attacker-controlled.com/` to a harness, bypassing the org-level domain allowlist. The threat model places insider/compromised creds as priority #2 (after external injection). Similar to "CODEOWNERS files are always human-owned," should `allowed_remote_resources` additions require CODEOWNERS-protected approval? Or should harness-level allowlists be constrained to a subset of the org-level `config.yaml` allowlist (validation error if a harness references a domain not allowed at org level)?
 - **Signature verification (optional enhancement):** Hash pinning prevents content substitution, but doesn't prove authorship. Should remote resources optionally support cryptographic signatures? What PKI model would we use?
 - **Namespace governance:** Who controls `https://cdn.fullsend.ai/skills/`? How do community contributors publish? (Note: This may not be needed — contributors can host on their own GitHub repos and users can allowlist them.)
 - **Version resolution:** If a skill references `policy: v2` but doesn't specify a URL, how is that resolved?
 - **Offline mode:** Should the runner support an offline mode where all resources must be pre-cached?
 - **Lock file format:** What does a dependency lock file look like for harnesses?
-- **git+https:// URL scheme (suggested by @deboer-tim):** Consider supporting `git+https://github.com/fullsend-ai/library.git//agents/code.md@v1.2.0#sha256=abc123...` to allow referencing by tag/commit/branch instead of bare HTTPS URLs. This gives resource owners a stable API — consumers can reference a tag or commit that won't break when internal file layout changes. This pattern is used by GitHub Actions (`uses: actions/checkout@v4`) and Terraform modules. Future extension: `oci://` refs for pulling resources from container registries.
+- **git+https:// vs bare https:// URL scheme (Slack discussion):** The team debated whether to support bare `https://` URLs (current proposal) or structured VCS-coupled references like `git+https://github.com/fullsend-ai/library.git//agents/code.md@v1.2.0#sha256=abc123...` or `github:org/repo/path@ref`. Arguments for bare `https://`: low barrier to entry, simple to understand. Arguments for structured refs: enables `dependabot`-style automation, makes VCS coupling explicit, provides stable API via tags/commits. Initial implementation uses bare `https://` for simplicity, but structured references may provide better long-term ergonomics and should be considered for Phase 2/3.
 
 ## Related Work
 
