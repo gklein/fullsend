@@ -19,4 +19,3 @@ bin/
 .env.*
 !.env.example
 .transcripts/
-/fullsend
