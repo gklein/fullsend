@@ -37,6 +37,12 @@ type OrgSecretRecord struct {
 	RepoIDs          []int64
 }
 
+// OrgVariableRecord records an org-level variable creation/update call.
+type OrgVariableRecord struct {
+	Org, Name, Value string
+	RepoIDs          []int64
+}
+
 // VariableRecord records a variable creation/update call.
 type VariableRecord struct {
 	Owner, Repo, Name, Value string
@@ -88,6 +94,7 @@ type FakeClient struct {
 	FileContents      map[string][]byte       // key: "owner/repo/path"
 	WorkflowRuns      map[string]*WorkflowRun // key: "owner/repo/workflow"
 	AuthenticatedUser string
+	OrgPlan           string // plan name returned by GetOrgPlan (default: "free")
 	Installations     []Installation
 	Secrets           map[string]bool             // key: "owner/repo/name"
 	PullRequests      map[string][]ChangeProposal // key: "owner/repo"
@@ -100,6 +107,10 @@ type FakeClient struct {
 	// Org-level secret state
 	OrgSecrets       map[string]bool    // key: "org/name"
 	OrgSecretRepoIDs map[string][]int64 // key: "org/name" → repo IDs
+
+	// Org-level variable state
+	OrgVariables      map[string]bool   // key: "org/name"
+	OrgVariableValues map[string]string // key: "org/name" → value
 
 	// Error injection: key is method name, value is error to return.
 	Errors map[string]error
@@ -117,21 +128,23 @@ type FakeClient struct {
 	PRReviews map[string][]PullRequestReview // key: "owner/repo/number"
 
 	// Call recorders
-	CreatedRepos      []Repository
-	CreatedFiles      []FileRecord
-	CreatedBranches   []string // "owner/repo/branch"
-	CreatedProposals  []ChangeProposal
-	DeletedRepos      []string // "owner/repo"
-	DeletedFiles      []FileRecord
-	CreatedSecrets    []SecretRecord
-	Variables         []VariableRecord
-	DeletedOrgSecrets []string // "org/name"
-	CreatedOrgSecrets []OrgSecretRecord
-	UpdatedComments   []UpdatedCommentRecord
-	MinimizedComments []MinimizedCommentRecord
-	CreatedReviews    []ReviewRecord
-	DismissedReviews  []DismissedReviewRecord
-	CommittedFiles    []CommitFilesRecord
+	CreatedRepos        []Repository
+	CreatedFiles        []FileRecord
+	CreatedBranches     []string // "owner/repo/branch"
+	CreatedProposals    []ChangeProposal
+	DeletedRepos        []string // "owner/repo"
+	DeletedFiles        []FileRecord
+	CreatedSecrets      []SecretRecord
+	Variables           []VariableRecord
+	DeletedOrgSecrets   []string // "org/name"
+	CreatedOrgSecrets   []OrgSecretRecord
+	CreatedOrgVariables []OrgVariableRecord
+	DeletedOrgVariables []string // "org/name"
+	UpdatedComments     []UpdatedCommentRecord
+	MinimizedComments   []MinimizedCommentRecord
+	CreatedReviews      []ReviewRecord
+	DismissedReviews    []DismissedReviewRecord
+	CommittedFiles      []CommitFilesRecord
 
 	// internal counters
 	proposalCounter int
@@ -156,7 +169,7 @@ func (f *FakeClient) ListOrgRepos(_ context.Context, _ string) ([]Repository, er
 
 	var result []Repository
 	for _, r := range f.Repos {
-		if r.Archived || r.Fork {
+		if r.Archived || r.Fork || r.Private {
 			continue
 		}
 		result = append(result, r)
@@ -456,6 +469,20 @@ func (f *FakeClient) ListRepoPullRequests(_ context.Context, owner, repo string)
 		}
 	}
 	return []ChangeProposal{}, nil
+}
+
+func (f *FakeClient) GetOrgPlan(_ context.Context, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("GetOrgPlan"); e != nil {
+		return "", e
+	}
+
+	if f.OrgPlan == "" {
+		return "free", nil
+	}
+	return f.OrgPlan, nil
 }
 
 func (f *FakeClient) GetAuthenticatedUser(_ context.Context) (string, error) {
@@ -883,4 +910,58 @@ func (f *FakeClient) GetOrgSecretRepos(_ context.Context, org, name string) ([]i
 		return nil, nil
 	}
 	return f.OrgSecretRepoIDs[org+"/"+name], nil
+}
+
+func (f *FakeClient) CreateOrUpdateOrgVariable(_ context.Context, org, name, value string, selectedRepoIDs []int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("CreateOrUpdateOrgVariable"); e != nil {
+		return e
+	}
+
+	f.CreatedOrgVariables = append(f.CreatedOrgVariables, OrgVariableRecord{
+		Org:     org,
+		Name:    name,
+		Value:   value,
+		RepoIDs: selectedRepoIDs,
+	})
+
+	if f.OrgVariables == nil {
+		f.OrgVariables = make(map[string]bool)
+	}
+	f.OrgVariables[org+"/"+name] = true
+
+	if f.OrgVariableValues == nil {
+		f.OrgVariableValues = make(map[string]string)
+	}
+	f.OrgVariableValues[org+"/"+name] = value
+	return nil
+}
+
+func (f *FakeClient) OrgVariableExists(_ context.Context, org, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("OrgVariableExists"); e != nil {
+		return false, e
+	}
+
+	if f.OrgVariables == nil {
+		return false, nil
+	}
+	return f.OrgVariables[org+"/"+name], nil
+}
+
+func (f *FakeClient) DeleteOrgVariable(_ context.Context, org, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("DeleteOrgVariable"); e != nil {
+		return e
+	}
+
+	f.DeletedOrgVariables = append(f.DeletedOrgVariables, org+"/"+name)
+	delete(f.OrgVariables, org+"/"+name)
+	return nil
 }

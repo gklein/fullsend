@@ -32,7 +32,7 @@ on:
 # Bot-triggered runs also cancel previous bot runs on the same PR.
 concurrency:
   group: >-
-    fullsend-fix-${{
+    fullsend-fix-${{ inputs.source_repo }}-${{
       fromJSON(inputs.event_payload).pull_request.number
       || fromJSON(inputs.event_payload).issue.number
       || inputs.pr_number
@@ -61,22 +61,17 @@ jobs:
         with:
           source_repo: ${{ inputs.source_repo }}
 
-      - name: Generate sandbox token (read-only)
-        id: sandbox-token
-        uses: actions/create-github-app-token@v3
+      - name: Mint coder token
+        id: app-token
+        uses: ./.github/actions/mint-token
         with:
-          client-id: ${{ vars.FULLSEND_CODER_CLIENT_ID }}
-          private-key: ${{ secrets.FULLSEND_CODER_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ steps.repo-parts.outputs.name }}
-          permission-contents: read
-          permission-issues: read
-          permission-pull-requests: read
-          permission-metadata: read
+          role: coder
+          repos: ${{ steps.repo-parts.outputs.name }}
+          mint_url: ${{ vars.FULLSEND_MINT_URL }}
 
       - name: Block fork PRs
         env:
-          GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           EVENT_PAYLOAD: ${{ inputs.event_payload }}
           SOURCE_REPO: ${{ inputs.source_repo }}
           PR_NUM_INPUT: ${{ inputs.pr_number }}
@@ -106,7 +101,7 @@ jobs:
       - name: Extract PR number and context
         id: context
         env:
-          GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           EVENT_PAYLOAD: ${{ inputs.event_payload }}
           INPUT_PR_NUMBER: ${{ inputs.pr_number }}
           INPUT_INSTRUCTION: ${{ inputs.instruction }}
@@ -188,7 +183,7 @@ jobs:
 
       - name: Check fullsend-no-fix label
         env:
-          GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TRIGGER_SOURCE: ${{ inputs.trigger_source }}
           PR_NUM: ${{ steps.context.outputs.pr_number }}
           SOURCE_REPO: ${{ inputs.source_repo }}
@@ -202,22 +197,11 @@ jobs:
             fi
           fi
 
-      - name: Generate push token (write)
-        id: push-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ vars.FULLSEND_CODER_CLIENT_ID }}
-          private-key: ${{ secrets.FULLSEND_CODER_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ steps.repo-parts.outputs.name }}
-          permission-contents: write
-          permission-pull-requests: write
-
       - name: Checkout target repository at PR HEAD
         uses: actions/checkout@v6
         with:
           repository: ${{ inputs.source_repo }}
-          token: ${{ steps.sandbox-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token }}
           path: target-repo
           fetch-depth: 0
           persist-credentials: false
@@ -234,7 +218,7 @@ jobs:
       - name: Pre-fetch review body
         id: review-body
         env:
-          GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SOURCE_REPO: ${{ inputs.source_repo }}
           PR_NUM: ${{ steps.context.outputs.pr_number }}
           TRIGGER_SOURCE: ${{ inputs.trigger_source }}
@@ -278,7 +262,7 @@ jobs:
       - name: Setup agent environment
         env:
           AGENT_PREFIX: FIX_
-          FIX_GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
+          FIX_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           FIX_TARGET_REPO_DIR: target-repo
           FIX_ANTHROPIC_VERTEX_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}
           FIX_CLOUD_ML_REGION: ${{ vars.FULLSEND_GCP_REGION }}
@@ -294,7 +278,7 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
           REPO_FULL_NAME: ${{ inputs.source_repo }}
-          PUSH_TOKEN: ${{ steps.push-token.outputs.token }}
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token }}
           PUSH_TOKEN_SOURCE: github-app
           TARGET_BRANCH: ${{ steps.context.outputs.base_ref }}
           TRIGGER_SOURCE: ${{ inputs.trigger_source }}

@@ -43,7 +43,7 @@ func TestInstallCmd_Flags(t *testing.T) {
 
 	agentsFlag := cmd.Flags().Lookup("agents")
 	require.NotNil(t, agentsFlag, "expected --agents flag")
-	assert.Equal(t, "fullsend,triage,coder,review", agentsFlag.DefValue)
+	assert.Equal(t, strings.Join(config.DefaultAgentRoles(), ","), agentsFlag.DefValue)
 
 	dryRunFlag := cmd.Flags().Lookup("dry-run")
 	require.NotNil(t, dryRunFlag, "expected --dry-run flag")
@@ -64,6 +64,20 @@ func TestInstallCmd_Flags(t *testing.T) {
 	// --repo flag should not exist (issue #495)
 	repoFlag := cmd.Flags().Lookup("repo")
 	assert.Nil(t, repoFlag, "--repo flag should have been removed")
+
+	mintProviderFlag := cmd.Flags().Lookup("mint-provider")
+	require.NotNil(t, mintProviderFlag, "expected --mint-provider flag")
+	assert.Equal(t, "gcf", mintProviderFlag.DefValue)
+
+	mintProjectFlag := cmd.Flags().Lookup("mint-project")
+	require.NotNil(t, mintProjectFlag, "expected --mint-project flag")
+
+	mintRegionFlag := cmd.Flags().Lookup("mint-region")
+	require.NotNil(t, mintRegionFlag, "expected --mint-region flag")
+	assert.Equal(t, "us-central1", mintRegionFlag.DefValue)
+
+	mintSourceDirFlag := cmd.Flags().Lookup("mint-source-dir")
+	require.NotNil(t, mintSourceDirFlag, "expected --mint-source-dir flag")
 }
 
 func TestUninstallCmd_RequiresOrg(t *testing.T) {
@@ -192,7 +206,7 @@ func TestEnsureConfigRepoExists_CreatesWhenMissing(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, client.CreatedRepos, 1)
 	assert.Equal(t, ".fullsend", client.CreatedRepos[0].Name)
-	assert.True(t, client.CreatedRepos[0].Private)
+	assert.False(t, client.CreatedRepos[0].Private)
 }
 
 func TestEnsureConfigRepoExists_NoOpWhenExists(t *testing.T) {
@@ -778,7 +792,7 @@ func TestCheckInstallScopes_SyncWithLayers(t *testing.T) {
 		layers.NewWorkflowsLayer("test-org", nil, ui.New(&discardWriter{}), "", ""),
 		layers.NewSecretsLayer("test-org", nil, nil, ui.New(&discardWriter{})),
 		layers.NewInferenceLayer("test-org", nil, nil, ui.New(&discardWriter{})),
-		layers.NewDispatchTokenLayer("test-org", nil, "", nil, ui.New(&discardWriter{}), nil),
+		layers.NewOIDCDispatchLayer("test-org", nil, nil, nil, ui.New(&discardWriter{})),
 		layers.NewEnrollmentLayer("test-org", nil, nil, nil, ui.New(&discardWriter{})),
 		layers.NewVendorBinaryLayer("test-org", nil, ui.New(&discardWriter{}), false, nil),
 	)

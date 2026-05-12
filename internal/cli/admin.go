@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -17,6 +17,8 @@ import (
 
 	"github.com/fullsend-ai/fullsend/internal/appsetup"
 	"github.com/fullsend-ai/fullsend/internal/config"
+	"github.com/fullsend-ai/fullsend/internal/dispatch"
+	"github.com/fullsend-ai/fullsend/internal/dispatch/gcf"
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	gh "github.com/fullsend-ai/fullsend/internal/forge/github"
 	"github.com/fullsend-ai/fullsend/internal/inference"
@@ -98,6 +100,13 @@ func newInstallCmd() *cobra.Command {
 	var gcpCredentialsFile string
 	var gcpWIFProvider string
 	var gcpWIFSAEmail string
+	var mintProvider string
+	var mintProject string
+	var mintRegion string
+	var mintSourceDir string
+	var mintSkipDeploy bool
+	var mintForceDeploy bool
+	var publicApps bool
 
 	cmd := &cobra.Command{
 		Use:   "install <org>",
@@ -125,9 +134,25 @@ func newInstallCmd() *cobra.Command {
 			printer.Blank()
 
 			// Parse roles from --agents flag.
-			roles := strings.Split(agents, ",")
-			for i := range roles {
-				roles[i] = strings.TrimSpace(roles[i])
+			var roles []string
+			for _, entry := range strings.Split(agents, ",") {
+				if trimmed := strings.TrimSpace(entry); trimmed != "" {
+					roles = append(roles, trimmed)
+				}
+			}
+
+			// Validate mint provider (only required for real installs, not dry-run).
+			if !dryRun {
+				if mintProvider != "gcf" {
+					return fmt.Errorf("--mint-provider must be 'gcf'")
+				}
+				if mintProject == "" {
+					return fmt.Errorf("--mint-project is required")
+				}
+			}
+
+			if mintSkipDeploy && mintForceDeploy {
+				return fmt.Errorf("--skip-mint-deploy and --force-mint-deploy are mutually exclusive")
 			}
 
 			// Validate GCP flag dependencies.
@@ -245,18 +270,18 @@ func newInstallCmd() *cobra.Command {
 				if err := ensureConfigRepoExists(ctx, client, printer, org); err != nil {
 					return err
 				}
-				creds, err := runAppSetup(ctx, client, printer, org, roles)
+				creds, err := runAppSetup(ctx, client, printer, org, roles, mintProject, publicApps)
 				if err != nil {
 					return err
 				}
 				agentCreds = creds
 			}
 
-			return runInstall(ctx, client, printer, org, repos, roles, agentCreds, inferenceProvider, inferenceProviderName, vendorBinary, allRepos)
+			return runInstall(ctx, client, printer, org, repos, roles, agentCreds, inferenceProvider, inferenceProviderName, vendorBinary, mintProvider, mintProject, mintRegion, mintSourceDir, mintSkipDeploy, mintForceDeploy, allRepos)
 		},
 	}
 
-	cmd.Flags().StringVar(&agents, "agents", "fullsend,triage,coder,review", "comma-separated agent roles")
+	cmd.Flags().StringVar(&agents, "agents", strings.Join(config.DefaultAgentRoles(), ","), "comma-separated agent roles")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without making them")
 	cmd.Flags().BoolVar(&skipAppSetup, "skip-app-setup", false, "skip GitHub App creation/setup")
 	cmd.Flags().BoolVar(&vendorBinary, "vendor-fullsend-binary", false, "cross-compile and upload the fullsend binary into .fullsend/bin/ for development iteration")
@@ -268,6 +293,13 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().StringVar(&gcpCredentialsFile, "gcp-credentials-file", "", "path to pre-made GCP service account key JSON (optional, used with --gcp-project)")
 	cmd.Flags().StringVar(&gcpWIFProvider, "gcp-wif-provider", "", "full Workload Identity Federation provider resource name (e.g. projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER)")
 	cmd.Flags().StringVar(&gcpWIFSAEmail, "gcp-wif-sa-email", "", "GCP service account email for WIF impersonation (required with --gcp-wif-provider)")
+	cmd.Flags().StringVar(&mintProvider, "mint-provider", "gcf", "token mint provider (gcf)")
+	cmd.Flags().StringVar(&mintProject, "mint-project", "", "cloud project for token mint (e.g. GCP project ID)")
+	cmd.Flags().StringVar(&mintRegion, "mint-region", "us-central1", "cloud region for token mint")
+	cmd.Flags().StringVar(&mintSourceDir, "mint-source-dir", "", "path to mint function source (default: internal/mint/)")
+	cmd.Flags().BoolVar(&mintSkipDeploy, "skip-mint-deploy", false, "skip Cloud Function deployment, reuse existing mint URL")
+	cmd.Flags().BoolVar(&mintForceDeploy, "force-mint-deploy", false, "force Cloud Function redeployment even if unchanged")
+	cmd.Flags().BoolVar(&publicApps, "public", false, "create public (unlisted) GitHub Apps installable by other orgs")
 
 	return cmd
 }
@@ -416,7 +448,11 @@ func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, or
 	}
 
 	repoNames := repoNameList(allRepos)
-	hasPrivate := hasPrivateRepos(allRepos)
+
+	// Config repo is always public: cross-repo workflow_call from any
+	// caller visibility (public, private, internal) only works reliably
+	// when the called repo is public, across all GitHub plan tiers.
+	privateRepo := false
 
 	// Validate that every enabled repository matches a discovered repo.
 	if err := validateEnabledRepos(enabledRepos, repoNames); err != nil {
@@ -425,6 +461,7 @@ func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, or
 
 	// Build config with empty agents for analysis.
 	cfg := config.NewOrgConfig(repoNames, enabledRepos, roles, nil, inferenceProviderName)
+	cfg.Dispatch.Mode = "oidc-mint"
 
 	user, err := client.GetAuthenticatedUser(ctx)
 	if err != nil {
@@ -440,7 +477,8 @@ func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, or
 	}
 
 	enrolledRepoIDs := collectEnrolledRepoIDs(allRepos, enabledRepos)
-	stack := buildLayerStack(org, client, cfg, printer, user, hasPrivate, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, false, nil, nil)
+	dispatcher := gcf.NewProvisioner(gcf.Config{}, nil)
+	stack := buildLayerStack(org, client, cfg, printer, user, privateRepo, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, false, nil, dispatcher)
 
 	if err := runPreflight(ctx, stack, layers.OpInstall, client, printer); err != nil {
 		return err
@@ -450,12 +488,15 @@ func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, or
 	return printAnalysis(ctx, stack, printer)
 }
 
-// runAppSetup creates or reuses GitHub Apps for each role.
-func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string) ([]layers.AgentCredentials, error) {
+// runAppSetup creates or reuses GitHub Apps for each role. When mintProject is
+// non-empty, PEMs are also stored in GCP Secret Manager during app creation so
+// they survive partial provisioning failures.
+func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject string, publicApps bool) ([]layers.AgentCredentials, error) {
 	printer.Header("Setting up GitHub Apps")
 	printer.Blank()
 
-	setup := appsetup.NewSetup(client, appsetup.StdinPrompter{}, appsetup.DefaultBrowser{}, printer)
+	setup := appsetup.NewSetup(client, appsetup.StdinPrompter{}, appsetup.DefaultBrowser{}, printer).
+		WithPublicApps(publicApps)
 
 	// Try to load known slugs from existing config.
 	knownSlugs := loadKnownSlugs(ctx, client, org)
@@ -463,17 +504,40 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 		setup = setup.WithKnownSlugs(knownSlugs)
 	}
 
-	// Add secret existence checker.
-	setup = setup.WithSecretExists(func(role string) (bool, error) {
-		secretName := fmt.Sprintf("FULLSEND_%s_APP_PRIVATE_KEY", strings.ToUpper(role))
-		return client.RepoSecretExists(ctx, org, forge.ConfigRepoName, secretName)
-	})
+	// Build an optional Secret Manager provisioner for OIDC mint mode.
+	var pemProvisioner *gcf.Provisioner
+	if mintProject != "" {
+		pemProvisioner = gcf.NewProvisioner(gcf.Config{
+			ProjectID:  mintProject,
+			GitHubOrgs: []string{org},
+		}, gcf.NewLiveGCFClient())
+	}
 
-	// Store PEM immediately after app creation to survive partial failures.
-	setup = setup.WithStoreSecret(func(sctx context.Context, role, pem string) error {
-		secretName := fmt.Sprintf("FULLSEND_%s_APP_PRIVATE_KEY", strings.ToUpper(role))
-		return client.CreateRepoSecret(sctx, org, forge.ConfigRepoName, secretName, pem)
-	})
+	// In OIDC mint mode, PEMs live in Secret Manager — check there.
+	// Otherwise, check GitHub repo secrets.
+	if pemProvisioner != nil {
+		setup = setup.WithSecretExists(func(role string) (bool, error) {
+			return pemProvisioner.SecretExists(ctx, org, role)
+		})
+	} else {
+		setup = setup.WithSecretExists(func(role string) (bool, error) {
+			secretName := fmt.Sprintf("FULLSEND_%s_APP_PRIVATE_KEY", strings.ToUpper(role))
+			return client.RepoSecretExists(ctx, org, forge.ConfigRepoName, secretName)
+		})
+	}
+
+	// In OIDC mint mode, store PEMs only in Secret Manager.
+	// Otherwise, store in GitHub repo secrets.
+	if pemProvisioner != nil {
+		setup = setup.WithStoreSecret(func(sctx context.Context, role, pem string) error {
+			return pemProvisioner.StoreAgentPEM(sctx, org, role, []byte(pem))
+		})
+	} else {
+		setup = setup.WithStoreSecret(func(sctx context.Context, role, pem string) error {
+			secretName := fmt.Sprintf("FULLSEND_%s_APP_PRIVATE_KEY", strings.ToUpper(role))
+			return client.CreateRepoSecret(sctx, org, forge.ConfigRepoName, secretName, pem)
+		})
+	}
 
 	var creds []layers.AgentCredentials
 	for _, role := range roles {
@@ -489,6 +553,7 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 			},
 			PEM:      appCreds.PEM,
 			ClientID: appCreds.ClientID,
+			AppID:    appCreds.AppID,
 		})
 	}
 
@@ -514,7 +579,7 @@ func ensureConfigRepoExists(ctx context.Context, client forge.Client, printer *u
 
 	printer.StepStart("Creating " + forge.ConfigRepoName + " repository")
 	desc := fmt.Sprintf("fullsend configuration for %s", org)
-	if _, err := client.CreateRepo(ctx, org, forge.ConfigRepoName, desc, true); err != nil {
+	if _, err := client.CreateRepo(ctx, org, forge.ConfigRepoName, desc, false); err != nil {
 		recheck, recheckErr := client.GetRepo(ctx, org, forge.ConfigRepoName)
 		if recheckErr == nil && recheck != nil {
 			printer.StepInfo(forge.ConfigRepoName + " repository already exists")
@@ -529,11 +594,12 @@ func ensureConfigRepoExists(ctx context.Context, client forge.Client, printer *u
 
 // validateEnabledRepos checks that every enabled repository exists in the
 // discovered (eligible) repo list. Repos filtered out by ListOrgRepos
-// (forks, archived) will not appear in discoveredNames, so this catches
-// the case where an enabled repo is a fork or archived.
+// (private, forks, archived) will not appear in discoveredNames, so this
+// catches the case where an enabled repo is private, a fork, or archived.
 //
-// This validation exists because fullsend's trust model is org-centric:
-// forks may live outside the org's permission boundary or lack the same
+// Private repos are excluded because the default .fullsend config repo is
+// public and agent workflow logs would expose private repo content.
+// Forks may live outside the org's permission boundary or lack the same
 // CODEOWNERS governance, and archived repos have no active development.
 // See the ListOrgRepos comment in forge.Client for the full rationale.
 func validateEnabledRepos(enabledRepos, discoveredNames []string) error {
@@ -551,7 +617,7 @@ func validateEnabledRepos(enabledRepos, discoveredNames []string) error {
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("repos not found in %s: %s — they may be forks, archived, or misspelled",
+		return fmt.Errorf("repos not found in %s: %s — they may be private, forks, archived, or misspelled",
 			"the discovered repo list", strings.Join(missing, ", "))
 	}
 	return nil
@@ -559,7 +625,7 @@ func validateEnabledRepos(enabledRepos, discoveredNames []string) error {
 
 // runInstall performs the full installation.
 // If discoveredRepos is non-nil, it will be used instead of calling ListOrgRepos.
-func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, agentCreds []layers.AgentCredentials, inferenceProvider inference.Provider, inferenceProviderName string, vendorBinary bool, discoveredRepos []forge.Repository) error {
+func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, agentCreds []layers.AgentCredentials, inferenceProvider inference.Provider, inferenceProviderName string, vendorBinary bool, mintProvider, mintProject, mintRegion, mintSourceDir string, mintSkipDeploy, mintForceDeploy bool, discoveredRepos []forge.Repository) error {
 	var allRepos []forge.Repository
 	var err error
 
@@ -577,7 +643,8 @@ func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, o
 	}
 
 	repoNames := repoNameList(allRepos)
-	hasPrivate := hasPrivateRepos(allRepos)
+
+	privateRepo := false
 	printer.Blank()
 
 	// Validate that every enabled repository matches a discovered repo.
@@ -595,15 +662,50 @@ func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, o
 	}
 
 	cfg := config.NewOrgConfig(repoNames, enabledRepos, roles, agents, inferenceProviderName)
+	cfg.Dispatch.Mode = "oidc-mint"
 
 	user, err := client.GetAuthenticatedUser(ctx)
 	if err != nil {
 		return fmt.Errorf("getting authenticated user: %w", err)
 	}
 
-	stack := buildLayerStack(org, client, cfg, printer, user, hasPrivate, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, vendorBinary, vendorFullsendBinary, func(ctx context.Context) (string, error) {
-		return promptDispatchToken(ctx, client, printer, org)
-	})
+	// Build the mint infrastructure provisioner.
+	agentPEMs := make(map[string][]byte)
+	agentAppIDs := make(map[string]string)
+	for _, ac := range agentCreds {
+		if ac.AppID != 0 {
+			agentAppIDs[ac.Role] = strconv.Itoa(ac.AppID)
+			if ac.PEM != "" {
+				agentPEMs[ac.Role] = []byte(ac.PEM)
+			}
+		}
+	}
+	if len(agentAppIDs) == 0 {
+		return fmt.Errorf("OIDC mint requires at least one agent with credentials")
+	}
+
+	if mintSourceDir == "" {
+		mintSourceDir = gcf.DefaultFunctionSourceDir()
+	}
+
+	deployMode := gcf.DeployAuto
+	if mintSkipDeploy {
+		deployMode = gcf.DeploySkip
+	} else if mintForceDeploy {
+		deployMode = gcf.DeployForce
+	}
+
+	dispatcher := gcf.NewProvisioner(gcf.Config{
+		ProjectID:         mintProject,
+		Region:            mintRegion,
+		GitHubOrgs:        []string{org},
+		AgentPEMs:         agentPEMs,
+		AgentAppIDs:       agentAppIDs,
+		FunctionSourceDir: mintSourceDir,
+		DeployMode:        deployMode,
+	}, gcf.NewLiveGCFClient())
+
+	stack := buildLayerStack(org, client, cfg, printer, user, privateRepo, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, vendorBinary, vendorFullsendBinary, dispatcher)
 
 	if err := runPreflight(ctx, stack, layers.OpInstall, client, printer); err != nil {
 		return err
@@ -646,9 +748,27 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 	if len(agentSlugs) == 0 {
 		// Config unavailable — assume default app naming convention.
 		for _, role := range config.DefaultAgentRoles() {
-			agentSlugs = append(agentSlugs, appsetup.ExpectedAppSlug(org, role))
+			agentSlugs = append(agentSlugs, appsetup.AppSlug(role))
 		}
 		printer.StepInfo("Config repo unavailable; using default app names")
+	}
+
+	// Detect dispatch mode from existing config.
+	var configMode string
+	if cfgData != nil {
+		if existingCfg, parseErr := config.ParseOrgConfig(cfgData); parseErr == nil {
+			configMode = existingCfg.Dispatch.Mode
+		}
+	}
+
+	// Build the dispatch layer based on detected mode.
+	var dispatchLayer layers.Layer
+	switch configMode {
+	case "oidc-mint":
+		dispatchLayer = layers.NewOIDCDispatchLayer(org, client, nil, gcf.NewProvisioner(gcf.Config{}, nil), printer)
+	default:
+		// Config unavailable — clean both modes to ensure nothing is left behind.
+		dispatchLayer = layers.NewBothModesDispatchLayer(org, client, gcf.NewProvisioner(gcf.Config{}, nil), printer)
 	}
 
 	// Build a minimal stack for uninstall.
@@ -659,7 +779,7 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 		layers.NewWorkflowsLayer(org, client, printer, "", ""),
 		layers.NewSecretsLayer(org, client, nil, printer),
 		layers.NewInferenceLayer(org, client, nil, printer),
-		layers.NewDispatchTokenLayer(org, client, "", nil, printer, nil),
+		dispatchLayer,
 		layers.NewEnrollmentLayer(org, client, nil, nil, printer),
 	)
 
@@ -751,7 +871,8 @@ func runAnalyze(ctx context.Context, client forge.Client, printer *ui.Printer, o
 	}
 
 	repoNames := repoNameList(allRepos)
-	hasPrivate := hasPrivateRepos(allRepos)
+
+	privateRepo := false
 
 	printer.StepDone(fmt.Sprintf("Found %d repositories", len(allRepos)))
 	printer.Blank()
@@ -785,7 +906,8 @@ func runAnalyze(ctx context.Context, client forge.Client, printer *ui.Printer, o
 		inferenceProvider = vertex.NewAnalyzeOnly(mode)
 	}
 
-	stack := buildLayerStack(org, client, cfg, printer, user, hasPrivate, nil, agentCreds, nil, inferenceProvider, false, nil, nil)
+	dispatcher := gcf.NewProvisioner(gcf.Config{}, nil)
+	stack := buildLayerStack(org, client, cfg, printer, user, privateRepo, nil, agentCreds, nil, inferenceProvider, false, nil, dispatcher)
 
 	if err := runPreflight(ctx, stack, layers.OpAnalyze, client, printer); err != nil {
 		return err
@@ -802,22 +924,24 @@ func buildLayerStack(
 	cfg *config.OrgConfig,
 	printer *ui.Printer,
 	user string,
-	hasPrivate bool,
+	privateRepo bool,
 	enabledRepos []string,
 	agentCreds []layers.AgentCredentials,
 	enrolledRepoIDs []int64,
 	inferenceProvider inference.Provider,
 	vendorBinary bool,
 	vendorFn layers.VendorFunc,
-	promptTokenFn layers.PromptTokenFunc,
+	dispatcher dispatch.Dispatcher,
 ) *layers.Stack {
+	dispatchLayer := layers.NewOIDCDispatchLayer(org, client, enrolledRepoIDs, dispatcher, printer)
+
 	return layers.NewStack(
-		layers.NewConfigRepoLayer(org, client, cfg, printer, hasPrivate),
+		layers.NewConfigRepoLayer(org, client, cfg, printer, privateRepo),
 		layers.NewWorkflowsLayer(org, client, printer, user, version),
 		layers.NewVendorBinaryLayer(org, client, printer, vendorBinary, vendorFn),
-		layers.NewSecretsLayer(org, client, agentCreds, printer),
+		layers.NewSecretsLayer(org, client, agentCreds, printer).WithOIDCMode(),
 		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
-		layers.NewDispatchTokenLayer(org, client, "", enrolledRepoIDs, printer, promptTokenFn),
+		dispatchLayer,
 		layers.NewEnrollmentLayer(org, client, enabledRepos, cfg.DisabledRepos(), printer),
 	)
 }
@@ -1038,126 +1162,6 @@ func promptEnrollment(printer *ui.Printer, in io.Reader) (bool, error) {
 			printer.StepWarn(fmt.Sprintf("Invalid choice: %q (expected 'a' or 'n')", choice))
 		}
 	}
-}
-
-// promptDispatchToken checks whether the dispatch token org secret already
-// exists and, if not, opens the browser to GitHub's pre-filled fine-grained
-// PAT creation page and prompts the user to paste the result.
-// Returns the token string (empty if reusing an existing secret).
-func promptDispatchToken(ctx context.Context, client forge.Client, printer *ui.Printer, org string) (string, error) {
-	printer.Header("Dispatch Token Setup")
-	printer.Blank()
-
-	exists, err := client.OrgSecretExists(ctx, org, "FULLSEND_DISPATCH_TOKEN")
-	if err != nil {
-		return "", fmt.Errorf("checking dispatch token: %w", err)
-	}
-
-	if exists {
-		printer.StepDone("Dispatch token already configured")
-		return "", nil
-	}
-
-	// Build a pre-filled URL for fine-grained PAT creation.
-	// GitHub honors name, description, and target_name query params but
-	// does NOT reliably pre-fill permissions — the user must add Actions
-	// read+write manually via the "+ Add permissions" button.
-	escapedOrg := url.QueryEscape(org)
-	patURL := fmt.Sprintf(
-		"https://github.com/settings/personal-access-tokens/new"+
-			"?name=fullsend-dispatch-%s"+
-			"&description=Dispatch+token+for+fullsend+agent+pipeline+in+%s."+
-			"+Scoped+to+.fullsend+repo+with+Actions+write+and+Contents+read."+
-			"&target_name=%s",
-		escapedOrg, escapedOrg, escapedOrg,
-	)
-
-	printer.StepStart("Opening browser for dispatch token creation")
-	printer.StepInfo("URL: " + patURL)
-
-	browser := appsetup.DefaultBrowser{}
-	if err := browser.Open(ctx, patURL); err != nil {
-		printer.StepWarn(fmt.Sprintf("Could not open browser: %v", err))
-	} else {
-		printer.StepDone("Opened token creation page")
-	}
-
-	printer.Blank()
-	printer.StepWarn("IMPORTANT: The installer's URL tried to pre-fill permissions")
-	printer.StepWarn("in the query parameters, but GitHub's fine-grained PAT page doesn't")
-	printer.StepWarn("always honor those pre-fill params. So you just have to click that")
-	printer.StepWarn("'+ Add permissions' button and add Actions and Contents manually.")
-	printer.Blank()
-	printer.StepWarn("GitHub's resource owner selector has a known quirk.")
-	printer.StepWarn("If the owner is pre-filled, you may need to de-select and")
-	printer.StepWarn("re-select the owner for the repository picker to appear.")
-	printer.Blank()
-	printer.StepInfo("In the browser:")
-	printer.StepInfo("  1. Verify the 'Resource owner' is set to " + org)
-	printer.StepInfo("     (If the repo picker doesn't appear, switch the owner")
-	printer.StepInfo("      away and back to " + org + " to force it to load)")
-	printer.StepInfo("  2. Under 'Repository access', select 'Only select repositories'")
-	printer.StepInfo("  3. Pick ONLY the .fullsend repository (not other repos)")
-	printer.StepInfo("  4. Click the '+ Add permissions' button (top right of Permissions section)")
-	printer.StepInfo("  5. Look for 'Actions' in the dropdown/list that appears")
-	printer.StepInfo("  6. Set Actions to 'Read and write'")
-	printer.StepInfo("  7. Also add 'Contents' and leave it at 'Read-only'")
-	printer.StepInfo("  8. Click 'Generate token' (the green button at the bottom left)")
-	printer.StepInfo("  9. GitHub will show the token ONCE on the next page — copy it immediately")
-	printer.StepInfo("     (If you navigate away before copying, you'll need to delete the token")
-	printer.StepInfo("      and create a new one — GitHub never shows it again)")
-	printer.StepInfo(" 10. Paste the token below")
-	printer.Blank()
-	printer.StepInfo("Paste the token here:")
-
-	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return "", fmt.Errorf("reading dispatch token: %w", err)
-		}
-		return "", fmt.Errorf("no dispatch token provided")
-	}
-	// Aggressively strip whitespace — pasting from browser can include
-	// trailing newlines, carriage returns, or spaces that would corrupt
-	// the token when stored as a secret.
-	token := strings.TrimSpace(scanner.Text())
-	token = strings.ReplaceAll(token, "\r", "")
-	token = strings.ReplaceAll(token, "\n", "")
-	if token == "" {
-		return "", fmt.Errorf("dispatch token cannot be empty")
-	}
-
-	// Verify the token can actually dispatch workflows on .fullsend by
-	// triggering a real workflow_dispatch event. This is the exact operation
-	// the shim will perform, so if this works, the shim will work.
-	// The dispatch triggers triage.yml with a "verify" event type — the
-	// workflow will run but the entrypoint script will see it's a verify
-	// event and exit cleanly.
-	printer.StepStart("Verifying token can dispatch workflows on " + forge.ConfigRepoName)
-	verifyClient := gh.New(token)
-	err = verifyClient.DispatchWorkflow(ctx, org, forge.ConfigRepoName, "triage.yml", "main", map[string]string{
-		"event_type":    "verify",
-		"source_repo":   org + "/" + forge.ConfigRepoName,
-		"event_payload": "{}",
-	})
-	if err != nil {
-		printer.StepFail("Token cannot dispatch workflows on " + forge.ConfigRepoName)
-		printer.Blank()
-		printer.ErrorBox("Dispatch token verification failed",
-			"The token could not trigger a workflow on "+org+"/"+forge.ConfigRepoName+".\n\n"+
-				"This usually means the PAT was not configured correctly.\n"+
-				"Delete it at https://github.com/settings/tokens and recreate with:\n"+
-				"  1. Resource owner: "+org+"\n"+
-				"  2. Repository access: Only select repositories → "+forge.ConfigRepoName+"\n"+
-				"  3. Permissions: Actions → Read and write, Contents → Read-only\n\n"+
-				"Error: "+err.Error(),
-		)
-		return "", fmt.Errorf("dispatch token verification failed")
-	}
-	printer.StepDone("Token verified — test dispatch succeeded")
-
-	printer.Blank()
-	return token, nil
 }
 
 func newEnableCmd() *cobra.Command {
@@ -1556,13 +1560,4 @@ func repoNameList(repos []forge.Repository) []string {
 		names[i] = r.Name
 	}
 	return names
-}
-
-func hasPrivateRepos(repos []forge.Repository) bool {
-	for _, r := range repos {
-		if r.Private {
-			return true
-		}
-	}
-	return false
 }

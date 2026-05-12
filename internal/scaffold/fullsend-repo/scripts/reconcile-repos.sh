@@ -14,7 +14,17 @@ set -euo pipefail
 
 CONFIG_DIR="${1:-.}"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
-SHIM_TEMPLATE="$CONFIG_DIR/templates/shim-workflow.yaml"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+  echo "::error::config.yaml not found at $CONFIG_FILE"
+  exit 1
+fi
+
+if ! command -v yq &>/dev/null; then
+  echo "ERROR: yq is required but not found in PATH" >&2
+  exit 1
+fi
+SHIM_TEMPLATE="$CONFIG_DIR/templates/shim-workflow-call.yaml"
 SHIM_PATH=".github/workflows/fullsend.yaml"
 REPO_NAME_PATTERN='^[a-zA-Z0-9._-]+$'
 
@@ -35,18 +45,22 @@ UPDATE_PR_BODY="This PR updates the fullsend shim workflow to match the current 
 
 The shim content has drifted from the template — this brings it back in sync."
 
-
-if [ ! -f "$CONFIG_FILE" ]; then
-  echo "::error::config.yaml not found at $CONFIG_FILE"
-  exit 1
-fi
-
 if [ ! -f "$SHIM_TEMPLATE" ]; then
   echo "::error::shim template not found at $SHIM_TEMPLATE"
   exit 1
 fi
 
 ORG="${GITHUB_REPOSITORY_OWNER:?GITHUB_REPOSITORY_OWNER must be set}"
+if [[ ! "$ORG" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$ && ! "$ORG" =~ ^[a-zA-Z0-9]$ ]]; then
+  echo "::error::Invalid org name: $ORG"
+  exit 1
+fi
+
+# shim_content_b64 returns the shim template as base64, with __ORG__
+# substituted for the actual org name (used by workflow_call templates).
+shim_content_b64() {
+  sed "s|__ORG__|${ORG}|g" "$SHIM_TEMPLATE" | base64 -w0
+}
 COMMIT_SHA="${GITHUB_SHA:-unknown}"
 
 ENROLLED=0
@@ -230,6 +244,15 @@ if [ -n "$ENABLED_REPOS" ]; then
       continue
     fi
 
+    # Skip private repos — agent workflow logs on public .fullsend would expose content.
+    # Fail closed: only proceed if the API explicitly confirms the repo is public.
+    REPO_PRIVATE=$(gh api "repos/$ORG/$REPO" --jq '.private' 2>/dev/null || echo "unknown")
+    if [[ "$REPO_PRIVATE" != "false" ]]; then
+      echo "::warning::Skipping $REPO — private repos cannot be enrolled when .fullsend is public (visibility: $REPO_PRIVATE)"
+      SKIPPED=$((SKIPPED + 1))
+      continue
+    fi
+
     # Clean up any stale removal PR from a previous disable cycle.
     close_pr_on_branch "$REPO" "$UNENROLL_BRANCH" "Repo re-enabled in config.yaml"
 
@@ -238,7 +261,7 @@ if [ -n "$ENABLED_REPOS" ]; then
     REMOTE_CONTENT=$(gh api "repos/$ORG/$REPO/contents/$SHIM_PATH" --jq .content 2>/dev/null || true)
     if [ -n "$REMOTE_CONTENT" ]; then
       # File exists — compare content against current template.
-      EXPECTED_B64=$(base64 -w0 < "$SHIM_TEMPLATE")
+      EXPECTED_B64=$(shim_content_b64)
       # GitHub returns base64 with newlines; strip them for comparison.
       REMOTE_B64=$(printf '%s' "$REMOTE_CONTENT" | tr -d '\r\n')
       if [ "$REMOTE_B64" = "$EXPECTED_B64" ]; then
@@ -282,7 +305,7 @@ if [ -n "$ENABLED_REPOS" ]; then
     if [ -n "$EXISTING_PR" ]; then
       echo "✓ $REPO has existing enrollment PR: $EXISTING_PR"
       # Update the shim on the existing branch to reflect the latest content.
-      if ! write_shim_to_branch_from_default "$REPO" "$ENROLL_BRANCH" "$(base64 -w0 < "$SHIM_TEMPLATE")" "chore: update fullsend shim workflow"; then
+      if ! write_shim_to_branch_from_default "$REPO" "$ENROLL_BRANCH" "$(shim_content_b64)" "chore: update fullsend shim workflow"; then
         FAILED=$((FAILED + 1))
       else
         ENROLLED=$((ENROLLED + 1))
@@ -293,7 +316,7 @@ if [ -n "$ENABLED_REPOS" ]; then
     echo "Enrolling $REPO..."
 
     # Encode shim template content.
-    SHIM_CONTENT=$(base64 -w0 < "$SHIM_TEMPLATE")
+    SHIM_CONTENT=$(shim_content_b64)
     if [ -z "$SHIM_CONTENT" ]; then
       echo "::error::Failed to base64-encode shim template at $SHIM_TEMPLATE"
       FAILED=$((FAILED + 1))

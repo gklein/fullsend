@@ -3,7 +3,7 @@ name: Repo Maintenance
 on:
   push:
     branches: [main]
-    paths: [config.yaml, templates/shim-workflow.yaml]
+    paths: [config.yaml, templates/shim-workflow-call.yaml]
   workflow_dispatch:
 
 concurrency:
@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   reconcile:
@@ -21,13 +22,23 @@ jobs:
       - name: Checkout .fullsend
         uses: actions/checkout@v6
 
-      - name: Generate app token
+      - name: Extract enrolled repo names from config
+        id: repo-list
+        run: |
+          REPOS=$(yq '.repos | keys | join(",")' config.yaml)
+          if [[ -z "$REPOS" ]]; then
+            echo "::error::No repos found in config.yaml"
+            exit 1
+          fi
+          echo "names=$REPOS" >> "$GITHUB_OUTPUT"
+
+      - name: Mint fullsend token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: ./.github/actions/mint-token
         with:
-          client-id: ${{ vars.FULLSEND_FULLSEND_CLIENT_ID }}
-          private-key: ${{ secrets.FULLSEND_FULLSEND_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
+          role: fullsend
+          repos: ${{ steps.repo-list.outputs.names }}
+          mint_url: ${{ vars.FULLSEND_MINT_URL }}
 
       - name: Reconcile target repos
         env:

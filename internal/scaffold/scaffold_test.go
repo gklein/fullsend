@@ -81,7 +81,7 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		"scripts/validate-output-schema.sh",
 		"scripts/validate-source-repo.sh",
 		"skills/code-implementation/SKILL.md",
-		"templates/shim-workflow.yaml",
+		"templates/shim-workflow-call.yaml",
 		"agents/prioritize.md",
 		"env/prioritize.env",
 		"harness/prioritize.yaml",
@@ -101,74 +101,42 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 	}
 }
 
-func TestShimTemplateContent(t *testing.T) {
-	content, err := FullsendRepoFile("templates/shim-workflow.yaml")
+func TestShimWorkflowCallTemplateContent(t *testing.T) {
+	content, err := FullsendRepoFile("templates/shim-workflow-call.yaml")
 	require.NoError(t, err)
 	s := string(content)
 	assert.Contains(t, s, "dispatch-triage")
 	assert.Contains(t, s, "dispatch-code")
 	assert.Contains(t, s, "dispatch-review")
-	assert.Contains(t, s, "dispatch-fix")
-	assert.Contains(t, s, "permissions:")
-	assert.Contains(t, s, "contents: read")
-	assert.Contains(t, s, "FULLSEND_DISPATCH_TOKEN")
-	assert.Contains(t, s, "gh workflow run dispatch.yml")
-	assert.Contains(t, s, "stage=triage")
-	assert.Contains(t, s, "stage=code")
-	assert.Contains(t, s, "stage=review")
-	assert.Contains(t, s, "stage=fix")
-}
-
-func TestDispatchWorkflowContent(t *testing.T) {
-	content, err := FullsendRepoFile(".github/workflows/dispatch.yml")
-	require.NoError(t, err)
-	s := string(content)
-	assert.Contains(t, s, "workflow_dispatch")
-	assert.Contains(t, s, "stage:")
-	assert.Contains(t, s, "event_type:")
-	assert.Contains(t, s, "source_repo:")
-	assert.Contains(t, s, "event_payload:")
-	assert.Contains(t, s, "# fullsend-stage:")
-	assert.Contains(t, s, "gh workflow run")
-	assert.Contains(t, s, "FULLSEND_FULLSEND_CLIENT_ID")
-	assert.Contains(t, s, "FULLSEND_FULLSEND_APP_PRIVATE_KEY")
-	assert.Contains(t, s, "permissions:")
-	assert.Contains(t, s, "actions: write")
-	assert.Contains(t, s, "contents: read")
-	assert.Contains(t, s, "set -euo pipefail")
-	assert.Contains(t, s, "dispatched=0")
-	assert.Contains(t, s, "No workflows found for stage")
-	assert.Contains(t, s, "|| true")
-	assert.Contains(t, s, "permissions: {}")
-	assert.Contains(t, s, "Validate inputs")
-	assert.Contains(t, s, "Invalid source_repo format")
-	assert.Contains(t, s, "Invalid stage name")
-	// Verify the sed pattern restricts stage names to [a-z][a-z0-9_-]*
-	assert.Contains(t, s, `\([a-z][a-z0-9_-]*\)`)
-	// Verify stage name validation uses the same pattern
-	assert.Contains(t, s, `^[a-z][a-z0-9_-]*$`)
-	// Verify trigger_source optional input
+	assert.Contains(t, s, "dispatch-fix-bot")
+	assert.Contains(t, s, "dispatch-fix-human")
+	assert.Contains(t, s, "dispatch-prioritize")
+	assert.Contains(t, s, "dispatch-retro")
+	assert.Contains(t, s, "dispatch-stop-fix")
+	assert.Contains(t, s, "id-token: write")
+	assert.Contains(t, s, "workflow_call")
+	assert.Contains(t, s, "__ORG__/.fullsend/.github/workflows/dispatch.yml@main")
+	assert.Contains(t, s, "stage: triage")
+	assert.Contains(t, s, "stage: code")
+	assert.Contains(t, s, "stage: review")
+	assert.Contains(t, s, "stage: fix")
+	assert.Contains(t, s, "stage: retro")
+	assert.Contains(t, s, "stage: prioritize")
 	assert.Contains(t, s, "trigger_source:")
-	assert.Contains(t, s, "required: false")
-	// Verify self-dispatch guard
-	assert.Contains(t, s, "dispatch.yml")
-	assert.Contains(t, s, "self-dispatch guard")
-	// Verify workflow scanning log
-	assert.Contains(t, s, "Scanned")
-	assert.Contains(t, s, "skipped")
+	assert.Contains(t, s, "secrets: {}")
+	assert.NotContains(t, s, "FULLSEND_DISPATCH_TOKEN")
+	assert.NotContains(t, s, "FULLSEND_DISPATCH_URL")
+	assert.NotContains(t, s, "curl")
 }
 
-func TestShimDispatchCodeExcludesPRContext(t *testing.T) {
-	content, err := FullsendRepoFile("templates/shim-workflow.yaml")
+func TestShimWorkflowCallCodeExcludesPRContext(t *testing.T) {
+	content, err := FullsendRepoFile("templates/shim-workflow-call.yaml")
 	require.NoError(t, err)
 	s := string(content)
 
-	// The guard must appear between "dispatch-code:" and the next job
-	// definition, not just anywhere in the file. See #533.
 	codeIdx := strings.Index(s, "dispatch-code:")
 	require.NotEqual(t, -1, codeIdx, "dispatch-code job must exist")
 
-	// Find the next job after dispatch-code (next top-level "  dispatch-" or end of file).
 	rest := s[codeIdx+len("dispatch-code:"):]
 	nextJob := strings.Index(rest, "\n  dispatch-")
 	if nextJob == -1 {
@@ -180,6 +148,48 @@ func TestShimDispatchCodeExcludesPRContext(t *testing.T) {
 		"dispatch-code job must exclude PR contexts with !github.event.issue.pull_request guard")
 }
 
+func TestDispatchWorkflowContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/dispatch.yml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "workflow_call:")
+	assert.NotContains(t, s, "workflow_dispatch:")
+	assert.Contains(t, s, "stage:")
+	assert.Contains(t, s, "# fullsend-stage:")
+	assert.Contains(t, s, "gh workflow run")
+	assert.Contains(t, s, "permissions: {}")
+	assert.Contains(t, s, "permissions:")
+	assert.Contains(t, s, "actions: write")
+	assert.Contains(t, s, "contents: read")
+	assert.Contains(t, s, "id-token: write")
+	assert.Contains(t, s, "set -euo pipefail")
+	assert.Contains(t, s, "dispatched=0")
+	assert.Contains(t, s, "No workflows found for stage")
+	assert.Contains(t, s, "|| true")
+	assert.Contains(t, s, "Validate inputs")
+	assert.Contains(t, s, "Invalid stage name")
+	assert.Contains(t, s, `\([a-z][a-z0-9_-]*\)`)
+	assert.Contains(t, s, `^[a-z][a-z0-9_-]*$`)
+	assert.Contains(t, s, "trigger_source:")
+	assert.Contains(t, s, "required: false")
+	assert.Contains(t, s, "dispatch.yml")
+	assert.Contains(t, s, "self-dispatch guard")
+	assert.Contains(t, s, "Scanned")
+	assert.Contains(t, s, "skipped")
+	// Verify OIDC mint is the sole token path
+	assert.Contains(t, s, "FULLSEND_MINT_URL")
+	assert.Contains(t, s, "oidc-mint")
+	assert.Contains(t, s, "/v1/token")
+	assert.Contains(t, s, "fullsend-mint")
+	assert.Contains(t, s, "job.workflow_repository")
+	// Verify both OIDC token and minted token are masked
+	assert.Contains(t, s, "::add-mask::$OIDC_TOKEN")
+	assert.Contains(t, s, "::add-mask::$TOKEN")
+	assert.NotContains(t, s, "create-github-app-token")
+	assert.NotContains(t, s, "FULLSEND_FULLSEND_APP_PRIVATE_KEY")
+	assert.NotContains(t, s, "FULLSEND_FULLSEND_CLIENT_ID")
+}
+
 func TestWalkFullsendRepo(t *testing.T) {
 	var paths []string
 	err := WalkFullsendRepo(func(path string, content []byte) error {
@@ -187,7 +197,7 @@ func TestWalkFullsendRepo(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	assert.True(t, len(paths) >= 29, "expected at least 29 files, got %d", len(paths))
+	assert.True(t, len(paths) >= 28, "expected at least 28 files, got %d", len(paths))
 }
 
 func TestTriageWorkflowContent(t *testing.T) {
@@ -200,9 +210,13 @@ func TestTriageWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "source_repo")
 	assert.Contains(t, s, "event_payload")
 	assert.Contains(t, s, "setup-agent-env.sh")
-	assert.Contains(t, s, "fullsend")
+	assert.Contains(t, s, "./.github/actions/mint-token")
+	assert.Contains(t, s, "role: triage")
+	assert.Contains(t, s, "FULLSEND_MINT_URL")
 	assert.Contains(t, s, "./.github/actions/setup-gcp")
 	assert.Contains(t, s, "./.github/actions/validate-enrollment")
+	assert.NotContains(t, s, "create-github-app-token")
+	assert.NotContains(t, s, "FULLSEND_TRIAGE_CLIENT_ID")
 	// Verify concurrency group prevents overlapping runs for same issue
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-triage-")
@@ -231,15 +245,16 @@ func TestCodeWorkflowContent(t *testing.T) {
 	require.NoError(t, err)
 	s := string(content)
 	assert.Contains(t, s, "workflow_dispatch")
-	assert.Contains(t, s, "FULLSEND_CODER_CLIENT_ID")
 	assert.Contains(t, s, "pre-code.sh")
 	assert.Contains(t, s, "PUSH_TOKEN")
 	assert.Contains(t, s, "github-app")
-	assert.Contains(t, s, "sandbox-token")
-	assert.Contains(t, s, "push-token")
-	assert.Contains(t, s, "permission-contents: read")
+	assert.Contains(t, s, "./.github/actions/mint-token")
+	assert.Contains(t, s, "role: coder")
+	assert.Contains(t, s, "FULLSEND_MINT_URL")
 	assert.Contains(t, s, "./.github/actions/setup-gcp")
 	assert.Contains(t, s, "./.github/actions/validate-enrollment")
+	assert.NotContains(t, s, "create-github-app-token")
+	assert.NotContains(t, s, "FULLSEND_CODER_CLIENT_ID")
 	// Verify concurrency group prevents overlapping runs for same issue
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-code-")
@@ -255,11 +270,13 @@ func TestReviewWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "event_type")
 	assert.Contains(t, s, "source_repo")
 	assert.Contains(t, s, "event_payload")
-	assert.Contains(t, s, "FULLSEND_REVIEW_CLIENT_ID")
-	assert.Contains(t, s, "sandbox-token")
-	assert.Contains(t, s, "review-token")
+	assert.Contains(t, s, "./.github/actions/mint-token")
+	assert.Contains(t, s, "role: review")
+	assert.Contains(t, s, "FULLSEND_MINT_URL")
 	assert.Contains(t, s, "./.github/actions/setup-gcp")
 	assert.Contains(t, s, "./.github/actions/validate-enrollment")
+	assert.NotContains(t, s, "create-github-app-token")
+	assert.NotContains(t, s, "FULLSEND_REVIEW_CLIENT_ID")
 	// Verify concurrency group prevents overlapping runs
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-review-")
@@ -276,14 +293,36 @@ func TestFixWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "source_repo")
 	assert.Contains(t, s, "event_payload")
 	assert.Contains(t, s, "trigger_source")
-	assert.Contains(t, s, "FULLSEND_CODER_CLIENT_ID")
-	assert.Contains(t, s, "sandbox-token")
-	assert.Contains(t, s, "push-token")
+	assert.Contains(t, s, "./.github/actions/mint-token")
+	assert.Contains(t, s, "role: coder")
+	assert.Contains(t, s, "FULLSEND_MINT_URL")
 	assert.Contains(t, s, "./.github/actions/setup-gcp")
 	assert.Contains(t, s, "./.github/actions/validate-enrollment")
+	assert.NotContains(t, s, "create-github-app-token")
+	assert.NotContains(t, s, "FULLSEND_CODER_CLIENT_ID")
 	// Verify concurrency group prevents overlapping runs
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-fix-")
+	assert.Contains(t, s, "cancel-in-progress: true")
+}
+
+func TestRetroWorkflowContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/workflows/retro.yml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "# fullsend-stage: retro")
+	assert.Contains(t, s, "workflow_dispatch")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
+	assert.Contains(t, s, "./.github/actions/mint-token")
+	assert.Contains(t, s, "role: retro")
+	assert.Contains(t, s, "FULLSEND_MINT_URL")
+	assert.Contains(t, s, ".fullsend")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "RETRO_TARGET_REPO_DIR: target-repo")
+	assert.NotContains(t, s, "create-github-app-token")
+	assert.NotContains(t, s, "FULLSEND_RETRO_CLIENT_ID")
+	assert.Contains(t, s, "concurrency:")
+	assert.Contains(t, s, "fullsend-retro-")
 	assert.Contains(t, s, "cancel-in-progress: true")
 }
 
@@ -465,8 +504,44 @@ func TestRepoMaintenanceWorkflowContent(t *testing.T) {
 	require.NoError(t, err)
 	s := string(content)
 	assert.Contains(t, s, "config.yaml")
-	assert.Contains(t, s, "templates/shim-workflow.yaml",
-		"push trigger must include shim template so changes propagate to enrolled repos")
+	assert.Contains(t, s, "templates/shim-workflow-call.yaml",
+		"push trigger must include workflow_call shim template so changes propagate to enrolled repos")
+	assert.NotContains(t, s, "templates/shim-workflow.yaml",
+		"PAT shim template reference should be removed")
+	assert.Contains(t, s, "./.github/actions/mint-token")
+	assert.Contains(t, s, "role: fullsend")
+	assert.Contains(t, s, "id-token: write")
+	assert.NotContains(t, s, "create-github-app-token")
+	assert.NotContains(t, s, "FULLSEND_FULLSEND_CLIENT_ID")
+}
+
+func TestMintTokenActionContent(t *testing.T) {
+	content, err := FullsendRepoFile(".github/actions/mint-token/action.yml")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "Mint Token")
+	assert.Contains(t, s, "OIDC")
+	assert.Contains(t, s, "audience=fullsend-mint")
+	assert.Contains(t, s, "/v1/token")
+	assert.Contains(t, s, "::add-mask::$OIDC_TOKEN")
+	assert.Contains(t, s, "::add-mask::$TOKEN")
+	assert.Contains(t, s, "ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+	assert.Contains(t, s, "ACTIONS_ID_TOKEN_REQUEST_URL")
+	assert.Contains(t, s, "jq -nc --arg role")
+	assert.NotContains(t, s, "create-github-app-token")
+}
+
+func TestReconcileReposContent(t *testing.T) {
+	content, err := FullsendRepoFile("scripts/reconcile-repos.sh")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "shim-workflow-call.yaml")
+	assert.NotContains(t, s, "shim-workflow.yaml\"",
+		"reconcile-repos.sh should not reference deleted PAT shim template")
+	assert.NotContains(t, s, "dispatch.mode",
+		"reconcile-repos.sh should not parse dispatch mode")
+	assert.Contains(t, s, "private repos cannot be enrolled",
+		"reconcile-repos.sh should skip private repos to prevent log exposure")
 }
 
 func TestPrioritizeWorkflowContent(t *testing.T) {
@@ -484,11 +559,16 @@ func TestPrioritizeWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-prioritize")
 	assert.Contains(t, s, "cancel-in-progress: true")
-	// Org-scoped agent needs an empty target-repo directory.
 	assert.Contains(t, s, "mkdir -p target-repo")
-	// Issue URL comes from event_payload, not pre-script output file.
 	assert.Contains(t, s, "GITHUB_ISSUE_URL")
 	assert.Contains(t, s, "fromJSON(inputs.event_payload)")
+	assert.Contains(t, s, "./.github/actions/mint-token")
+	assert.Contains(t, s, "role: prioritize")
+	assert.Contains(t, s, "FULLSEND_MINT_URL")
+	assert.Contains(t, s, "./.github/actions/setup-gcp")
+	assert.Contains(t, s, "./.github/actions/validate-enrollment")
+	assert.NotContains(t, s, "create-github-app-token")
+	assert.NotContains(t, s, "FULLSEND_PRIORITIZE_CLIENT_ID")
 }
 
 func TestPrioritizeSchedulerWorkflowContent(t *testing.T) {
@@ -508,6 +588,11 @@ func TestPrioritizeSchedulerWorkflowContent(t *testing.T) {
 	require.NotEqual(t, -1, guardIndex)
 	require.NotEqual(t, -1, projectViewIndex)
 	assert.Less(t, guardIndex, projectViewIndex, "PROJECT_NUMBER must be checked before gh project view")
+	assert.Contains(t, s, "./.github/actions/mint-token")
+	assert.Contains(t, s, "role: fullsend")
+	assert.Contains(t, s, "id-token: write")
+	assert.NotContains(t, s, "create-github-app-token")
+	assert.NotContains(t, s, "FULLSEND_FULLSEND_CLIENT_ID")
 }
 
 func TestPrioritizeSchedulerSkipsWhenProjectNumberUnset(t *testing.T) {

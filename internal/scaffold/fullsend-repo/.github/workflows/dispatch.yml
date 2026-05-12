@@ -1,23 +1,12 @@
+# lint-workflow-size: max-lines=210
 # Dispatcher workflow that fans out to agent workflows based on stage
 name: Dispatch
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       stage:
         description: 'Stage name (triage, code, review, fix, retro)'
-        required: true
-        type: string
-      event_type:
-        description: 'Original GitHub event type'
-        required: true
-        type: string
-      source_repo:
-        description: 'Source repository (owner/repo)'
-        required: true
-        type: string
-      event_payload:
-        description: 'GitHub event payload as JSON'
         required: true
         type: string
       trigger_source:
@@ -33,32 +22,51 @@ jobs:
     permissions:
       actions: write
       contents: read
+      id-token: write
     steps:
+      - name: Mint dispatch token via OIDC
+        id: oidc-mint
+        env:
+          MINT_URL: ${{ vars.FULLSEND_MINT_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MINT_URL" ]]; then
+            echo "::error::FULLSEND_MINT_URL org variable is not set"
+            exit 1
+          fi
+          echo "::add-mask::$MINT_URL"
+          OIDC_TOKEN=$(curl -sSf --retry 3 --retry-delay 2 --retry-all-errors \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=fullsend-mint" | jq -r '.value')
+          if [[ -z "$OIDC_TOKEN" || "$OIDC_TOKEN" == "null" ]]; then
+            echo "::error::Failed to obtain OIDC token"
+            exit 1
+          fi
+          echo "::add-mask::$OIDC_TOKEN"
+          TOKEN=$(curl -sSf --retry 5 --retry-delay 5 --retry-all-errors \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"role":"fullsend","repos":[".fullsend"]}' \
+            "${MINT_URL}/v1/token" | jq -r '.token')
+          if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+            echo "::error::Token mint returned no token"
+            exit 1
+          fi
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
         uses: actions/checkout@v6
-
-      - name: Generate token for triggering workflows
-        id: app-token
-        uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ vars.FULLSEND_FULLSEND_CLIENT_ID }}
-          private-key: ${{ secrets.FULLSEND_FULLSEND_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: .fullsend
+          repository: ${{ job.workflow_repository }}
+          token: ${{ steps.oidc-mint.outputs.token }}
 
       - name: Validate inputs
         env:
           STAGE: ${{ inputs.stage }}
-          SOURCE_REPO: ${{ inputs.source_repo }}
           TRIGGER_SOURCE: ${{ inputs.trigger_source }}
         run: |
           set -euo pipefail
-
-          # Validate source_repo format (defense-in-depth before fan-out)
-          if [[ ! "$SOURCE_REPO" =~ ^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$ ]]; then
-            echo "::error::Invalid source_repo format: must be owner/repo"
-            exit 1
-          fi
 
           # Validate stage name format (alphanumeric, underscore, hyphen only)
           if [[ ! "$STAGE" =~ ^[a-z][a-z0-9_-]*$ ]]; then
@@ -104,14 +112,23 @@ jobs:
 
       - name: Find and trigger agent workflows for stage
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.oidc-mint.outputs.token }}
           STAGE: ${{ inputs.stage }}
-          EVENT_TYPE: ${{ inputs.event_type }}
-          SOURCE_REPO: ${{ inputs.source_repo }}
-          EVENT_PAYLOAD: ${{ inputs.event_payload }}
+          EVENT_TYPE: ${{ github.event_name }}
+          SOURCE_REPO: ${{ github.repository }}
           TRIGGER_SOURCE: ${{ inputs.trigger_source }}
+          DISPATCH_REPO: ${{ job.workflow_repository }}
         run: |
           set -euo pipefail
+
+          # Build a minimal event payload with only the fields agent workflows need.
+          # Read from $GITHUB_EVENT_PATH (on-disk JSON) to avoid expression-context
+          # injection risks from toJSON(github.event).
+          EVENT_PAYLOAD=$(jq -c '{
+            issue: (.issue // null | if . then {number, html_url} else null end),
+            pull_request: (.pull_request // null | if . then {number, html_url, head: {ref: .head.ref, repo: {full_name: .head.repo.full_name}}, base: {ref: .base.ref, repo: {full_name: .base.repo.full_name}}} else null end),
+            comment: (.comment // null | if . then {body: .body[:4096]} else null end)
+          }' "$GITHUB_EVENT_PATH")
 
           echo "Scanning for workflows with stage: $STAGE"
 
@@ -158,7 +175,7 @@ jobs:
 
             # Build gh workflow run arguments
             DISPATCH_ARGS=(
-              --repo "$GITHUB_REPOSITORY"
+              --repo "$DISPATCH_REPO"
               -f event_type="$EVENT_TYPE"
               -f source_repo="$SOURCE_REPO"
               -f event_payload="$EVENT_PAYLOAD"

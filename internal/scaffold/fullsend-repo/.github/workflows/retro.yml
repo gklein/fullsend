@@ -15,7 +15,7 @@ on:
         type: string
 
 concurrency:
-  group: fullsend-retro-${{ fromJSON(inputs.event_payload).pull_request.number || fromJSON(inputs.event_payload).issue.number }}
+  group: fullsend-retro-${{ inputs.source_repo }}-${{ fromJSON(inputs.event_payload).pull_request.number || fromJSON(inputs.event_payload).issue.number }}
   cancel-in-progress: true
 
 jobs:
@@ -32,104 +32,41 @@ jobs:
       - name: Checkout .fullsend repository
         uses: actions/checkout@v6
 
-      - name: Validate source repo is enrolled
-        env:
-          SOURCE_REPO: ${{ inputs.source_repo }}
-        run: |
-          # Format check — must be owner/repo, safe characters only
-          if [[ ! "$SOURCE_REPO" =~ ^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$ ]]; then
-            echo "::error::Invalid source_repo format: must be owner/repo"
-            exit 1
-          fi
-          # Owner check — must match this org
-          REPO_OWNER="${SOURCE_REPO%%/*}"
-          if [[ "$REPO_OWNER" != "$GITHUB_REPOSITORY_OWNER" ]]; then
-            echo "::error::source_repo owner does not match org"
-            exit 1
-          fi
-          # Allowlist check — repo must be enabled in config.yaml
-          REPO_NAME="${SOURCE_REPO#*/}"
-          ENABLED=$(yq ".repos.\"$REPO_NAME\".enabled" config.yaml 2>/dev/null)
-          if [[ "$ENABLED" != "true" ]]; then
-            echo "::error::repo is not enabled in config.yaml"
-            exit 1
-          fi
-
-      - name: Extract target repo name
+      - name: Validate enrollment and extract repo metadata
         id: repo-parts
-        env:
-          SOURCE_REPO: ${{ inputs.source_repo }}
-        run: echo "name=${SOURCE_REPO##*/}" >> "${GITHUB_OUTPUT}"
-
-      - name: Generate sandbox token (read-only)
-        id: sandbox-token
-        uses: actions/create-github-app-token@v3
+        uses: ./.github/actions/validate-enrollment
         with:
-          client-id: ${{ vars.FULLSEND_RETRO_CLIENT_ID }}
-          private-key: ${{ secrets.FULLSEND_RETRO_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ steps.repo-parts.outputs.name }},.fullsend
-          permission-contents: read
-          permission-pull-requests: read
-          permission-issues: read
-          permission-actions: read
+          source_repo: ${{ inputs.source_repo }}
 
-      - name: Generate write token (issues + comments)
-        id: write-token
-        uses: actions/create-github-app-token@v3
+      - name: Mint retro token
+        id: app-token
+        uses: ./.github/actions/mint-token
         with:
-          client-id: ${{ vars.FULLSEND_RETRO_CLIENT_ID }}
-          private-key: ${{ secrets.FULLSEND_RETRO_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ steps.repo-parts.outputs.name }},.fullsend
-          permission-issues: write
+          role: retro
+          repos: ${{ steps.repo-parts.outputs.name }},.fullsend
+          mint_url: ${{ vars.FULLSEND_MINT_URL }}
 
       - name: Checkout target repository
         uses: actions/checkout@v6
         with:
           repository: ${{ inputs.source_repo }}
-          token: ${{ steps.sandbox-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token }}
           path: target-repo
           fetch-depth: 1
 
-      - name: Pre-mask GCP credential file path
-        run: echo "::add-mask::${GITHUB_WORKSPACE}/gha-creds-"
-
-      - name: Authenticate to Google Cloud (WIF)
-        if: vars.FULLSEND_GCP_AUTH_MODE == 'wif'
-        uses: google-github-actions/auth@v3
+      - name: Setup GCP and prepare credentials
+        uses: ./.github/actions/setup-gcp
         with:
-          workload_identity_provider: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.FULLSEND_GCP_WIF_SA_EMAIL }}
-
-      - name: Authenticate to Google Cloud (SA key)
-        if: vars.FULLSEND_GCP_AUTH_MODE != 'wif'
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ secrets.FULLSEND_GCP_SA_KEY_JSON }}
-
-      - name: Set GCP_OIDC_TOKEN_FILE for non-WIF
-        if: vars.FULLSEND_GCP_AUTH_MODE != 'wif'
-        run: |
-          touch "$RUNNER_TEMP/empty-oidc-token"
-          echo "GCP_OIDC_TOKEN_FILE=$RUNNER_TEMP/empty-oidc-token" >> "${GITHUB_ENV}"
-
-      - name: Mask GCP credential file paths
-        run: |
-          for var in GOOGLE_GHA_CREDS_PATH GOOGLE_APPLICATION_CREDENTIALS CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE; do
-            val="${!var:-}"
-            if [[ -n "${val}" ]]; then
-              echo "::add-mask::${val}"
-            fi
-          done
-
-      - name: Prepare sandbox credentials
-        run: bash scripts/prepare-sandbox-credentials.sh
+          gcp_auth_mode: ${{ vars.FULLSEND_GCP_AUTH_MODE }}
+          gcp_wif_provider: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}
+          gcp_wif_sa_email: ${{ secrets.FULLSEND_GCP_WIF_SA_EMAIL }}
+          gcp_sa_key_json: ${{ secrets.FULLSEND_GCP_SA_KEY_JSON }}
 
       - name: Setup agent environment
         env:
           AGENT_PREFIX: RETRO_
-          RETRO_GH_TOKEN: ${{ steps.sandbox-token.outputs.token }}
+          RETRO_GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RETRO_TARGET_REPO_DIR: target-repo
           RETRO_ANTHROPIC_VERTEX_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}
           RETRO_CLOUD_ML_REGION: ${{ vars.FULLSEND_GCP_REGION }}
         run: bash .github/scripts/setup-agent-env.sh
@@ -140,7 +77,7 @@ jobs:
           ORIGINATING_URL: ${{ fromJSON(inputs.event_payload).pull_request.html_url || fromJSON(inputs.event_payload).issue.html_url }}
           RETRO_COMMENT: ${{ fromJSON(inputs.event_payload).comment.body || '' }}
           REPO_FULL_NAME: ${{ inputs.source_repo }}
-          RETRO_SANDBOX_TOKEN: ${{ steps.sandbox-token.outputs.token }}
-          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          RETRO_SANDBOX_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
           agent: retro

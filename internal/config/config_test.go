@@ -10,12 +10,13 @@ import (
 
 func TestValidRoles(t *testing.T) {
 	roles := ValidRoles()
-	assert.Len(t, roles, 6)
+	assert.Len(t, roles, 7)
 	assert.Contains(t, roles, "fullsend")
 	assert.Contains(t, roles, "triage")
 	assert.Contains(t, roles, "coder")
 	assert.Contains(t, roles, "review")
 	assert.Contains(t, roles, "fix")
+	assert.Contains(t, roles, "retro")
 	assert.Contains(t, roles, "prioritize")
 }
 
@@ -159,6 +160,23 @@ func TestOrgConfigValidate_InvalidRole(t *testing.T) {
 	err := cfg.Validate()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "hacker")
+}
+
+func TestOrgConfigValidate_DuplicateRole(t *testing.T) {
+	cfg := &OrgConfig{
+		Version: "1",
+		Dispatch: DispatchConfig{
+			Platform: "github-actions",
+		},
+		Defaults: RepoDefaults{
+			Roles:                    []string{"fullsend", "coder", "fullsend"},
+			MaxImplementationRetries: 2,
+		},
+	}
+
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate role")
 }
 
 func TestOrgConfigEnabledRepos(t *testing.T) {
@@ -433,4 +451,98 @@ func TestOrgConfigMarshal_KillSwitchOmitEmpty(t *testing.T) {
 	data, err := cfg.Marshal()
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "kill_switch")
+}
+
+func TestOrgConfigValidate_DispatchModeEmpty(t *testing.T) {
+	cfg := &OrgConfig{
+		Version:  "1",
+		Dispatch: DispatchConfig{Platform: "github-actions"},
+		Defaults: RepoDefaults{
+			Roles:                    []string{"fullsend"},
+			MaxImplementationRetries: 2,
+		},
+	}
+	err := cfg.Validate()
+	assert.NoError(t, err)
+}
+
+func TestOrgConfigValidate_DispatchModePAT_Rejected(t *testing.T) {
+	cfg := &OrgConfig{
+		Version:  "1",
+		Dispatch: DispatchConfig{Platform: "github-actions", Mode: "pat"},
+		Defaults: RepoDefaults{
+			Roles:                    []string{"fullsend"},
+			MaxImplementationRetries: 2,
+		},
+	}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported dispatch mode")
+}
+
+func TestOrgConfigValidate_DispatchModeOIDCMint(t *testing.T) {
+	cfg := &OrgConfig{
+		Version:  "1",
+		Dispatch: DispatchConfig{Platform: "github-actions", Mode: "oidc-mint"},
+		Defaults: RepoDefaults{
+			Roles:                    []string{"fullsend"},
+			MaxImplementationRetries: 2,
+		},
+	}
+	err := cfg.Validate()
+	assert.NoError(t, err)
+}
+
+func TestOrgConfigValidate_InvalidDispatchMode(t *testing.T) {
+	cfg := &OrgConfig{
+		Version:  "1",
+		Dispatch: DispatchConfig{Platform: "github-actions", Mode: "invalid"},
+		Defaults: RepoDefaults{
+			Roles:                    []string{"fullsend"},
+			MaxImplementationRetries: 2,
+		},
+	}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+	assert.Contains(t, err.Error(), "dispatch mode")
+}
+
+func TestParseOrgConfig_WithDispatchMode(t *testing.T) {
+	yamlData := `
+version: "1"
+dispatch:
+  platform: github-actions
+  mode: oidc-mint
+  mint_url: https://fullsend-mint.run.app
+defaults:
+  roles:
+    - fullsend
+  max_implementation_retries: 2
+  auto_merge: false
+agents: []
+repos: {}
+`
+	cfg, err := ParseOrgConfig([]byte(yamlData))
+	require.NoError(t, err)
+	assert.Equal(t, "oidc-mint", cfg.Dispatch.Mode)
+	assert.Equal(t, "https://fullsend-mint.run.app", cfg.Dispatch.MintURL)
+}
+
+func TestOrgConfigMarshal_WithDispatchMode(t *testing.T) {
+	cfg := &OrgConfig{
+		Version:  "1",
+		Dispatch: DispatchConfig{Platform: "github-actions", Mode: "oidc-mint", MintURL: "https://fullsend-mint.run.app"},
+		Defaults: RepoDefaults{
+			Roles:                    []string{"fullsend"},
+			MaxImplementationRetries: 2,
+		},
+		Agents: []AgentEntry{},
+		Repos:  map[string]RepoConfig{},
+	}
+
+	data, err := cfg.Marshal()
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "mode: oidc-mint")
+	assert.Contains(t, string(data), "mint_url: https://fullsend-mint.run.app")
 }

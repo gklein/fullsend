@@ -9,10 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"strings"
-	"time"
 
-	"golang.org/x/oauth2/google"
+	"github.com/fullsend-ai/fullsend/internal/gcp"
 )
 
 // gcpIDPattern validates GCP project IDs and service account names.
@@ -22,70 +20,16 @@ var gcpIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 var saEmailPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com$`)
 
 // LiveGCPClient implements GCPClient using the GCP IAM REST API.
-// It obtains access tokens via Application Default Credentials.
+// It embeds *gcp.Client for shared ADC auth and HTTP helper logic.
 type LiveGCPClient struct {
-	httpClient *http.Client
+	*gcp.Client
 }
 
 // NewLiveGCPClient creates a new LiveGCPClient.
 func NewLiveGCPClient() *LiveGCPClient {
 	return &LiveGCPClient{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		Client: gcp.NewClient(),
 	}
-}
-
-// accessToken obtains a GCP access token using Application Default Credentials.
-func (c *LiveGCPClient) accessToken(ctx context.Context) (string, error) {
-	creds, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
-	if err != nil {
-		return "", fmt.Errorf("finding GCP credentials: %w (ensure 'gcloud auth application-default login' has been run or GOOGLE_APPLICATION_CREDENTIALS is set)", err)
-	}
-	tok, err := creds.TokenSource.Token()
-	if err != nil {
-		return "", fmt.Errorf("obtaining GCP access token: %w", err)
-	}
-	if tok.AccessToken == "" {
-		return "", fmt.Errorf("GCP credentials returned empty access token")
-	}
-	return tok.AccessToken, nil
-}
-
-// doRequest creates and executes an authenticated HTTP request.
-func (c *LiveGCPClient) doRequest(ctx context.Context, method, reqURL, body string) (*http.Response, error) {
-	token, err := c.accessToken(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	var bodyReader io.Reader
-	if body != "" {
-		bodyReader = strings.NewReader(body)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	return c.httpClient.Do(req)
-}
-
-// extractGCPErrorMessage parses a GCP API error response and returns only
-// the error message, avoiding leakage of sensitive metadata.
-func extractGCPErrorMessage(body []byte) string {
-	var gcpErr struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if json.Unmarshal(body, &gcpErr) == nil && gcpErr.Error.Message != "" {
-		return gcpErr.Error.Message
-	}
-	return "(error details unavailable)"
 }
 
 // GetServiceAccount checks that a service account exists in the project.
@@ -101,7 +45,7 @@ func (c *LiveGCPClient) GetServiceAccount(ctx context.Context, projectID, saName
 	reqURL := fmt.Sprintf("https://iam.googleapis.com/v1/projects/%s/serviceAccounts/%s",
 		url.PathEscape(projectID), url.PathEscape(email))
 
-	resp, err := c.doRequest(ctx, http.MethodGet, reqURL, "")
+	resp, err := c.Client.DoRequest(ctx, http.MethodGet, reqURL, "")
 	if err != nil {
 		return fmt.Errorf("checking service account: %w", err)
 	}
@@ -112,7 +56,7 @@ func (c *LiveGCPClient) GetServiceAccount(ctx context.Context, projectID, saName
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return fmt.Errorf("unexpected status %d checking service account: %s", resp.StatusCode, extractGCPErrorMessage(body))
+		return fmt.Errorf("unexpected status %d checking service account: %s", resp.StatusCode, gcp.ExtractErrorMessage(body))
 	}
 	return nil
 }
@@ -141,7 +85,7 @@ func (c *LiveGCPClient) CreateServiceAccount(ctx context.Context, projectID, saN
 	}
 	payload := string(payloadBytes)
 
-	resp, err := c.doRequest(ctx, http.MethodPost, reqURL, payload)
+	resp, err := c.Client.DoRequest(ctx, http.MethodPost, reqURL, payload)
 	if err != nil {
 		return fmt.Errorf("creating service account: %w", err)
 	}
@@ -153,7 +97,7 @@ func (c *LiveGCPClient) CreateServiceAccount(ctx context.Context, projectID, saN
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return fmt.Errorf("unexpected status %d creating service account: %s", resp.StatusCode, extractGCPErrorMessage(body))
+		return fmt.Errorf("unexpected status %d creating service account: %s", resp.StatusCode, gcp.ExtractErrorMessage(body))
 	}
 	return nil
 }
@@ -171,7 +115,7 @@ func (c *LiveGCPClient) CreateServiceAccountKey(ctx context.Context, projectID, 
 		url.PathEscape(projectID), url.PathEscape(saEmail))
 	payload := `{"keyAlgorithm":"KEY_ALG_RSA_2048","privateKeyType":"TYPE_GOOGLE_CREDENTIALS_FILE"}`
 
-	resp, err := c.doRequest(ctx, http.MethodPost, reqURL, payload)
+	resp, err := c.Client.DoRequest(ctx, http.MethodPost, reqURL, payload)
 	if err != nil {
 		return nil, fmt.Errorf("creating service account key: %w", err)
 	}
@@ -179,7 +123,7 @@ func (c *LiveGCPClient) CreateServiceAccountKey(ctx context.Context, projectID, 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return nil, fmt.Errorf("unexpected status %d creating key: %s", resp.StatusCode, extractGCPErrorMessage(body))
+		return nil, fmt.Errorf("unexpected status %d creating key: %s", resp.StatusCode, gcp.ExtractErrorMessage(body))
 	}
 
 	var result struct {
