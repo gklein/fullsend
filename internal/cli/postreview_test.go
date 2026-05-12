@@ -116,6 +116,8 @@ func TestReviewActionToEvent(t *testing.T) {
 		{"request-changes", "REQUEST_CHANGES", true},
 		{"request_changes", "", false},
 		{"comment", "COMMENT", true},
+		{"reject", "REQUEST_CHANGES", true},
+		{"Reject", "REQUEST_CHANGES", true},
 		{"unknown", "", false},
 		{"", "", false},
 	}
@@ -452,6 +454,19 @@ func TestSubmitFormalReview_RequestChangesFallbackWithoutURL(t *testing.T) {
 	require.Len(t, fc.CreatedReviews, 1)
 	assert.Equal(t, "REQUEST_CHANGES", fc.CreatedReviews[0].Event)
 	assert.Equal(t, "See the review comment above for full details.", fc.CreatedReviews[0].Body)
+}
+
+func TestSubmitFormalReview_RejectSubmitsRequestChanges(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	printer := ui.New(io.Discard)
+
+	commentURL := "https://github.com/acme/repo/pull/1#issuecomment-99"
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "reject", "abc123", commentURL, false, printer)
+	require.NoError(t, err)
+	require.Len(t, fc.CreatedReviews, 1)
+	assert.Equal(t, "REQUEST_CHANGES", fc.CreatedReviews[0].Event)
+	assert.Contains(t, fc.CreatedReviews[0].Body, commentURL)
 }
 
 func TestSubmitFormalReview_CommentSkipped(t *testing.T) {
