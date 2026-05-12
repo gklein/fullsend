@@ -136,7 +136,7 @@ All resources remain local paths. Sharing requires manual copy-paste.
 
 ## Consequences
 
-If Option A (URL support everywhere with security extensions) is accepted:
+With the hybrid approach (URL support for declarative resources, local files for executables):
 
 ### What changes
 

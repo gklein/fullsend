@@ -191,6 +191,8 @@ Fetched resources are cached in the repository's workspace using content address
 
 **Cache location:** The cache is stored in the repository's workspace (`.fullsend-cache/` directory). In ephemeral CI/CD environments like GitHub Actions, the cache is rebuilt on each run unless the platform's native caching mechanisms (e.g., GitHub Actions cache, GitLab CI cache) are used to persist it across workflow runs.
 
+**Version control:** The `.fullsend-cache/` directory should be added to `.gitignore` to prevent cache artifacts from being committed. The cache is ephemeral and rebuilt as needed; committing it would bloat the repository and serve no purpose.
+
 Cache key: `SHA256(content)`
 Lookup: `SHA256(URL + hash) → cache_manifest.db → SHA256(content) → cached file`
 
