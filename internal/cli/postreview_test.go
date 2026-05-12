@@ -81,7 +81,7 @@ func TestReviewActionToEvent(t *testing.T) {
 		{"approve", "APPROVE", true},
 		{"Approve", "APPROVE", true},
 		{"request-changes", "REQUEST_CHANGES", true},
-		{"request_changes", "REQUEST_CHANGES", true},
+		{"request_changes", "", false},
 		{"comment", "COMMENT", true},
 		{"unknown", "", false},
 		{"", "", false},

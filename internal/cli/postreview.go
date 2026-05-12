@@ -168,7 +168,7 @@ func reviewActionToEvent(action string) (string, bool) {
 	switch strings.ToLower(action) {
 	case "approve":
 		return "APPROVE", true
-	case "request-changes", "request_changes":
+	case "request-changes":
 		return "REQUEST_CHANGES", true
 	case "comment":
 		return "COMMENT", true
