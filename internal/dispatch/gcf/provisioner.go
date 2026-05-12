@@ -77,6 +77,7 @@ type Config struct {
 	WIFPoolName       string // default: "fullsend-pool"
 	WIFProvider       string // default: "github-oidc"
 	GitHubOrgs        []string
+	Repo              string // per-repo mode: "owner/repo"; empty = per-org
 	FunctionSourceDir string // path to Cloud Function source directory
 
 	// AgentPEMs maps role → PEM private key data for all agent Apps.
@@ -186,6 +187,55 @@ func (p *Provisioner) StoreAgentPEM(ctx context.Context, org, role string, pemDa
 	}
 
 	return nil
+}
+
+// CopyAgentPEM copies a PEM secret from one org to another.
+// Used when the same public GitHub App is installed in multiple orgs —
+// the PEM is the same (tied to the app), just needs a secret under the
+// target org's naming convention.
+func (p *Provisioner) CopyAgentPEM(ctx context.Context, srcOrg, dstOrg, role string) error {
+	if p.cfg.ProjectID == "" {
+		return fmt.Errorf("GCP project ID is required")
+	}
+	for _, org := range []string{srcOrg, dstOrg} {
+		if !githubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
+			return fmt.Errorf("invalid org name %q", org)
+		}
+	}
+	if !rolePattern.MatchString(role) || strings.Contains(role, "--") {
+		return fmt.Errorf("invalid role name %q: must match %s", role, rolePattern.String())
+	}
+
+	dstID := secretID(dstOrg, role)
+	if err := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, dstID); err == nil {
+		return nil
+	}
+
+	srcID := secretID(srcOrg, role)
+	pemData, err := p.gcpAPI.AccessSecretVersion(ctx, p.cfg.ProjectID, srcID)
+	if err != nil {
+		return fmt.Errorf("reading source secret %s: %w", srcID, err)
+	}
+
+	return p.StoreAgentPEM(ctx, dstOrg, role, pemData)
+}
+
+// GetExistingRoleAppIDs reads ROLE_APP_IDS from the deployed mint function.
+// Returns nil if the function doesn't exist or has no ROLE_APP_IDS.
+func (p *Provisioner) GetExistingRoleAppIDs(ctx context.Context) (map[string]string, error) {
+	fn, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+	if err != nil || fn == nil || fn.EnvVars == nil {
+		return nil, nil
+	}
+	raw := fn.EnvVars["ROLE_APP_IDS"]
+	if raw == "" {
+		return nil, nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return nil, nil
+	}
+	return m, nil
 }
 
 // Provision creates the GCP infrastructure for the token mint.
@@ -584,6 +634,24 @@ func deriveAllowedRoles(roleAppIDsJSON string) string {
 	return strings.Join(roles, ",")
 }
 
+// BuildRepoProviderID generates a GCP WIF provider ID scoped to a single repo.
+// GCP requires 4-32 chars, [a-z][a-z0-9-]*, no trailing hyphen.
+func BuildRepoProviderID(owner, repo string) string {
+	raw := fmt.Sprintf("gh-%s-%s", owner, repo)
+	raw = strings.ToLower(raw)
+	raw = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			return r
+		}
+		return '-'
+	}, raw)
+	if len(raw) > 32 {
+		raw = raw[:32]
+	}
+	raw = strings.TrimRight(raw, "-")
+	return raw
+}
+
 // buildAttributeCondition constructs a WIF CEL condition scoped to each org's
 // .fullsend repo (not org-wide) to limit which workflows can authenticate.
 func buildAttributeCondition(orgs []string) string {
@@ -711,7 +779,15 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider, saEmail st
 		return "", "", fmt.Errorf("creating WIF pool: %w", err)
 	}
 
-	attrCondition := buildAttributeCondition(orgs)
+	var attrCondition string
+	if p.cfg.Repo != "" {
+		parts := strings.SplitN(p.cfg.Repo, "/", 2)
+		p.cfg.WIFProvider = BuildRepoProviderID(parts[0], parts[1])
+		attrCondition = fmt.Sprintf("assertion.repository == '%s'", p.cfg.Repo)
+	} else {
+		attrCondition = buildAttributeCondition(orgs)
+	}
+
 	audiences := []string{oidcAudience, iamAudience(projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)}
 	if err := p.gcpAPI.CreateWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider, OIDCProviderConfig{
 		IssuerURI:          oidcIssuer,
@@ -722,11 +798,19 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider, saEmail st
 	}
 
 	saEmail = fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, p.cfg.ProjectID)
-	for _, org := range orgs {
-		principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository_owner/%s",
-			projectNumber, p.cfg.WIFPoolName, org)
+	if p.cfg.Repo != "" {
+		principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository/%s",
+			projectNumber, p.cfg.WIFPoolName, p.cfg.Repo)
 		if err := p.gcpAPI.SetServiceAccountIAMBinding(ctx, p.cfg.ProjectID, saEmail, principal, "roles/iam.workloadIdentityUser"); err != nil {
-			return "", "", fmt.Errorf("binding WIF principal for org %s to service account: %w", org, err)
+			return "", "", fmt.Errorf("binding WIF principal for repo %s: %w", p.cfg.Repo, err)
+		}
+	} else {
+		for _, org := range orgs {
+			principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository_owner/%s",
+				projectNumber, p.cfg.WIFPoolName, org)
+			if err := p.gcpAPI.SetServiceAccountIAMBinding(ctx, p.cfg.ProjectID, saEmail, principal, "roles/iam.workloadIdentityUser"); err != nil {
+				return "", "", fmt.Errorf("binding WIF principal for org %s to service account: %w", org, err)
+			}
 		}
 	}
 

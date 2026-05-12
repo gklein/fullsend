@@ -297,13 +297,23 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 			}
 			printer.Blank()
 
+			// Pre-copy PEM secrets for shared public apps before app setup.
+			var sharedSlugs map[string]string
+			if mintProject != "" && !skipAppSetup {
+				slugs, err := copySharedAppPEMs(ctx, client, printer, org, roles, mintProject, mintRegion)
+				if err != nil {
+					return err
+				}
+				sharedSlugs = slugs
+			}
+
 			// Collect agent credentials via app setup.
 			var agentCreds []layers.AgentCredentials
 			if !skipAppSetup {
 				if err := ensureConfigRepoExists(ctx, client, printer, org); err != nil {
 					return err
 				}
-				creds, err := runAppSetup(ctx, client, printer, org, roles, mintProject, publicApps)
+				creds, err := runAppSetup(ctx, client, printer, org, roles, mintProject, publicApps, sharedSlugs)
 				if err != nil {
 					return err
 				}
@@ -488,8 +498,8 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 			printer.StepInfo("Would provision WIF infrastructure in GCP project " + gcpProject)
 			printer.StepInfo(fmt.Sprintf("  Service account: fullsend-dispatch@%s.iam.gserviceaccount.com", gcpProject))
 			printer.StepInfo("  WIF pool: fullsend-pool")
-			printer.StepInfo("  WIF provider: github-oidc")
-			printer.StepInfo(fmt.Sprintf("  Org restriction: %s", owner))
+			printer.StepInfo(fmt.Sprintf("  WIF provider: %s", gcf.BuildRepoProviderID(owner, repo)))
+			printer.StepInfo(fmt.Sprintf("  Repo restriction: %s/%s", owner, repo))
 			printer.Blank()
 		}
 		for _, f := range files {
@@ -522,6 +532,7 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 		provisioner := gcf.NewProvisioner(gcf.Config{
 			ProjectID:  gcpProject,
 			GitHubOrgs: []string{owner},
+			Repo:       owner + "/" + repo,
 		}, gcf.NewLiveGCFClient())
 		var provErr error
 		gcpWIFProvider, gcpWIFSAEmail, provErr = provisioner.ProvisionWIF(ctx)
@@ -769,19 +780,87 @@ func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, or
 	return printAnalysis(ctx, stack, printer)
 }
 
+// copySharedAppPEMs detects public GitHub Apps shared across orgs and copies
+// their PEM secrets to the target org's naming convention. This runs before
+// app setup so that handleExistingApp finds the PEM and returns credentials
+// without trying to generate a new key.
+// Returns a role → app-slug mapping for detected shared apps so callers
+// can pass them as known slugs to app setup.
+func copySharedAppPEMs(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject, mintRegion string) (map[string]string, error) {
+	prov := gcf.NewProvisioner(gcf.Config{
+		ProjectID:  mintProject,
+		Region:     mintRegion,
+		GitHubOrgs: []string{org},
+	}, gcf.NewLiveGCFClient())
+
+	existingIDs, err := prov.GetExistingRoleAppIDs(ctx)
+	if err != nil || len(existingIDs) == 0 {
+		return nil, nil
+	}
+
+	installations, err := client.ListOrgInstallations(ctx, org)
+	if err != nil {
+		return nil, nil
+	}
+
+	roleSet := make(map[string]bool, len(roles))
+	for _, r := range roles {
+		roleSet[r] = true
+	}
+
+	sharedSlugs := make(map[string]string)
+	for _, inst := range installations {
+		appIDStr := strconv.Itoa(inst.AppID)
+		for key, existingAppID := range existingIDs {
+			if existingAppID != appIDStr {
+				continue
+			}
+			parts := strings.SplitN(key, "/", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			srcOrg, role := parts[0], parts[1]
+			if srcOrg == org || !roleSet[role] {
+				continue
+			}
+
+			sharedSlugs[role] = inst.AppSlug
+
+			exists, _ := prov.SecretExists(ctx, org, role)
+			if exists {
+				continue
+			}
+
+			printer.StepStart(fmt.Sprintf("Shared app detected: %s (app %d) — copying PEM from %s", role, inst.AppID, srcOrg))
+			if err := prov.CopyAgentPEM(ctx, srcOrg, org, role); err != nil {
+				return nil, fmt.Errorf("copying shared PEM for %s: %w", role, err)
+			}
+			printer.StepDone(fmt.Sprintf("Copied shared %s PEM", role))
+			break
+		}
+	}
+	return sharedSlugs, nil
+}
+
 // runAppSetup creates or reuses GitHub Apps for each role. When mintProject is
 // non-empty, PEMs are also stored in GCP Secret Manager during app creation so
 // they survive partial provisioning failures.
-func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject string, publicApps bool) ([]layers.AgentCredentials, error) {
+func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject string, publicApps bool, sharedSlugs map[string]string) ([]layers.AgentCredentials, error) {
 	printer.Header("Setting up GitHub Apps")
 	printer.Blank()
 
 	setup := appsetup.NewSetup(client, appsetup.StdinPrompter{}, appsetup.DefaultBrowser{}, printer).
 		WithPublicApps(publicApps)
 
-	// Try to load known slugs from existing config.
+	// Merge known slugs: config-based first, then shared app overrides.
 	knownSlugs := loadKnownSlugs(ctx, client, org)
-	if knownSlugs != nil {
+	if knownSlugs == nil {
+		knownSlugs = make(map[string]string)
+	}
+	for role, slug := range sharedSlugs {
+		knownSlugs[role] = slug
+	}
+	if len(knownSlugs) > 0 {
 		setup = setup.WithKnownSlugs(knownSlugs)
 	}
 

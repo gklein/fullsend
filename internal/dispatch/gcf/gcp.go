@@ -72,6 +72,7 @@ type GCFClient interface {
 	GetSecret(ctx context.Context, projectID, secretID string) error
 	CreateSecret(ctx context.Context, projectID, secretID string) error
 	AddSecretVersion(ctx context.Context, projectID, secretID string, data []byte) error
+	AccessSecretVersion(ctx context.Context, projectID, secretID string) ([]byte, error)
 
 	// IAM bindings
 	SetSecretIAMBinding(ctx context.Context, resource, member, role string) error
@@ -208,6 +209,9 @@ func (c *LiveGCFClient) CreateWIFProvider(ctx context.Context, projectNumber, po
 
 	if resp.StatusCode == http.StatusConflict {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		if err := c.undeleteWIFProvider(ctx, projectNumber, poolID, providerID); err == nil {
+			return c.UpdateWIFProvider(ctx, projectNumber, poolID, providerID, cfg)
+		}
 		return c.UpdateWIFProvider(ctx, projectNumber, poolID, providerID, cfg)
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -292,6 +296,27 @@ func (c *LiveGCFClient) UpdateWIFProvider(ctx context.Context, projectNumber, po
 	return nil
 }
 
+// undeleteWIFProvider restores a soft-deleted WIF provider.
+// GCP WIF providers are soft-deleted with a 30-day grace period; creating a
+// provider with the same ID during this window returns 409. Undeleting first
+// allows the subsequent update to succeed.
+func (c *LiveGCFClient) undeleteWIFProvider(ctx context.Context, projectNumber, poolID, providerID string) error {
+	reqURL := fmt.Sprintf("https://iam.googleapis.com/v1/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s:undelete",
+		url.PathEscape(projectNumber), url.PathEscape(poolID), url.PathEscape(providerID))
+
+	resp, err := c.Client.DoRequest(ctx, http.MethodPost, reqURL, "{}")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		return fmt.Errorf("undelete returned %d", resp.StatusCode)
+	}
+	return c.waitForIAMOperation(ctx, resp.Body)
+}
+
 // GetSecret checks that a Secret Manager secret exists.
 func (c *LiveGCFClient) GetSecret(ctx context.Context, projectID, secretID string) error {
 	reqURL := fmt.Sprintf("https://secretmanager.googleapis.com/v1/projects/%s/secrets/%s",
@@ -361,6 +386,46 @@ func (c *LiveGCFClient) AddSecretVersion(ctx context.Context, projectID, secretI
 		return fmt.Errorf("unexpected status %d adding secret version: %s", resp.StatusCode, gcp.ExtractErrorMessage(body))
 	}
 	return nil
+}
+
+// AccessSecretVersion reads the latest version of a Secret Manager secret.
+func (c *LiveGCFClient) AccessSecretVersion(ctx context.Context, projectID, secretID string) ([]byte, error) {
+	reqURL := fmt.Sprintf("https://secretmanager.googleapis.com/v1/projects/%s/secrets/%s/versions/latest:access",
+		url.PathEscape(projectID), url.PathEscape(secretID))
+
+	resp, err := c.Client.DoRequest(ctx, http.MethodGet, reqURL, "")
+	if err != nil {
+		return nil, fmt.Errorf("accessing secret version: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("secret %s: %w", secretID, ErrSecretNotFound)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return nil, fmt.Errorf("unexpected status %d accessing secret version: %s", resp.StatusCode, gcp.ExtractErrorMessage(body))
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("reading secret version response: %w", err)
+	}
+
+	var result struct {
+		Payload struct {
+			Data string `json:"data"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parsing secret version response: %w", err)
+	}
+
+	data, err := base64.StdEncoding.DecodeString(result.Payload.Data)
+	if err != nil {
+		return nil, fmt.Errorf("decoding secret payload: %w", err)
+	}
+	return data, nil
 }
 
 // SetSecretIAMBinding sets an IAM binding on a Secret Manager resource.
