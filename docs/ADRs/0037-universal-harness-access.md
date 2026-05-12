@@ -1,6 +1,6 @@
 ---
 title: "37. Universal harness access via URLs and paths"
-status: Accepted
+status: Proposed
 relates_to:
   - agent-architecture
   - security-threat-model
@@ -18,7 +18,7 @@ Date: 2026-05-07
 
 ## Status
 
-Accepted
+Proposed
 
 ## Context
 
@@ -123,11 +123,7 @@ All resources remain local paths. Sharing requires manual copy-paste.
 
 ## Decision
 
-**Status: Accepted** — following security review and consensus on trust model.
-
-This ADR has been reviewed and accepted. The implementation plan in `docs/plans/universal-harness-access.md` provides detailed guidance for phased implementation. Security considerations including SSRF protection, integrity verification, and insider threat governance have been addressed during the review process.
-
-### Accepted approach
+**Hybrid approach: Option A for declarative resources combined with Option C's restriction on executable resources:**
 
 **Hybrid approach: Option A for declarative resources combined with Option C's restriction on executable resources:**
 
@@ -251,17 +247,89 @@ Instead, the model applies **uniform security to all remote resources:**
 
 This approach follows the GitHub Actions model: you can use actions from anywhere, but best practice is SHA-pinning everywhere. There's no tier of "blessed" actions that skip security requirements.
 
-### Open questions
+### Resolved design questions
 
-**Note:** These questions are intentionally deferred to future work and do not block acceptance of this ADR. The core architectural decision (URL support for declarative resources with mandatory integrity hashing, SSRF protection, and content-addressed caching) is production-ready and can be implemented incrementally per the phased plan. The questions below address enhancements, governance models, and operational details that can be resolved through community input, operational experience, and subsequent ADRs as the ecosystem matures.
+The following design questions have been resolved as part of this ADR:
 
-- **Insider threat: allowed_remote_resources governance:** The `allowed_remote_resources` list in harness YAML is editable by any team member with write access to `.fullsend`. An insider (or compromised credential) can add `https://attacker-controlled.com/` to a harness, bypassing the org-level domain allowlist. The threat model places insider/compromised creds as priority #2 (after external injection). Similar to "CODEOWNERS files are always human-owned," should `allowed_remote_resources` additions require CODEOWNERS-protected approval? Or should harness-level allowlists be constrained to a subset of the org-level `config.yaml` allowlist (validation error if a harness references a domain not allowed at org level)?
-- **Signature verification (optional enhancement):** Hash pinning prevents content substitution, but doesn't prove authorship. Should remote resources optionally support cryptographic signatures? What PKI model would we use?
-- **Namespace governance:** Who controls `https://cdn.fullsend.ai/skills/`? How do community contributors publish? (Note: This may not be needed — contributors can host on their own GitHub repos and users can allowlist them.)
-- **Version resolution:** If a skill references `policy: v2` but doesn't specify a URL, how is that resolved?
-- **Offline mode:** Should the runner support an offline mode where all resources must be pre-cached?
-- **Lock file format:** What does a dependency lock file look like for harnesses?
-- **git+https:// vs bare https:// URL scheme (Slack discussion):** The team debated whether to support bare `https://` URLs (current proposal) or structured VCS-coupled references like `git+https://github.com/fullsend-ai/library.git//agents/code.md@v1.2.0#sha256=abc123...` or `github:org/repo/path@ref`. Arguments for bare `https://`: low barrier to entry, simple to understand. Arguments for structured refs: enables `dependabot`-style automation, makes VCS coupling explicit, provides stable API via tags/commits. Initial implementation uses bare `https://` for simplicity, but structured references may provide better long-term ergonomics and should be considered for Phase 2/3.
+#### 1. Insider threat: allowed_remote_resources governance
+
+**Decision:** Harness-level `allowed_remote_resources` lists must be a subset of the org-level allowlist in `config.yaml`. The runner validates this constraint at harness load time and fails with an error if a harness references a domain not present in the org-level allowlist.
+
+**Rationale:** This prevents insider/compromised credential attacks where an attacker adds `https://attacker-controlled.com/` to a harness. The org-level `config.yaml` is typically in the `.fullsend` repository which should already have CODEOWNERS protection on sensitive paths. This provides defense-in-depth: even if an insider can edit a harness file, they cannot introduce new external domains without also modifying the org-level configuration (which requires CODEOWNERS approval).
+
+**Implementation:** The harness `Validate()` method checks that every domain in `allowed_remote_resources` exists in the org-level allowlist. If validation fails, the harness is rejected before any resources are fetched.
+
+#### 2. Signature verification
+
+**Decision:** Phase 1 does not support signature verification. Hash pinning (mandatory SHA256 integrity hashes) provides content integrity. Signature verification is deferred to Phase 3 as an optional enhancement.
+
+**Rationale:** Hash pinning prevents content substitution attacks. Signatures add provenance (proving who published the resource) but require PKI infrastructure (key distribution, revocation, trust roots). For MVP, HTTPS transport security + domain allowlists + integrity hashes provide sufficient protection. Organizations that require stronger provenance can restrict `allowed_remote_resources` to domains they control.
+
+**Future consideration:** Phase 3 could add optional Sigstore/cosign support (similar to container image signing) or GPG detached signatures.
+
+#### 3. Namespace governance
+
+**Decision:** Decentralized publishing model. No centralized `cdn.fullsend.ai` or registry. Contributors publish resources on their own domains (GitHub repos, personal sites, org-controlled CDNs). Consumers add trusted domains to their org-level `allowed_remote_resources` allowlist.
+
+**Rationale:** Avoids central gatekeeping and single point of failure. Aligns with the threat model: organizations control what they trust via allowlists. The fullsend-ai organization may maintain reference implementations at `github.com/fullsend-ai/library/` as examples, but these have no special trust status — users must explicitly allowlist them.
+
+**Namespace collision:** Not a concern since all references are full URLs (no name resolution layer where collisions could occur).
+
+#### 4. Version resolution
+
+**Decision:** No version resolution. All resource references must be full URLs with explicit integrity hashes. No "magic" resolution of names or version specifiers to URLs.
+
+**Rationale:** Explicit URLs make dependencies auditable and prevent dependency confusion attacks. Version resolution requires a central registry (complexity, availability, trust) or org-level alias files (indirection that obscures actual dependencies). Full URLs are verbose but clear.
+
+**Alternative for ergonomics:** Organizations can use shell aliases or wrapper scripts if they frequently reference the same base URLs. Example: `fullsend run $LIBRARY/harness/rust-linter.yaml#sha256=...` where `LIBRARY=https://raw.githubusercontent.com/fullsend-ai/library/8cd3799...`
+
+#### 5. Offline mode
+
+**Decision:** Support offline mode via `fullsend run --offline <harness>`. In offline mode, the runner disables all network fetches. If any required resource (URL-referenced agent, skill, policy) is not in the local cache, the run fails immediately with an error listing the missing resources.
+
+**Rationale:** Enables CI/CD environments with no internet access (air-gapped, policy-restricted). Organizations can pre-populate the cache in a separate step (e.g., `fullsend cache warm <harness>`) before running in offline mode. Cache hits are still subject to integrity re-verification (re-hash cached content and verify it matches expected hash).
+
+**Implementation:** The `--offline` flag is a global runner option. When set, the `fetch.FetchResource` function returns an error immediately if the requested URL is not in cache, rather than attempting an HTTP request.
+
+#### 6. Lock file format
+
+**Decision:** Phase 3 introduces harness lock files at `.fullsend/lock.yaml`. Lock files pin all transitive dependencies (resources referenced by resources) with full URLs and integrity hashes. See implementation plan (docs/plans/universal-harness-access.md) for detailed schema.
+
+**Schema summary:**
+```yaml
+# .fullsend/lock.yaml
+version: 1
+harnesses:
+  rust-linter:
+    resolved_at: "2026-05-12T10:00:00Z"
+    dependencies:
+      agent:
+        url: https://raw.githubusercontent.com/fullsend-ai/library/8cd3799.../agents/rust.md
+        sha256: abc123...
+        fetched_at: "2026-05-12T10:00:00Z"
+      skills:
+        - url: https://raw.githubusercontent.com/fullsend-ai/library/8cd3799.../skills/cargo-check/SKILL.md
+          sha256: def456...
+          transitive_deps:
+            - url: https://raw.githubusercontent.com/fullsend-ai/library/8cd3799.../policies/rust-sandbox.yaml
+              sha256: ghi789...
+```
+
+**Rationale:** Lock files provide dependency pinning (reproducible builds), transitive closure visibility (auditability), and automated updates (tools can rewrite lock files when dependencies change). Similar to `package-lock.json` in npm.
+
+**Lock file workflow:** `fullsend lock <harness>` resolves all dependencies, generates/updates the lock file. `fullsend run <harness>` prefers lock file entries if present, warns if lock file is stale (resource hash doesn't match).
+
+#### 7. URL scheme: bare https:// vs git+https://
+
+**Decision:** Phase 1 supports bare `https://` URLs only. Structured VCS references (e.g., `git+https://github.com/org/repo.git//path@ref` or `github:org/repo/path@ref`) are deferred to Phase 2/3.
+
+**Rationale:** Bare `https://` URLs have low barrier to entry, work with any hosting (GitHub, GitLab, static CDN, personal server), and are simple to understand. The mandatory `#sha256=...` integrity hash provides content pinning regardless of URL mutability.
+
+**VCS-specific schemes trade-off:** Structured references like `git+https://` enable automation (dependabot-style updates that understand git semantics), make VCS coupling explicit, and provide stable API via tags/commits. However, they increase complexity (multiple URL parsers, VCS-specific logic) and reduce portability (what if a resource moves from GitHub to GitLab?).
+
+**Future enhancement:** Phase 2/3 could add opt-in support for structured references as an alternative to bare URLs. The implementation plan would translate `github:org/repo/path@ref` to a raw.githubusercontent.com URL with commit SHA lookup, then apply the same fetch/cache/validate logic. Both URL forms would coexist.
+
+**Current recommendation:** Use commit-pinned raw.githubusercontent.com URLs (e.g., `https://raw.githubusercontent.com/fullsend-ai/library/8cd3799.../agents/code.md#sha256=...`) for GitHub-hosted resources. The commit SHA in the URL path provides immutability at the URL level, and the `#sha256=...` fragment provides content integrity. This achieves the same goals as `git+https://` without requiring VCS-specific logic.
 
 ## Related Work
 
