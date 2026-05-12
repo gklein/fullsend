@@ -1303,7 +1303,7 @@ Should remote resources be cryptographically signed by their publisher?
 
 **Trade-off:** Signatures add strong provenance but require key management. For MVP, rely on HTTPS + integrity hashing. Add signatures in Phase 3.
 
-### 2. Namespace governance
+### 3. Namespace governance
 
 Who controls `https://cdn.fullsend.ai/skills/`? How do community contributors publish skills?
 
@@ -1315,7 +1315,7 @@ Who controls `https://cdn.fullsend.ai/skills/`? How do community contributors pu
 
 **Recommendation:** Start with B (decentralized). Organizations control which domains they trust via `allowed_remote_resources`. No central gatekeeping.
 
-### 3. Version resolution
+### 4. Version resolution
 
 If a skill references `policy: rust-sandbox@v2` (a name+version, not a URL), how is that resolved to a URL?
 
@@ -1330,7 +1330,7 @@ If a skill references `policy: rust-sandbox@v2` (a name+version, not a URL), how
 
 **Recommendation:** Start with A (no name resolution). Use full URLs everywhere. If name resolution is needed later, introduce aliases (Option C) to avoid central registry dependency.
 
-### 4. Cache eviction
+### 5. Cache eviction
 
 The cache grows unbounded. When should cached resources be evicted?
 
