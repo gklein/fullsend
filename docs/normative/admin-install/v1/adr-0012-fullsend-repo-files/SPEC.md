@@ -23,7 +23,6 @@ install of these layers:
 | `.github/workflows/code.yml` | `WorkflowsLayer` |
 | `.github/workflows/review.yml` | `WorkflowsLayer` |
 | `.github/workflows/repo-maintenance.yml` | `WorkflowsLayer` |
-| `.github/actions/fullsend/action.yml` | `WorkflowsLayer` |
 | `.github/scripts/setup-agent-env.sh` | `WorkflowsLayer` |
 | `agents/triage.md` | `WorkflowsLayer` |
 | `env/gcp-vertex.env` | `WorkflowsLayer` |
@@ -64,39 +63,35 @@ filesystem walk order, then `CODEOWNERS` last (CODEOWNERS failure is non-fatal).
 
 - Reconciles enrollment shims in target repos when `config.yaml` changes.
 
-### 3.6 `.github/actions/fullsend/action.yml`
-
-- Composite action: installs the fullsend CLI and runs the agent.
-
-### 3.7 `.github/scripts/setup-agent-env.sh`
+### 3.6 `.github/scripts/setup-agent-env.sh`
 
 - Env prefix stripping helper sourced by per-role workflows.
 
-### 3.8 `agents/triage.md`
+### 3.7 `agents/triage.md`
 
 - Agent instructions for the triage role.
 
-### 3.9 `env/gcp-vertex.env`
+### 3.8 `env/gcp-vertex.env`
 
 - Environment variables for GCP Vertex AI inference.
 
-### 3.10 `env/triage.env`
+### 3.9 `env/triage.env`
 
 - Environment variables specific to the triage role.
 
-### 3.11 `harness/triage.yaml`
+### 3.10 `harness/triage.yaml`
 
 - Harness configuration for the triage role.
 
-### 3.12 `policies/triage.yaml`
+### 3.11 `policies/triage.yaml`
 
 - Policy definitions for the triage role.
 
-### 3.13 `scripts/validate-triage.sh`
+### 3.12 `scripts/validate-triage.sh`
 
 - Validation script for triage role output.
 
-### 3.14 `scripts/reconcile-repos.sh`
+### 3.13 `scripts/reconcile-repos.sh`
 
 - Shell script that reconciles enrollment shims in target repos. Called by
   `repo-maintenance.yml`. Uses `gh` CLI, `yq` to read `config.yaml`, and
@@ -106,12 +101,12 @@ filesystem walk order, then `CODEOWNERS` last (CODEOWNERS failure is non-fatal).
   workflows (via GitHub Contents API DELETE with blob SHA), and opens
   removal PRs. Closes stale cross-direction PRs in both cases.
 
-### 3.15 `templates/shim-workflow.yaml`
+### 3.14 `templates/shim-workflow.yaml`
 
 - The shim workflow template used by `scripts/reconcile-repos.sh` to write shim
   workflows to target repos during enrollment and verify content during updates.
 
-### 3.16 `CODEOWNERS`
+### 3.15 `CODEOWNERS`
 
 - **Purpose:** grant the installing human ownership of all paths in the
   configuration repo.

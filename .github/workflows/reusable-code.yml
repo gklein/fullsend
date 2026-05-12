@@ -137,7 +137,7 @@ jobs:
         run: bash .github/scripts/setup-agent-env.sh
 
       - name: Run code agent
-        uses: fullsend-ai/fullsend/.github/actions/fullsend@v0
+        uses: fullsend-ai/fullsend@v0
         env:
           GITHUB_ISSUE_URL: ${{ fromJSON(inputs.event_payload).issue.html_url }}
           ISSUE_NUMBER: ${{ fromJSON(inputs.event_payload).issue.number }}

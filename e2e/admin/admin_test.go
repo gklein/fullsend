@@ -390,7 +390,6 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 		".github/workflows/code.yml",
 		".github/workflows/review.yml",
 		".github/workflows/repo-maintenance.yml",
-		".github/actions/fullsend/action.yml",
 		".github/scripts/setup-agent-env.sh",
 		"agents/triage.md",
 		"agents/code.md",

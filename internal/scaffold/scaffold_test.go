@@ -91,7 +91,6 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		"scripts/post-prioritize.sh",
 		".github/workflows/prioritize.yml",
 		".github/workflows/prioritize-scheduler.yml",
-		".github/actions/fullsend/action.yml",
 	}
 
 	for _, path := range expected {
@@ -327,15 +326,6 @@ func TestTriageWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "id-token: write")
 	assert.Contains(t, s, "issues: write")
 	assert.Contains(t, s, "contents: read")
-}
-
-func TestCompositeActionContent(t *testing.T) {
-	content, err := FullsendRepoFile(".github/actions/fullsend/action.yml")
-	require.NoError(t, err)
-	s := string(content)
-	assert.Contains(t, s, "fullsend run")
-	assert.Contains(t, s, "openshell")
-	assert.Contains(t, s, "upload-artifact")
 }
 
 func TestCodeAgentContent(t *testing.T) {

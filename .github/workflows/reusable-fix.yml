@@ -323,7 +323,7 @@ jobs:
         run: bash .github/scripts/setup-agent-env.sh
 
       - name: Run fix agent
-        uses: fullsend-ai/fullsend/.github/actions/fullsend@v0
+        uses: fullsend-ai/fullsend@v0
         env:
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
           REPO_FULL_NAME: ${{ inputs.source_repo }}
