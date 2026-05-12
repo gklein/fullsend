@@ -88,7 +88,7 @@ repos:
 
       - id: lint-md-links
         name: lint markdown links
-        entry: lychee --offline --no-progress --include-fragments --exclude-path node_modules '**/*.md'
+        entry: lychee --offline --no-progress --include-fragments --exclude-path node_modules --exclude-path experiments '**/*.md'
         language: system
         pass_filenames: false
         always_run: true
