@@ -73,8 +73,9 @@ type GCFClient interface {
 	CreateSecret(ctx context.Context, projectID, secretID string) error
 	AddSecretVersion(ctx context.Context, projectID, secretID string, data []byte) error
 
-	// IAM binding (Secret Manager resources)
+	// IAM bindings
 	SetSecretIAMBinding(ctx context.Context, resource, member, role string) error
+	SetServiceAccountIAMBinding(ctx context.Context, projectID, saEmail, member, role string) error
 
 	// IAM binding (project-level)
 	SetProjectIAMBinding(ctx context.Context, projectID, member, role string) error
@@ -225,7 +226,7 @@ func (c *LiveGCFClient) GetWIFProvider(ctx context.Context, projectNumber, poolI
 	getURL := fmt.Sprintf("https://iam.googleapis.com/v1/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s",
 		url.PathEscape(projectNumber), url.PathEscape(poolID), url.PathEscape(providerID))
 
-	resp, err := c.Client.DoRequest(ctx, http.MethodGet, providerURL, "")
+	resp, err := c.Client.DoRequest(ctx, http.MethodGet, getURL, "")
 	if err != nil {
 		return nil, fmt.Errorf("getting WIF provider: %w", err)
 	}

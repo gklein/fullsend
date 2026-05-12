@@ -181,29 +181,39 @@ func TestInstallCmd_PerRepoSAKeyRequiresCredentialsFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "--gcp-credentials-file is required when --gcp-auth-mode is 'sa_key'")
 }
 
-func TestInstallCmd_PerRepoWIFRequiresProvider(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget",
-		"--mint-url", "https://mint.example.com",
-		"--gcp-region", "us-central1",
-		"--gcp-project", "my-project",
-		"--gcp-auth-mode", "wif"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--gcp-wif-provider is required when --gcp-auth-mode is 'wif'")
-}
-
-func TestInstallCmd_PerRepoWIFRequiresSAEmail(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget",
-		"--mint-url", "https://mint.example.com",
-		"--gcp-region", "us-central1",
-		"--gcp-project", "my-project",
-		"--gcp-auth-mode", "wif",
-		"--gcp-wif-provider", "projects/123/locations/global/workloadIdentityPools/pool/providers/prov"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--gcp-wif-sa-email is required when --gcp-auth-mode is 'wif'")
+func TestInstallCmd_PerRepoWIFRejectsMismatchedFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			"provider without sa-email",
+			[]string{"admin", "install", "acme/widget",
+				"--mint-url", "https://mint.example.com",
+				"--gcp-region", "us-central1",
+				"--gcp-project", "my-project",
+				"--gcp-auth-mode", "wif",
+				"--gcp-wif-provider", "projects/123/locations/global/workloadIdentityPools/pool/providers/prov"},
+		},
+		{
+			"sa-email without provider",
+			[]string{"admin", "install", "acme/widget",
+				"--mint-url", "https://mint.example.com",
+				"--gcp-region", "us-central1",
+				"--gcp-project", "my-project",
+				"--gcp-auth-mode", "wif",
+				"--gcp-wif-sa-email", "sa@project.iam.gserviceaccount.com"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs(tc.args)
+			err := cmd.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "--gcp-wif-provider and --gcp-wif-sa-email must be provided together")
+		})
+	}
 }
 
 func TestInstallCmd_PerRepoRejectsWIFWithCredentialsFile(t *testing.T) {

@@ -1334,6 +1334,194 @@ func TestProvisioner_Provision_MultiOrg_MergeDoesNotOverwriteExistingPEMs(t *tes
 	assert.Contains(t, fake.lastCreateFunctionEnvVars["ROLE_APP_IDS"], `"new-org/coder"`)
 }
 
+// --- ProvisionWIF tests ---
+
+func TestProvisionWIF_HappyPath(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	wifProvider, saEmail, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, "projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc", wifProvider)
+	assert.Equal(t, "fullsend-dispatch@my-project.iam.gserviceaccount.com", saEmail)
+
+	assert.Contains(t, fake.calls, "GetProjectNumber")
+	assert.Contains(t, fake.calls, "CreateServiceAccount")
+	assert.Contains(t, fake.calls, "CreateWIFPool")
+	assert.Contains(t, fake.calls, "CreateWIFProvider")
+	assert.Contains(t, fake.calls, "SetServiceAccountIAMBinding")
+
+	assert.Equal(t, "assertion.repository_owner == 'acme'", fake.lastWIFProviderConfig.AttributeCondition)
+}
+
+func TestProvisionWIF_MissingProjectID(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GCP project ID is required")
+}
+
+func TestProvisionWIF_MissingOrgs(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID: "my-project",
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one GitHub org is required")
+}
+
+func TestProvisionWIF_SACreationFails(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["CreateServiceAccount"] = fmt.Errorf("permission denied")
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating service account")
+}
+
+func TestProvisionWIF_IAMBindingFails(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["SetServiceAccountIAMBinding"] = fmt.Errorf("policy error")
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "binding WIF principal for org acme to service account")
+}
+
+func TestProvisionWIF_MultipleOrgs(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme", "beta"},
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "assertion.repository_owner in ['acme', 'beta']", fake.lastWIFProviderConfig.AttributeCondition)
+
+	require.Len(t, fake.saBindingPrincipals, 2)
+	assert.Contains(t, fake.saBindingPrincipals[0], "attribute.repository_owner/acme")
+	assert.Contains(t, fake.saBindingPrincipals[1], "attribute.repository_owner/beta")
+}
+
+func TestProvisionWIF_GetProjectNumberFails(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["GetProjectNumber"] = fmt.Errorf("forbidden")
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "getting project number")
+}
+
+func TestProvisionWIF_CreateWIFPoolFails(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["CreateWIFPool"] = fmt.Errorf("quota exceeded")
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating WIF pool")
+}
+
+func TestProvisionWIF_CreateWIFProviderFails(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["CreateWIFProvider"] = fmt.Errorf("invalid config")
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating WIF provider")
+}
+
+func TestProvisionWIF_InvalidOrgName(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"bad org!"},
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid GitHub org name")
+}
+
+func TestProvisionWIF_DuplicateOrg(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme", "ACME"},
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate GitHub org after normalization")
+}
+
+func TestProvisionWIF_DoesNotMutateInput(t *testing.T) {
+	fake := newFakeGCFClient()
+	orgs := []string{"ACME"}
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: orgs,
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "ACME", orgs[0], "ProvisionWIF should not mutate the input slice")
+}
+
+func TestProvisionWIF_InvalidProjectID(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "BAD",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid GCP project ID")
+}
+
+func TestProvisionWIF_NormalizesOrgCase(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"ACME"},
+	}, fake)
+
+	_, _, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "assertion.repository_owner == 'acme'", fake.lastWIFProviderConfig.AttributeCondition)
+}
+
 // --- interface compliance ---
 
 func TestProvisioner_ImplementsDispatcher(t *testing.T) {

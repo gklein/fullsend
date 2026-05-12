@@ -669,6 +669,73 @@ func (p *Provisioner) waitForReady(ctx context.Context, mintURL string) error {
 	}
 }
 
+// ProvisionWIF creates the WIF infrastructure (service account, pool, provider,
+// principal binding) needed for GitHub Actions to authenticate via OIDC.
+// All operations are idempotent. Returns the full WIF provider resource path
+// and service account email.
+func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider, saEmail string, err error) {
+	if p.cfg.ProjectID == "" {
+		return "", "", fmt.Errorf("GCP project ID is required")
+	}
+	if !gcpProjectIDPattern.MatchString(p.cfg.ProjectID) {
+		return "", "", fmt.Errorf("invalid GCP project ID: %q", p.cfg.ProjectID)
+	}
+	if len(p.cfg.GitHubOrgs) == 0 {
+		return "", "", fmt.Errorf("at least one GitHub org is required")
+	}
+
+	orgs := make([]string, len(p.cfg.GitHubOrgs))
+	seen := make(map[string]bool)
+	for i, org := range p.cfg.GitHubOrgs {
+		if !githubOrgPattern.MatchString(org) {
+			return "", "", fmt.Errorf("invalid GitHub org name: %q", org)
+		}
+		lower := strings.ToLower(org)
+		if seen[lower] {
+			return "", "", fmt.Errorf("duplicate GitHub org after normalization: %q", org)
+		}
+		seen[lower] = true
+		orgs[i] = lower
+	}
+
+	projectNumber, err := p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
+	if err != nil {
+		return "", "", fmt.Errorf("getting project number: %w", err)
+	}
+
+	if err := p.gcpAPI.CreateServiceAccount(ctx, p.cfg.ProjectID, saName, "Fullsend token mint service account"); err != nil {
+		return "", "", fmt.Errorf("creating service account: %w", err)
+	}
+
+	if err := p.gcpAPI.CreateWIFPool(ctx, projectNumber, p.cfg.WIFPoolName, "Fullsend GitHub OIDC Pool"); err != nil {
+		return "", "", fmt.Errorf("creating WIF pool: %w", err)
+	}
+
+	attrCondition := buildAttributeCondition(orgs)
+	audiences := []string{oidcAudience, iamAudience(projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)}
+	if err := p.gcpAPI.CreateWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider, OIDCProviderConfig{
+		IssuerURI:          oidcIssuer,
+		AttributeCondition: attrCondition,
+		AllowedAudiences:   audiences,
+	}); err != nil {
+		return "", "", fmt.Errorf("creating WIF provider: %w", err)
+	}
+
+	saEmail = fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, p.cfg.ProjectID)
+	for _, org := range orgs {
+		principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository_owner/%s",
+			projectNumber, p.cfg.WIFPoolName, org)
+		if err := p.gcpAPI.SetServiceAccountIAMBinding(ctx, p.cfg.ProjectID, saEmail, principal, "roles/iam.workloadIdentityUser"); err != nil {
+			return "", "", fmt.Errorf("binding WIF principal for org %s to service account: %w", org, err)
+		}
+	}
+
+	wifProvider = fmt.Sprintf("projects/%s/locations/global/workloadIdentityPools/%s/providers/%s",
+		projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)
+
+	return wifProvider, saEmail, nil
+}
+
 func (p *Provisioner) zeroPEMs() {
 	for role, pem := range p.cfg.AgentPEMs {
 		for i := range pem {
