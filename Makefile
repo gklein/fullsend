@@ -103,7 +103,7 @@ go-tidy:
 	go mod tidy
 
 lint-md-links:
-	lychee --offline --no-progress --include-fragments '**/*.md'
+	lychee --offline --no-progress --include-fragments --exclude-path node_modules --exclude-path experiments '**/*.md'
 
 script-test:
 	bash internal/scaffold/fullsend-repo/scripts/post-triage-test.sh
