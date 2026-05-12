@@ -21,18 +21,20 @@ import (
 const reviewMarker = "<!-- fullsend:review-agent -->"
 const reviewFollowupSummaryMarker = "<!-- fullsend:review-follow-ups -->"
 const reviewFollowupIssueMarkerPrefix = "<!-- fullsend:review-follow-up:"
+const maxReviewFollowUpIssues = 3
 
 var hexSHARe = regexp.MustCompile(`^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$`)
 var reasonRe = regexp.MustCompile(`^[a-zA-Z0-9_-]*$`)
 
 func newPostReviewCmd() *cobra.Command {
 	var (
-		repo    string
-		pr      int
-		result  string
-		token   string
-		headSHA string
-		dryRun  bool
+		repo              string
+		pr                int
+		result            string
+		token             string
+		headSHA           string
+		dryRun            bool
+		maxFollowUpIssues int
 	)
 
 	cmd := &cobra.Command{
@@ -66,6 +68,9 @@ has moved, a stale-head failure is posted instead.`,
 
 			if pr <= 0 {
 				return fmt.Errorf("--pr must be a positive integer, got %d", pr)
+			}
+			if err := validateMaxReviewFollowUpIssues(maxFollowUpIssues, "--max-follow-up-issues"); err != nil {
+				return err
 			}
 
 			parts := strings.SplitN(repo, "/", 2)
@@ -127,7 +132,7 @@ has moved, a stale-head failure is posted instead.`,
 				return err
 			}
 
-			return postApprovedFollowUpIssues(cmd.Context(), client, owner, repoName, pr, parsed, dryRun, printer)
+			return postApprovedFollowUpIssues(cmd.Context(), client, owner, repoName, pr, parsed, dryRun, maxFollowUpIssues, printer)
 		},
 	}
 
@@ -137,6 +142,7 @@ has moved, a stale-head failure is posted instead.`,
 	cmd.Flags().StringVar(&token, "token", "", "GitHub token (default: $GITHUB_TOKEN)")
 	cmd.Flags().StringVar(&headSHA, "head-sha", "", "expected PR HEAD SHA (skips review if HEAD has moved)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be posted without making API calls")
+	cmd.Flags().IntVar(&maxFollowUpIssues, "max-follow-up-issues", maxReviewFollowUpIssues, "maximum number of review follow-up issues to create after an approval (0 disables creation; max 3)")
 	_ = cmd.MarkFlagRequired("repo")
 	_ = cmd.MarkFlagRequired("pr")
 
@@ -314,9 +320,12 @@ type reviewFollowupIssue struct {
 // findings after an approval. Blocking and comment-only findings stay in the
 // review itself; this path only preserves non-blocking work that would
 // otherwise disappear after merge.
-func postApprovedFollowUpIssues(ctx context.Context, client forge.Client, owner, repo string, pr int, parsed ReviewResult, dryRun bool, printer *ui.Printer) error {
+func postApprovedFollowUpIssues(ctx context.Context, client forge.Client, owner, repo string, pr int, parsed ReviewResult, dryRun bool, maxFollowUpIssues int, printer *ui.Printer) error {
 	if strings.ToLower(parsed.Action) != "approve" {
 		return nil
+	}
+	if err := validateMaxReviewFollowUpIssues(maxFollowUpIssues, "max follow-up issues"); err != nil {
+		return err
 	}
 
 	actionable := actionableApprovedFindings(parsed.Findings)
@@ -325,7 +334,15 @@ func postApprovedFollowUpIssues(ctx context.Context, client forge.Client, owner,
 	}
 
 	if dryRun {
-		printer.StepInfo(fmt.Sprintf("Dry run — would create %d review follow-up issue(s)", len(actionable)))
+		toCreate := min(len(actionable), maxFollowUpIssues)
+		skipped := len(actionable) - toCreate
+		if maxFollowUpIssues == 0 {
+			printer.StepInfo(fmt.Sprintf("Dry run — review follow-up issue creation disabled; would skip %d actionable finding(s)", len(actionable)))
+		} else if skipped > 0 {
+			printer.StepInfo(fmt.Sprintf("Dry run — would create up to %d review follow-up issue(s) and skip %d due to cap", toCreate, skipped))
+		} else {
+			printer.StepInfo(fmt.Sprintf("Dry run — would create %d review follow-up issue(s)", toCreate))
+		}
 		return nil
 	}
 
@@ -354,6 +371,8 @@ func postApprovedFollowUpIssues(ctx context.Context, client forge.Client, owner,
 	printer.StepDone("Duplicate check complete")
 
 	results := make([]reviewFollowupIssue, 0, len(actionable))
+	createdCount := 0
+	skippedCount := 0
 	for _, finding := range actionable {
 		marker := reviewFollowupIssueMarker(owner, repo, finding)
 		if issue, ok := existingByMarker[marker]; ok {
@@ -363,6 +382,10 @@ func postApprovedFollowUpIssues(ctx context.Context, client forge.Client, owner,
 				issue:   &issueCopy,
 				created: false,
 			})
+			continue
+		}
+		if createdCount >= maxFollowUpIssues {
+			skippedCount++
 			continue
 		}
 
@@ -379,9 +402,20 @@ func postApprovedFollowUpIssues(ctx context.Context, client forge.Client, owner,
 			issue:   issue,
 			created: true,
 		})
+		createdCount++
+	}
+	if skippedCount > 0 {
+		printer.StepInfo(fmt.Sprintf("Review follow-up issue cap reached (%d); skipped %d actionable finding(s)", maxFollowUpIssues, skippedCount))
 	}
 
-	return postReviewFollowupSummary(ctx, client, owner, repo, pr, results, printer)
+	return postReviewFollowupSummary(ctx, client, owner, repo, pr, results, skippedCount, maxFollowUpIssues, printer)
+}
+
+func validateMaxReviewFollowUpIssues(value int, name string) error {
+	if value < 0 || value > maxReviewFollowUpIssues {
+		return fmt.Errorf("%s must be between 0 and %d, got %d", name, maxReviewFollowUpIssues, value)
+	}
+	return nil
 }
 
 func actionableApprovedFindings(findings []ReviewFinding) []ReviewFinding {
@@ -395,8 +429,8 @@ func actionableApprovedFindings(findings []ReviewFinding) []ReviewFinding {
 	return actionable
 }
 
-func postReviewFollowupSummary(ctx context.Context, client forge.Client, owner, repo string, pr int, results []reviewFollowupIssue, printer *ui.Printer) error {
-	if len(results) == 0 {
+func postReviewFollowupSummary(ctx context.Context, client forge.Client, owner, repo string, pr int, results []reviewFollowupIssue, skippedCount, maxFollowUpIssues int, printer *ui.Printer) error {
+	if len(results) == 0 && skippedCount == 0 {
 		return nil
 	}
 
@@ -412,6 +446,13 @@ func postReviewFollowupSummary(ctx context.Context, client forge.Client, owner, 
 
 	var b strings.Builder
 	b.WriteString("## Review follow-ups\n\n")
+	if skippedCount > 0 {
+		if maxFollowUpIssues == 0 {
+			fmt.Fprintf(&b, "**Warning:** follow-up issue creation is disabled, so %d actionable non-blocking finding(s) were not filed.\n\n", skippedCount)
+		} else {
+			fmt.Fprintf(&b, "**Warning:** follow-up issue creation is capped at %d per review run; %d actionable non-blocking finding(s) were not filed.\n\n", maxFollowUpIssues, skippedCount)
+		}
+	}
 	if len(created) > 0 {
 		b.WriteString("Created follow-up issues for actionable non-blocking review findings:\n\n")
 		for _, result := range created {
