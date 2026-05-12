@@ -687,14 +687,10 @@ func FetchURL(ctx context.Context, rawURL string, policy FetchPolicy) ([]byte, e
         port = "443"
     }
 
-    // DNS rebinding protection: pin connection to pre-validated IP
+    // DNS rebinding protection: pin connection to pre-validated IPs
     // Without this custom DialContext, client.Get() would perform a second DNS resolution,
     // which could return a different (internal) IP if attacker controls the DNS server.
-    //
-    // IMPORTANT: This example uses ips[0] for simplicity. Production implementations should
-    // iterate through all validated IPs sequentially (trying IPv4 and IPv6 addresses) to
-    // handle network configurations where the first resolved IP may not be reachable
-    // (e.g., IPv6 not supported). Match Go's net.Dialer behavior.
+    // Iterate through all validated IPs to handle IPv4/IPv6 fallback.
     client := &http.Client{
         Timeout: policy.Timeout,
         CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -702,14 +698,25 @@ func FetchURL(ctx context.Context, rawURL string, policy FetchPolicy) ([]byte, e
         },
         Transport: &http.Transport{
             DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-                // Use first validated IP instead of re-resolving DNS
-                return (&net.Dialer{
-                    Timeout: 10 * time.Second,
-                }).DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+                // Try each validated IP in sequence (handles IPv4/IPv6 fallback)
+                var lastErr error
+                for _, ip := range ips {
+                    conn, err := (&net.Dialer{
+                        Timeout: 10 * time.Second,
+                    }).DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+                    if err == nil {
+                        return conn, nil
+                    }
+                    lastErr = err
+                }
+                return nil, fmt.Errorf("all IPs failed: %w", lastErr)
             },
         },
     }
 
+    // Note: client.Get(rawURL) uses the original URL with hostname in the Host header,
+    // while DialContext pins to pre-validated IPs. This is intentional and required for
+    // TLS SNI (Server Name Indication) and certificate validation to work correctly.
     resp, err := client.Get(rawURL)
     if err != nil {
         return nil, fmt.Errorf("fetch failed: %w", err)
@@ -756,11 +763,15 @@ func isAllowedDomain(hostname string, allowed []string) bool {
     return false
 }
 
+// Pre-parse CIDR ranges at package initialization to avoid per-call allocations
+var (
+    _, currentNet, _ = net.ParseCIDR("0.0.0.0/8")      // Current network (not caught by IsLoopback)
+    _, cgnNet, _     = net.ParseCIDR("100.64.0.0/10")  // Carrier-Grade NAT (RFC 6598)
+    _, benchNet, _   = net.ParseCIDR("198.18.0.0/15")  // Benchmark testing (RFC 2544)
+)
+
 // isInternalIP returns true if ip is an internal/reserved address that should be blocked for SSRF protection.
 // This checks beyond Go's stdlib helpers to catch ranges that IsPrivate() misses.
-// NOTE: This illustrative code calls net.ParseCIDR on every invocation. Production implementations
-// should parse these CIDR ranges once at package init (var currentNet, _ = net.ParseCIDR(...)) and
-// reuse them to avoid repeated allocations.
 func isInternalIP(ip net.IP) bool {
     // Normalize IPv4-mapped IPv6 addresses (::ffff:a.b.c.d) to IPv4 first
     // This prevents bypassing IPv4 checks via IPv6 representation
@@ -783,11 +794,7 @@ func isInternalIP(ip net.IP) bool {
         return true
     }
 
-    // Additional ranges not covered by IsPrivate()
-    _, currentNet, _ := net.ParseCIDR("0.0.0.0/8")       // Current network (not caught by IsLoopback)
-    _, cgnNet, _ := net.ParseCIDR("100.64.0.0/10")       // Carrier-Grade NAT (RFC 6598)
-    _, benchNet, _ := net.ParseCIDR("198.18.0.0/15")     // Benchmark testing (RFC 2544)
-
+    // Check additional ranges not covered by IsPrivate() (using pre-parsed CIDRs)
     if currentNet.Contains(ip) || cgnNet.Contains(ip) || benchNet.Contains(ip) {
         return true
     }
@@ -1296,9 +1303,7 @@ harnesses:
 
 ## Open Questions
 
-**Note on ADR-0037 decisions:** Questions 2 (signature verification), 3 (namespace governance), and 4 (version resolution) below have been resolved at the architecture level in ADR-0037's "Resolved design questions" section. The options and recommendations here reflect those ADR decisions and are included for implementation reference.
-
-The truly open implementation-level questions are #1 (top-level harness URL protection) and #5 (cache eviction), which can be resolved during Phase 1/2 development based on operational experience.
+These implementation-level questions can be resolved during Phase 1/2 development based on operational experience:
 
 ### 1. Top-level harness URL protection
 
@@ -1313,46 +1318,7 @@ When running `fullsend run https://attacker.com/evil.yaml#sha256=abc123`, the gl
 
 **Recommendation:** Option A provides a middle ground — low friction for trusted sources, explicit confirmation for external sources. Prevents drive-by attacks while preserving ease of use.
 
-### 2. Signature verification
-
-Should remote resources be cryptographically signed by their publisher?
-
-**Options:**
-
-- **A: No signatures (current proposal).** Rely on HTTPS and domain allowlists. Trust GitHub/GitLab to serve correct content.
-- **B: GPG signatures.** Resources include a detached `.sig` file. The runner verifies against a keyring.
-- **C: Sigstore/cosign.** Use Sigstore for signing (same as container images). Requires keyless signing infrastructure.
-
-**Trade-off:** Signatures add strong provenance but require key management. For MVP, rely on HTTPS + integrity hashing. Add signatures in Phase 3.
-
-### 3. Namespace governance
-
-Who controls `https://cdn.fullsend.ai/skills/`? How do community contributors publish skills?
-
-**Options:**
-
-- **A: Centralized CDN.** Fullsend project maintains a blessed set of skills/policies at `cdn.fullsend.ai`. Contributors submit PRs to a central repo.
-- **B: Decentralized publishing.** Anyone can publish skills on their own domain (e.g., `https://myorg.com/skills/`). Consumers add that domain to `allowed_remote_resources`.
-- **C: Registry model (like npm).** A central registry (e.g., `registry.fullsend.ai`) where contributors can publish packages. Namespace squatting concerns apply.
-
-**Recommendation:** Start with B (decentralized). Organizations control which domains they trust via `allowed_remote_resources`. No central gatekeeping.
-
-### 4. Version resolution
-
-If a skill references `policy: rust-sandbox@v2` (a name+version, not a URL), how is that resolved to a URL?
-
-**Options:**
-
-- **A: No name resolution.** All references must be full URLs. No "magic" resolution of names to URLs.
-- **B: Registry lookup.** Names like `@fullsend/rust-sandbox@v2` are resolved via a registry API to `https://cdn.fullsend.ai/policies/rust-sandbox/v2.yaml`.
-- **C: Org-level alias file.** The org defines `aliases.yaml`:
-  ```yaml
-  rust-sandbox@v2: https://cdn.fullsend.ai/policies/rust-sandbox/v2.yaml
-  ```
-
-**Recommendation:** Start with A (no name resolution). Use full URLs everywhere. If name resolution is needed later, introduce aliases (Option C) to avoid central registry dependency.
-
-### 5. Cache eviction
+### 2. Cache eviction
 
 The cache grows unbounded. When should cached resources be evicted?
 
@@ -1363,6 +1329,34 @@ The cache grows unbounded. When should cached resources be evicted?
 - **C: Manual.** `fullsend cache clean` command to clear cache.
 
 **Recommendation:** C (Manual eviction). Since all remote resources require hash pinning, cached entries are content-addressed and immutable. Eviction should be storage-bounded (e.g., `fullsend cache clean --max-size 1GB`) rather than TTL-based. Add `fullsend cache clean` for manual eviction.
+
+## Resolved Questions
+
+The following questions have been resolved at the architecture level in ADR-0037's "Resolved design questions" section. The options and recommendations below reflect those ADR decisions and are included here for implementation reference:
+
+### Signature verification [RESOLVED in ADR-0037]
+
+Should remote resources be cryptographically signed by their publisher?
+
+**Decision:** Phase 1 does not support signature verification. Hash pinning (mandatory SHA256 integrity hashes) provides content integrity. Signature verification is deferred to Phase 3 as an optional enhancement.
+
+**Rationale:** Hash pinning prevents content substitution attacks. Signatures add provenance (proving who published the resource) but require PKI infrastructure. For MVP, HTTPS transport security + domain allowlists + integrity hashes provide sufficient protection.
+
+### Namespace governance [RESOLVED in ADR-0037]
+
+Who controls `https://cdn.fullsend.ai/skills/`? How do community contributors publish skills?
+
+**Decision:** Decentralized publishing model. No centralized `cdn.fullsend.ai` or registry. Contributors publish resources on their own domains (GitHub repos, personal sites, org-controlled CDNs). Consumers add trusted domains to their org-level `allowed_remote_resources` allowlist.
+
+**Rationale:** Avoids central gatekeeping and single point of failure. Aligns with the threat model: organizations control what they trust via allowlists.
+
+### Version resolution [RESOLVED in ADR-0037]
+
+If a skill references `policy: rust-sandbox@v2` (a name+version, not a URL), how is that resolved to a URL?
+
+**Decision:** No version resolution. All resource references must be full URLs with explicit integrity hashes. No "magic" resolution of names or version specifiers to URLs.
+
+**Rationale:** Explicit URLs make dependencies auditable and prevent dependency confusion attacks. Version resolution requires a central registry or org-level alias files (indirection that obscures actual dependencies).
 
 ## Related Documents
 
