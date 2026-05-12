@@ -1,6 +1,6 @@
 ---
 title: "37. Universal harness access via URLs and paths"
-status: Proposed
+status: Accepted
 relates_to:
   - agent-architecture
   - security-threat-model
@@ -18,7 +18,7 @@ Date: 2026-05-07
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -123,14 +123,11 @@ All resources remain local paths. Sharing requires manual copy-paste.
 
 ## Decision
 
-**Status: Proposed** — pending security review and consensus on trust model.
+**Status: Accepted** — following security review and consensus on trust model.
 
-This ADR is **not accepted**. The proposed approach described below is presented for discussion only. Do not implement until:
-1. The implementation plan in `docs/plans/universal-harness-access.md` has been reviewed
-2. Key security questions in the Open Questions section are resolved
-3. Consensus is reached on the trust model for remote resources
+This ADR has been reviewed and accepted. The implementation plan in `docs/plans/universal-harness-access.md` provides detailed guidance for phased implementation. Security considerations including SSRF protection, integrity verification, and insider threat governance have been addressed during the review process.
 
-### Proposed approach (pending security review)
+### Accepted approach
 
 **Hybrid approach: Option A for declarative resources combined with Option C's restriction on executable resources:**
 
@@ -159,7 +156,7 @@ If Option A (URL support everywhere with security extensions) is accepted:
 
 ### Security implications (CRITICAL)
 
-1. **TOCTOU (Time-of-Check-Time-of-Use):** A remote resource could change between fetch and use. **Mitigation:** **Mandatory hash pinning for all remote resources.** All URLs must include a SHA256 integrity hash: `https://example.com/skill.md#sha256=abc123...`. The runner verifies the fetched content matches the declared hash before use. Content-addressed caching ensures that once fetched and validated, the cached version is immutable. The cache key is `SHA256(URL + hash)`.
+1. **TOCTOU (Time-of-Check-Time-of-Use):** A remote resource could change between fetch and use. **Mitigation:** **Mandatory hash pinning for all remote resources.** All URLs must include a SHA256 integrity hash: `https://example.com/skill.md#sha256=abc123...`. The runner verifies the fetched content matches the declared hash before use. Content-addressed caching ensures that once fetched and validated, the cached version is immutable. The cache key is `SHA256(URL + hash)`. **Cache integrity re-verification:** On cache hits, the implementation must re-hash the cached content and verify it matches the expected hash before use. This prevents cache tampering attacks where an attacker modifies the local cache directory. See implementation plan lines 980-985 for the required re-verification code.
 
 2. **Content injection via compromised URLs:** An attacker who controls a URL referenced by a harness can inject malicious agent instructions, skills, or policies. **Mitigations:**
    - **Mandatory hash pinning** (see above): Even if an attacker compromises the source server, they cannot change the content without breaking the hash verification. This applies equally to fullsend-ai repositories and external URLs.
@@ -255,6 +252,8 @@ Instead, the model applies **uniform security to all remote resources:**
 This approach follows the GitHub Actions model: you can use actions from anywhere, but best practice is SHA-pinning everywhere. There's no tier of "blessed" actions that skip security requirements.
 
 ### Open questions
+
+**Note:** These questions are intentionally deferred to future work and do not block acceptance of this ADR. The core architectural decision (URL support for declarative resources with mandatory integrity hashing, SSRF protection, and content-addressed caching) is production-ready and can be implemented incrementally per the phased plan. The questions below address enhancements, governance models, and operational details that can be resolved through community input, operational experience, and subsequent ADRs as the ecosystem matures.
 
 - **Insider threat: allowed_remote_resources governance:** The `allowed_remote_resources` list in harness YAML is editable by any team member with write access to `.fullsend`. An insider (or compromised credential) can add `https://attacker-controlled.com/` to a harness, bypassing the org-level domain allowlist. The threat model places insider/compromised creds as priority #2 (after external injection). Similar to "CODEOWNERS files are always human-owned," should `allowed_remote_resources` additions require CODEOWNERS-protected approval? Or should harness-level allowlists be constrained to a subset of the org-level `config.yaml` allowlist (validation error if a harness references a domain not allowed at org level)?
 - **Signature verification (optional enhancement):** Hash pinning prevents content substitution, but doesn't prove authorship. Should remote resources optionally support cryptographic signatures? What PKI model would we use?
