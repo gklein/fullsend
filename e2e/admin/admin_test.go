@@ -338,7 +338,7 @@ func runUninstall(t *testing.T, env *e2eEnv) {
 		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
-		layers.NewBothModesDispatchLayer(testOrg, env.client, nil, env.printer),
+		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
 		layers.NewEnrollmentLayer(testOrg, env.client, nil, nil, env.printer),
 	)
 	errs := stack.UninstallAll(context.Background())
@@ -355,7 +355,7 @@ func runUninstallAllowNotFound(t *testing.T, env *e2eEnv) {
 		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
-		layers.NewBothModesDispatchLayer(testOrg, env.client, nil, env.printer),
+		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
 		layers.NewEnrollmentLayer(testOrg, env.client, nil, nil, env.printer),
 	)
 	errs := stack.UninstallAll(context.Background())
@@ -508,13 +508,18 @@ func verifyNotInstalled(t *testing.T, env *e2eEnv) {
 	assert.NoError(t, err, "checking dispatch token after uninstall")
 	assert.False(t, dispatchExists, "FULLSEND_DISPATCH_TOKEN org secret should be deleted")
 
+	// OIDC mint URL org variable should be deleted.
+	mintURLExists, err := env.client.OrgVariableExists(ctx, testOrg, "FULLSEND_MINT_URL")
+	assert.NoError(t, err, "checking mint URL variable after uninstall")
+	assert.False(t, mintURLExists, "FULLSEND_MINT_URL org variable should be deleted")
+
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
 		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
-		layers.NewBothModesDispatchLayer(testOrg, env.client, nil, env.printer),
+		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
 		layers.NewEnrollmentLayer(testOrg, env.client, nil, nil, env.printer),
 	)
 	reports, err := stack.AnalyzeAll(ctx)
@@ -830,7 +835,7 @@ func buildTestLayerStack(
 	return layers.NewStack(
 		layers.NewConfigRepoLayer(org, client, cfg, printer, hasPrivate),
 		layers.NewWorkflowsLayer(org, client, printer, user, ""),
-		layers.NewSecretsLayer(org, client, agentCreds, printer),
+		layers.NewSecretsLayer(org, client, agentCreds, printer).WithOIDCMode(),
 		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
 		layers.NewOIDCDispatchLayer(org, client, enrolledRepoIDs, &e2eDispatcher{}, printer),
 		layers.NewEnrollmentLayer(org, client, enabledRepos, cfg.DisabledRepos(), printer),

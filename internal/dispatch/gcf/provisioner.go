@@ -328,6 +328,12 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		}
 	}
 
+	// Save the orgs from this install run before merging with existing orgs.
+	// PEMs and app IDs belong to the current run's apps and must only be
+	// stored under the installing orgs' secret/env-var keys.
+	installingOrgs := make([]string, len(p.cfg.GitHubOrgs))
+	copy(installingOrgs, p.cfg.GitHubOrgs)
+
 	// Merge with existing WIF provider orgs if provider already exists.
 	existingProvider, getErr := p.gcpAPI.GetWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)
 	if getErr == nil && existingProvider != nil {
@@ -355,8 +361,8 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		return nil, fmt.Errorf("creating WIF provider: %w", err)
 	}
 
-	// Step 5a: Store new agent PEMs (org-scoped).
-	for _, org := range p.cfg.GitHubOrgs {
+	// Step 5a: Store new agent PEMs only for installing orgs.
+	for _, org := range installingOrgs {
 		for _, role := range sortedByteMapKeys(p.cfg.AgentPEMs) {
 			if err := p.StoreAgentPEM(ctx, org, role, p.cfg.AgentPEMs[role]); err != nil {
 				return nil, fmt.Errorf("storing PEM for %s/%s: %w", org, role, err)
@@ -364,8 +370,9 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		}
 	}
 
-	// Step 5b: Verify secrets exist for roles without PEMs (re-install).
-	for _, org := range p.cfg.GitHubOrgs {
+	// Step 5b: Verify secrets exist for roles without PEMs (re-install,
+	// only for installing orgs).
+	for _, org := range installingOrgs {
 		for _, role := range sortedStringMapKeys(p.cfg.AgentAppIDs) {
 			if _, hasPEM := p.cfg.AgentPEMs[role]; hasPEM {
 				continue
@@ -382,8 +389,10 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	}
 
 	// Step 6: Build org-scoped env vars and deploy Cloud Function.
+	// Only create entries for installing orgs; existing orgs' entries are
+	// preserved by mergeRoleAppIDs below.
 	orgScopedAppIDs := make(map[string]string)
-	for _, org := range p.cfg.GitHubOrgs {
+	for _, org := range installingOrgs {
 		for role, appID := range p.cfg.AgentAppIDs {
 			orgScopedAppIDs[org+"/"+role] = appID
 		}

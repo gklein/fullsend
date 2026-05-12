@@ -198,7 +198,7 @@ fullsend admin install "$ADDITIONAL_ORG" \
   --mint-url "$MINT_URL"
 ```
 
-`--mint-url` skips Cloud Function deployment and stores PEMs in the existing mint's GCP project. Since PEMs use role-only naming (`fullsend-{role}-app-pem`), additional orgs with public apps require **zero Secret Manager work** — the PEMs are already stored and shared across orgs.
+`--mint-url` skips Cloud Function deployment and stores PEMs in the existing mint's GCP project. PEMs use org-scoped naming (`fullsend-{org}--{role}-app-pem`), so each org's secrets are stored independently. For public apps (shared across orgs), the provisioner stores the same PEM under each org's scoped key.
 
 > **Note:** Multi-org with `--public` requires all orgs to share the same GitHub Apps. Private apps (the default) are single-org only.
 

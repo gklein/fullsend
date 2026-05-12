@@ -62,6 +62,12 @@ type fakeGCFClient struct {
 
 	// WIF provider state for GetWIFProvider.
 	wifProvider *WIFProviderInfo
+
+	// Track secret names written via AddSecretVersion.
+	secretVersionNames []string
+
+	// Captured env vars from the last CreateFunction or UpdateFunction call.
+	lastCreateFunctionEnvVars map[string]string
 }
 
 func newFakeGCFClient() *fakeGCFClient {
@@ -107,7 +113,8 @@ func (f *fakeGCFClient) GetSecret(_ context.Context, _, _ string) error {
 func (f *fakeGCFClient) CreateSecret(_ context.Context, _, _ string) error {
 	return f.record("CreateSecret")
 }
-func (f *fakeGCFClient) AddSecretVersion(_ context.Context, _, _ string, _ []byte) error {
+func (f *fakeGCFClient) AddSecretVersion(_ context.Context, _ string, secretID string, _ []byte) error {
+	f.secretVersionNames = append(f.secretVersionNames, secretID)
 	return f.record("AddSecretVersion")
 }
 func (f *fakeGCFClient) SetSecretIAMBinding(_ context.Context, _, _, _ string) error {
@@ -135,15 +142,17 @@ func (f *fakeGCFClient) UploadFunctionSource(_ context.Context, _, _ string, _ [
 	}
 	return json.RawMessage(`{"bucket":"test-bucket","object":"source.zip"}`), nil
 }
-func (f *fakeGCFClient) CreateFunction(_ context.Context, _, _, _ string, _ FunctionConfig) (string, error) {
+func (f *fakeGCFClient) CreateFunction(_ context.Context, _, _, _ string, cfg FunctionConfig) (string, error) {
 	f.calls = append(f.calls, "CreateFunction")
+	f.lastCreateFunctionEnvVars = cfg.EnvVars
 	if err := f.errs["CreateFunction"]; err != nil {
 		return "", err
 	}
 	return "operations/123", nil
 }
-func (f *fakeGCFClient) UpdateFunction(_ context.Context, _, _, _ string, _ FunctionConfig) (string, error) {
+func (f *fakeGCFClient) UpdateFunction(_ context.Context, _, _, _ string, cfg FunctionConfig) (string, error) {
 	f.calls = append(f.calls, "UpdateFunction")
+	f.lastCreateFunctionEnvVars = cfg.EnvVars
 	if err := f.errs["UpdateFunction"]; err != nil {
 		return "", err
 	}
@@ -1215,6 +1224,44 @@ func TestProvisioner_Provision_MultiOrg_PEMStorage(t *testing.T) {
 	}
 	assert.Equal(t, 2, getSecretCount, "expected GetSecret called once per org×role")
 	assert.Equal(t, 2, addVersionCount, "expected AddSecretVersion called once per org×role")
+}
+
+func TestProvisioner_Provision_MultiOrg_MergeDoesNotOverwriteExistingPEMs(t *testing.T) {
+	fake := newFakeGCFClient()
+	// Simulate an existing deployed function from a previous org's install.
+	fake.functionInfo = &FunctionInfo{
+		URI:     "https://mint.run.app",
+		EnvVars: map[string]string{"ROLE_APP_IDS": `{"existing-org/coder":"999"}`},
+	}
+	// Simulate existing WIF provider with existing-org already configured.
+	fake.wifProvider = &WIFProviderInfo{
+		AttributeCondition: "assertion.repository_owner == 'existing-org'",
+	}
+
+	p := newTestProvisioner(Config{
+		ProjectID:         "test-project-id",
+		GitHubOrgs:        []string{"new-org"},
+		AgentPEMs:         singleRolePEMs(),
+		AgentAppIDs:       singleRoleAppIDs(),
+		FunctionSourceDir: fakeFunctionSourceDir(t),
+	}, fake)
+
+	_, err := p.Provision(context.Background())
+	require.NoError(t, err)
+
+	// PEMs must only be stored for new-org, not for existing-org.
+	for _, name := range fake.secretVersionNames {
+		assert.Contains(t, name, "new-org", "PEM should only be stored for installing org")
+		assert.NotContains(t, name, "existing-org", "PEM must not overwrite existing org's secrets")
+	}
+
+	// WIF condition should include both orgs.
+	assert.Equal(t, "assertion.repository_owner in ['existing-org', 'new-org']",
+		fake.lastWIFProviderConfig.AttributeCondition)
+
+	// ROLE_APP_IDS should preserve existing-org's entries and add new-org's.
+	assert.Contains(t, fake.lastCreateFunctionEnvVars["ROLE_APP_IDS"], `"existing-org/coder":"999"`)
+	assert.Contains(t, fake.lastCreateFunctionEnvVars["ROLE_APP_IDS"], `"new-org/coder"`)
 }
 
 // --- interface compliance ---

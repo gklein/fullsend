@@ -131,12 +131,15 @@ func (v *stsTokenValidator) Validate(ctx context.Context, oidcToken string) erro
 
 // smPEMAccessor reads agent PEMs from GCP Secret Manager via REST API,
 // authenticating with the metadata server token (available in Cloud Functions).
-// Secret naming convention: projects/{num}/secrets/fullsend-{role}-app-pem/versions/latest
+// Secret naming convention: projects/{num}/secrets/fullsend-{org}--{role}-app-pem/versions/latest
 type smPEMAccessor struct {
 	gcpProjectNum string
 }
 
 func (s *smPEMAccessor) AccessPEM(ctx context.Context, org, role string) ([]byte, error) {
+	if !githubOrgPattern.MatchString(org) {
+		return nil, fmt.Errorf("invalid org name %q", org)
+	}
 	if !rolePattern.MatchString(role) {
 		return nil, fmt.Errorf("invalid role name %q", role)
 	}
@@ -216,6 +219,10 @@ func metadataToken(ctx context.Context) (string, error) {
 
 // rolePattern restricts role to safe lowercase identifiers.
 var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+// githubOrgPattern validates GitHub org/user names: alphanumeric or single
+// hyphens, cannot start or end with a hyphen, max 39 characters.
+var githubOrgPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$`)
 
 // repoNamePattern validates individual repo names (no org prefix).
 // GitHub allows repos starting with dot (e.g., .fullsend, .github).

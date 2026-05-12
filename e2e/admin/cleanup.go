@@ -50,6 +50,14 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, page playwr
 		if delErr := deleteAppViaPlaywright(page, slug, t.Logf, screenshotDir); delErr != nil {
 			t.Logf("[cleanup] App %s not found or could not delete: %v", slug, delErr)
 		}
+
+		newSlug := "fullsend-" + role // OIDC convention: fullsend-triage, etc.
+		if newSlug != slug {
+			t.Logf("[cleanup] Attempting to delete app %s (if it exists)", newSlug)
+			if delErr := deleteAppViaPlaywright(page, newSlug, t.Logf, screenshotDir); delErr != nil {
+				t.Logf("[cleanup] App %s not found or could not delete: %v", newSlug, delErr)
+			}
+		}
 	}
 
 	// Also clean up apps found via installations (catches old naming conventions).
@@ -59,7 +67,8 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, page playwr
 	} else {
 		for _, inst := range installations {
 			isStale := strings.HasPrefix(inst.AppSlug, "fullsend-"+testOrg) || // old: fullsend-halfsend-*
-				strings.HasPrefix(inst.AppSlug, testOrg+"-") // v6: halfsend-*
+				strings.HasPrefix(inst.AppSlug, testOrg+"-") || // v6: halfsend-*
+				strings.HasPrefix(inst.AppSlug, "fullsend-") // OIDC: fullsend-triage, etc.
 			if isStale {
 				t.Logf("[cleanup] Deleting stale installed app: %s", inst.AppSlug)
 				if delErr := deleteAppViaPlaywright(page, inst.AppSlug, t.Logf, screenshotDir); delErr != nil {
