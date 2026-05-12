@@ -138,7 +138,7 @@ has moved, a stale-head failure is posted instead.`,
 // ReviewResult represents a parsed review result file.
 type ReviewResult struct {
 	Body    string `json:"body"`
-	Action  string `json:"action"`   // "approve", "request-changes", "comment", "failure"
+	Action  string `json:"action"`   // "approve", "request-changes", "comment", "reject", "failure"
 	HeadSHA string `json:"head_sha"` // commit SHA the agent reviewed
 	Reason  string `json:"reason"`   // failure reason (when action is "failure")
 }
@@ -152,6 +152,8 @@ func reviewActionToEvent(action string) (string, bool) {
 		return "REQUEST_CHANGES", true
 	case "comment":
 		return "COMMENT", true
+	case "reject":
+		return "REQUEST_CHANGES", true
 	default:
 		return "", false
 	}
