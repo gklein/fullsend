@@ -90,7 +90,7 @@ func TestAgentAppConfig_Prioritize(t *testing.T) {
 func TestAgentAppConfig_Retro(t *testing.T) {
 	cfg := AgentAppConfig("myorg", "retro")
 
-	assert.Equal(t, "myorg-retro", cfg.Name)
+	assert.Equal(t, "fullsend-retro", cfg.Name)
 	assert.Equal(t, "read", cfg.Permissions.Actions)
 	assert.Equal(t, "read", cfg.Permissions.Contents)
 	assert.Equal(t, "read", cfg.Permissions.PullRequests)
