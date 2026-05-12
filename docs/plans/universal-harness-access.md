@@ -758,6 +758,9 @@ func isAllowedDomain(hostname string, allowed []string) bool {
 
 // isInternalIP returns true if ip is an internal/reserved address that should be blocked for SSRF protection.
 // This checks beyond Go's stdlib helpers to catch ranges that IsPrivate() misses.
+// NOTE: This illustrative code calls net.ParseCIDR on every invocation. Production implementations
+// should parse these CIDR ranges once at package init (var currentNet, _ = net.ParseCIDR(...)) and
+// reuse them to avoid repeated allocations.
 func isInternalIP(ip net.IP) bool {
     // Normalize IPv4-mapped IPv6 addresses (::ffff:a.b.c.d) to IPv4 first
     // This prevents bypassing IPv4 checks via IPv6 representation
@@ -854,6 +857,9 @@ func CacheGet(workspaceRoot, hash string) ([]byte, *CacheEntry, error) {
 }
 
 // CachePut stores content in the cache.
+// NOTE: This illustrative code writes metadata and content separately, which is not atomic.
+// Production implementations should use atomic writes (write to temp file, then rename) to
+// prevent partial cache entries if the process crashes between writes.
 func CachePut(workspaceRoot, url string, content []byte) error {
     hash := ComputeSHA256(content)
     dir := CachePath(workspaceRoot, hash)
