@@ -56,7 +56,7 @@ Every path field in the harness schema accepts three forms:
 2. **Absolute path:** `/opt/fullsend/agents/code.md` → used as-is
 3. **HTTPS URL:** `https://github.com/fullsend-ai/library/agents/code.md` → fetched and cached
 
-Examples:
+Examples (note: `#sha256=...` hash fragments omitted for brevity; all remote URLs require integrity hashes in practice):
 
 ```yaml
 # Mix local and remote resources
@@ -87,7 +87,7 @@ pre_script: scripts/pre-code.sh  # scripts must be local (security)
 **Trade-off:** This means the `.fullsend` repository will still contain local copies of pre/post scripts, validation scripts, and other executable resources. For organizations with many scripts, updates to upstream scripts will still produce "wall of text" diffs when the local copies are updated.
 
 **Mitigations:**
-- **Minimal wrapper pattern:** Local scripts can be thin wrappers that download and verify a URL-sourced script at runtime, then execute it in a restricted sandbox. The wrapper is small and rarely changes; the actual script logic lives at a URL. Example:
+- **Minimal wrapper pattern (future capability):** Local scripts could be thin wrappers that download and verify a URL-sourced script at runtime, then execute it in a restricted sandbox. The wrapper is small and rarely changes; the actual script logic lives at a URL. Example:
   ```bash
   #!/bin/bash
   # pre-code-wrapper.sh (local, version-controlled)
@@ -96,10 +96,11 @@ pre_script: scripts/pre-code.sh  # scripts must be local (security)
     --sha256 abc123... \
     --sandbox restricted
   ```
+  **Important:** This pattern requires an in-sandbox execution mechanism (something like `pre_commands`/`post_commands` in the harness schema that run inside the sandbox before/after the agent's main execution). Today, `pre_script` and `post_script` run outside the sandbox, so there's no enforcement point to guarantee the wrapper runs in a restricted context. Without in-sandbox execution, this pattern has the same blast radius as allowing URL-sourced scripts directly — the wrapper is local and auditable, but the actual script logic is remote. This pattern should either be scoped to future in-sandbox execution work or removed until that capability exists.
 - **Vendoring with lock files:** Use a lock file (similar to `package-lock.json`) to pin script URLs and hashes. A `fullsend vendor` command updates local copies and the lock file. Diffs show only the lock file changes (URL and hash updates) rather than the full script content.
 - **Future:** If URL-sourced scripts are permitted in the future, they would run in a heavily restricted sandbox with no access to secrets, no network access, and no filesystem writes outside `/tmp`. This shifts the security boundary from "local = trusted" to "sandboxed = constrained regardless of source."
 
-For now, the recommended approach is the minimal wrapper pattern for scripts that change frequently, and direct local scripts for those that are stable.
+For now, the recommended approach is vendoring with lock files for scripts that change frequently, and direct local scripts for those that are stable.
 
 ### Relative Path Resolution for URL-Referenced Resources
 
@@ -530,12 +531,26 @@ import (
     "strings"
 )
 
-// IsURL returns true if s is an HTTPS URL.
+// IsURL returns true if s is a valid HTTPS URL.
 // Only https:// URLs are accepted for remote resources. http:// URLs are rejected
 // to avoid confusion and provide clear error messages.
+// Rejects malformed URLs (empty host, userinfo, etc.)
 func IsURL(s string) bool {
     u, err := url.Parse(s)
-    return err == nil && u.Scheme == "https"
+    if err != nil || u.Scheme != "https" {
+        return false
+    }
+    // Reject malformed URLs that url.Parse accepts but shouldn't be allowed:
+    // - Empty host (https:, https://, https:///path)
+    // - Userinfo (https://user:pass@host/ - credentials in URL)
+    if u.Host == "" || u.User != nil {
+        return false
+    }
+    // Validate hostname is non-empty (u.Hostname() returns "" for malformed hosts)
+    if u.Hostname() == "" {
+        return false
+    }
+    return true
 }
 
 // isAbsPath returns true if s is an absolute file path.
@@ -549,7 +564,8 @@ func isRelPath(s string) bool {
 }
 
 // ParseIntegrityHash extracts the SHA256 hash from a URL fragment.
-// Example: https://example.com/file.md#sha256=abc123 -> "abc123"
+// Example: https://example.com/file.md#sha256=abc123... -> "abc123..."
+// Returns an error if the hash is not a valid 64-character lowercase hex string.
 func ParseIntegrityHash(rawURL string) (urlWithoutHash, hash string, hasHash bool) {
     u, err := url.Parse(rawURL)
     if err != nil {
@@ -562,6 +578,18 @@ func ParseIntegrityHash(rawURL string) (urlWithoutHash, hash string, hasHash boo
         return rawURL, "", false
     }
     hash = strings.TrimPrefix(u.Fragment, "sha256=")
+
+    // Validate hash format: must be exactly 64 lowercase hex characters
+    // This prevents path traversal attacks like #sha256=../../etc/shadow
+    if len(hash) != 64 {
+        return rawURL, "", false
+    }
+    for _, c := range hash {
+        if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+            return rawURL, "", false
+        }
+    }
+
     u.Fragment = ""
     return u.String(), hash, true
 }
@@ -703,24 +731,34 @@ func isAllowedDomain(hostname string, allowed []string) bool {
 // isInternalIP returns true if ip is an internal/reserved address that should be blocked for SSRF protection.
 // This checks beyond Go's stdlib helpers to catch ranges that IsPrivate() misses.
 func isInternalIP(ip net.IP) bool {
+    // Normalize IPv4-mapped IPv6 addresses (::ffff:a.b.c.d) to IPv4 first
+    // This prevents bypassing IPv4 checks via IPv6 representation
+    if v4 := ip.To4(); v4 != nil {
+        ip = v4
+    }
+
     // Standard checks (covers loopback, RFC1918, link-local)
     if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
         return true
     }
 
+    // Block unspecified addresses (0.0.0.0, ::)
+    if ip.IsUnspecified() {
+        return true
+    }
+
+    // Block multicast addresses
+    if ip.IsMulticast() {
+        return true
+    }
+
     // Additional ranges not covered by IsPrivate()
-    _, currentNet, _ := net.ParseCIDR("0.0.0.0/8")       // Current network
+    _, currentNet, _ := net.ParseCIDR("0.0.0.0/8")       // Current network (not caught by IsLoopback)
     _, cgnNet, _ := net.ParseCIDR("100.64.0.0/10")       // Carrier-Grade NAT (RFC 6598)
     _, benchNet, _ := net.ParseCIDR("198.18.0.0/15")     // Benchmark testing (RFC 2544)
 
     if currentNet.Contains(ip) || cgnNet.Contains(ip) || benchNet.Contains(ip) {
         return true
-    }
-
-    // Block IPv4-mapped IPv6 addresses (::ffff:a.b.c.d) - these can bypass IPv4-only checks
-    if len(ip) == net.IPv6len && ip.To4() != nil {
-        // This is an IPv4-mapped IPv6 address - check the embedded IPv4 address
-        return isInternalIP(ip.To4())
     }
 
     return false
@@ -826,6 +864,7 @@ package resolve
 import (
     "context"
     "fmt"
+    "path"
     "path/filepath"
     "strings"
     "time"
@@ -946,13 +985,33 @@ func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, a
 }
 
 // matchesAllowedPrefix checks if a URL matches any of the allowed prefixes.
+// Canonicalizes the URL first to prevent percent-encoding bypass attacks.
 // IMPORTANT: This relies on the Validate() method enforcing trailing slashes on
 // allowed_remote_resources entries to prevent prefix confusion attacks
 // (e.g., "https://github.com/org/library-evil/" won't match prefix
 // "https://github.com/org/library/"). See ADR-0037 security analysis.
-func matchesAllowedPrefix(url string, allowedPrefixes []string) bool {
+func matchesAllowedPrefix(rawURL string, allowedPrefixes []string) bool {
+    // Parse and canonicalize the URL to prevent percent-encoding bypass
+    u, err := url.Parse(rawURL)
+    if err != nil {
+        return false
+    }
+
+    // Reject URLs with userinfo (username:password@host)
+    if u.User != nil {
+        return false
+    }
+
+    // Normalize: decode percent-encoding, resolve . and .. in path
+    // url.Parse already decodes percent-encoding in Path, but we need to
+    // reconstruct the canonical URL for prefix matching
+    canonicalURL := fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, path.Clean(u.Path))
+    if u.RawQuery != "" {
+        canonicalURL += "?" + u.RawQuery
+    }
+
     for _, prefix := range allowedPrefixes {
-        if strings.HasPrefix(url, prefix) {
+        if strings.HasPrefix(canonicalURL, prefix) {
             return true
         }
     }
@@ -1064,7 +1123,10 @@ func LogFetch(log FetchLog) error {
     }
     defer f.Close()
 
-    data, _ := json.Marshal(log)
+    data, err := json.Marshal(log)
+    if err != nil {
+        return fmt.Errorf("marshaling fetch log: %w", err)
+    }
     _, err = f.Write(append(data, '\n'))
     return err
 }

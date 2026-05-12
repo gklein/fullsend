@@ -130,9 +130,10 @@ This ADR is **not accepted**. The proposed approach described below is presented
 
 ### Proposed approach (pending security review)
 
-**Option A with security extensions** is proposed for consideration:
+**Hybrid approach: Option A for declarative resources combined with Option C's restriction on executable resources:**
 
-- Support URLs, absolute paths, and relative paths uniformly for all harness resources
+- Support URLs, absolute paths, and relative paths uniformly for **declarative** harness resources (agents, skills, policies, schemas)
+- **Executable resources (scripts, binaries) must be local files** (Option C restriction) to preserve auditability and prevent direct code execution from untrusted sources
 - Fetch and cache remote resources content-addressed by SHA256
 - Validate integrity, apply SSRF protection, and enforce per-resource policies (read-only vs executable)
 - Extend transitive closure to all referenced resources
@@ -175,7 +176,7 @@ If Option A (URL support everywhere with security extensions) is accepted:
    - All skills (local or remote) pass through the same security scanners (unicode normalization, context injection detection, LLM Guard).
    - Remote skills are subject to more restrictive policies than local skills (e.g., cannot reference executable scripts).
 
-5. **Executable code from URLs:** Pre/post scripts fetched from URLs run on the runner host with full privileges. **Mitigation:** Apply **Option C** restriction: scripts and binaries must be local files. Only declarative resources (agents, skills, policies, schemas) can be URLs. Or, URL-sourced scripts run in a restricted sandbox with no access to secrets.
+5. **Executable code from URLs:** Pre/post scripts fetched from URLs run on the runner host with full privileges. **Mitigation:** Apply **Option C** restriction: scripts and binaries must be local files. Only declarative resources (agents, skills, policies, schemas) can be URLs. **Alternative (future):** URL-sourced scripts could run in a restricted sandbox with no access to secrets, no network, and no filesystem writes outside `/tmp`. This requires designing an in-sandbox pre/post command execution mechanism (something like `pre_commands`/`post_commands` that run inside the sandbox before/after the agent's main execution). Today, `pre_script` and `post_script` run outside the sandbox. Any relaxation of the "scripts must be local" restriction depends on this prerequisite capability being implemented first.
 
 6. **Runtime dependency discovery increases attack surface:** If agents can fetch resources at runtime based on dynamic input (e.g., "I need a Python linting skill for this repo"), an attacker can manipulate input to trigger fetch of a malicious resource. **Mitigations:**
    - Runtime resource loading is opt-in per harness (disabled by default).
@@ -211,7 +212,7 @@ See `docs/plans/universal-harness-access.md` for detailed implementation plan. K
 
 This approach differs from traditional package management systems (npm, pip, cargo) in important ways:
 
-- **Composable files, not blackbox packages:** Harnesses are not packaged as opaque bundles. Instead, they reference individual files (agent definitions, skills, policies) that can live in different locations. A harness might reference an agent from one repository, skills from another, and a policy from a third. This is more flexible and encourages fine-grained reuse — you can mix-and-match components without forking entire packages.
+- **Composable files, not blackbox packages:** Harnesses are not packaged as opaque bundles. Instead, they reference individual files (agent definitions, skills, policies) that can live in different locations. A harness might reference an agent from one repository, skills from another, and a policy from a third. This is more flexible and encourages fine-grained reuse — you can mix-and-match components without forking entire packages. This complements sandbox-level policy composability (#776): this ADR makes **what the agent is** composable via URLs (agent definitions, skills, policies), while #776 makes **where the agent runs** composable via provider profiles (sandbox network policies).
 
 - **Trade-offs of granular composition:**
   - **Pros:** Encourages modular design and selective reuse. Organizations can adopt upstream agents while providing their own policies, or use community skills with organization-controlled agent definitions.
@@ -221,11 +222,11 @@ This granularity is intentional: the goal is to enable decentralized evolution o
 
 ### Repository organization for shared harnesses
 
-To support community sharing and provide a trusted source for harness components, fullsend-ai should maintain dedicated GitHub repositories for harness files and components. Suggested structure:
+To support community sharing and provide a trusted source for harness components, fullsend-ai should maintain a GitHub repository for harness files and components:
 
-- **`fullsend-ai/harnesses`** — Fully supported harness definitions. These are rigorously evaluated, have test coverage, and are maintained by the fullsend team. Organizations can reference these with high confidence.
+- **`fullsend-ai/library`** — **Composition manifests** that reference resources across repositories. These harnesses are not self-contained bundles; they reference agents, skills, and policies from various sources (this repo, security-focused skill repos like `prodsec/agent-skills`, organization-specific policy repos). This is the key value proposition of URL-based composition: harnesses can mix components from different sources without requiring a monolithic bundle. These harnesses are rigorously evaluated, have test coverage, and are maintained by the fullsend team. Organizations can reference these with high confidence.
 
-- **`fullsend-ai/community`** — Community-contributed harnesses, agents, skills, and policies. Lower evaluation bar, more experimental, and more likely to accept external contributions. Acts as a proving ground for components that may graduate to `harnesses`.
+**Note:** A separate `fullsend-ai/community` repository is not needed. With URL-based composition, anyone can share harnesses from their own repository. Getting components into a centralized "community" repo would be unnecessary overhead that contradicts the decentralization goal.
 
 ### Uniform security with user-controlled trust
 
@@ -233,19 +234,21 @@ To support community sharing and provide a trusted source for harness components
 
 Instead, the model applies **uniform security to all remote resources:**
 
-- **All remote resources require hash pinning**, regardless of source. `https://github.com/fullsend-ai/harnesses/agents/code.md#sha256=abc123...` and `https://example.com/my-skill.md#sha256=def456...` have the same verification requirements.
+- **All remote resources require hash pinning**, regardless of source. `https://github.com/fullsend-ai/library/agents/code.md#sha256=abc123...` and `https://example.com/my-skill.md#sha256=def456...` have the same verification requirements.
 
 - **User-controlled allowlist with sensible defaults.** Organizations configure allowed URL prefixes in `config.yaml`:
   ```yaml
   allowed_remote_resources:
-    - https://github.com/fullsend-ai/harnesses/
-    - https://github.com/fullsend-ai/community/
+    - https://github.com/fullsend-ai/library/
     # Users add their own trusted sources:
     - https://github.com/example-org/agent-library/
+    - https://github.com/ralphbean/cool-skills/
   ```
-  The default configuration (shipped with `.fullsend` repo creation) includes `fullsend-ai/harnesses` and `fullsend-ai/community`, but these are user-editable and carry no special privilege beyond being in the default allowlist.
+  The default configuration (shipped with `.fullsend` repo creation) includes `fullsend-ai/library`, but this is user-editable and carries no special privilege beyond being in the default allowlist.
 
-- **No special treatment for first-party resources.** A resource from `fullsend-ai/harnesses` must be hash-pinned and pass the same integrity checks as any other URL. This prevents silent substitution attacks even if the fullsend-ai GitHub organization is compromised.
+- **No special treatment for first-party resources.** A resource from `fullsend-ai/library` must be hash-pinned and pass the same integrity checks as any other URL. This prevents silent substitution attacks even if the fullsend-ai GitHub organization is compromised.
+
+- **Trust boundary for URL-fetched harnesses:** When a harness is itself fetched from a URL, its `allowed_remote_resources` declarations cannot unilaterally expand the organization's trust boundary. The effective allowlist for URL-fetched harnesses is the **intersection** of the org-level `config.yaml` allowlist and the harness-level declarations — both must allow a domain for it to be trusted. This prevents a remote harness author from injecting access to untrusted domains.
 
 This approach follows the GitHub Actions model: you can use actions from anywhere, but best practice is SHA-pinning everywhere. There's no tier of "blessed" actions that skip security requirements.
 
@@ -256,7 +259,7 @@ This approach follows the GitHub Actions model: you can use actions from anywher
 - **Version resolution:** If a skill references `policy: v2` but doesn't specify a URL, how is that resolved?
 - **Offline mode:** Should the runner support an offline mode where all resources must be pre-cached?
 - **Lock file format:** What does a dependency lock file look like for harnesses?
-- **Component quality tiers:** `fullsend-ai/harnesses` vs `fullsend-ai/community` distinguish maintenance commitment and test coverage, but both are in the default allowlist. Should these repositories have different merge criteria or governance?
+- **git+https:// URL scheme (suggested by @deboer-tim):** Consider supporting `git+https://github.com/fullsend-ai/library.git//agents/code.md@v1.2.0#sha256=abc123...` to allow referencing by tag/commit/branch instead of bare HTTPS URLs. This gives resource owners a stable API — consumers can reference a tag or commit that won't break when internal file layout changes. This pattern is used by GitHub Actions (`uses: actions/checkout@v4`) and Terraform modules. Future extension: `oci://` refs for pulling resources from container registries.
 
 ## Related Work
 
