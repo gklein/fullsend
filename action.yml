@@ -23,6 +23,10 @@ inputs:
   target-repo:
     description: Path to target repo checkout (default GITHUB_WORKSPACE/target-repo).
     default: ''
+  github_token:
+    description: >-
+      GitHub token for authenticated API calls (avoids 60 req/hour unauthenticated rate limit).
+    default: ${{ github.token }}
 
 runs:
   using: composite
@@ -33,6 +37,7 @@ runs:
         VERSION: ${{ inputs.version }}
         RUNNER_OS: ${{ runner.os }}
         RUNNER_ARCH: ${{ runner.arch }}
+        GH_TOKEN: ${{ inputs.github_token }}
       run: |
         set -euo pipefail
 
@@ -84,7 +89,9 @@ runs:
         esac
 
         if [[ "${VERSION}" == "latest" ]]; then
-          TAG="$(retry_curl -fsSL -H "Accept: application/vnd.github+json" \
+          TAG="$(retry_curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
             "https://api.github.com/repos/fullsend-ai/fullsend/releases/latest" | jq -r '.tag_name')"
           if [[ -z "${TAG}" || "${TAG}" == "null" ]]; then
             echo "::error::Could not resolve latest release tag"
