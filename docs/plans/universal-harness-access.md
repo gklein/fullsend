@@ -688,6 +688,11 @@ func FetchURL(ctx context.Context, rawURL string, policy FetchPolicy) ([]byte, e
     // DNS rebinding protection: pin connection to pre-validated IP
     // Without this custom DialContext, client.Get() would perform a second DNS resolution,
     // which could return a different (internal) IP if attacker controls the DNS server.
+    //
+    // IMPORTANT: This example uses ips[0] for simplicity. Production implementations should
+    // iterate through all validated IPs sequentially (trying IPv4 and IPv6 addresses) to
+    // handle network configurations where the first resolved IP may not be reachable
+    // (e.g., IPv6 not supported). Match Go's net.Dialer behavior.
     client := &http.Client{
         Timeout: policy.Timeout,
         CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -728,13 +733,15 @@ func FetchURL(ctx context.Context, rawURL string, policy FetchPolicy) ([]byte, e
 
 // isAllowedDomain returns true if hostname matches any allowed domain.
 // Supports exact matches and explicit wildcard syntax (*.example.com).
-// Default behavior is exact-domain matching; subdomain matching requires opt-in.
+// Wildcard matching follows TLS certificate conventions: *.example.com matches
+// subdomains only (foo.example.com, bar.example.com) but NOT the bare domain
+// (example.com). To allow both, add both patterns: ["example.com", "*.example.com"].
 func isAllowedDomain(hostname string, allowed []string) bool {
     for _, pattern := range allowed {
-        // Explicit wildcard: *.example.com matches both example.com and any.example.com
+        // Explicit wildcard: *.example.com matches subdomains only
         if strings.HasPrefix(pattern, "*.") {
             domain := pattern[2:] // strip "*."
-            if strings.HasSuffix(hostname, "."+domain) || hostname == domain {
+            if strings.HasSuffix(hostname, "."+domain) {
                 return true
             }
         } else {
@@ -883,7 +890,6 @@ package resolve
 import (
     "context"
     "fmt"
-    "path"
     "path/filepath"
     "strings"
     "time"
@@ -1282,7 +1288,9 @@ harnesses:
 
 ## Open Questions
 
-These implementation-level questions remain open and can be resolved during Phase 1/2 development:
+**Note on ADR-0037 decisions:** Questions 2 (signature verification), 3 (namespace governance), and 4 (version resolution) below have been resolved at the architecture level in ADR-0037's "Resolved design questions" section. The options and recommendations here reflect those ADR decisions and are included for implementation reference.
+
+The truly open implementation-level questions are #1 (top-level harness URL protection) and #5 (cache eviction), which can be resolved during Phase 1/2 development based on operational experience.
 
 ### 1. Top-level harness URL protection
 
