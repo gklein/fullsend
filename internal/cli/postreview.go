@@ -343,6 +343,10 @@ func postApprovedFollowUpIssues(ctx context.Context, client forge.Client, owner,
 	for _, issue := range openIssues {
 		for marker := range markers {
 			if strings.Contains(issue.Body, marker) {
+				if existing, ok := existingByMarker[marker]; ok {
+					printer.StepWarn(fmt.Sprintf("Duplicate review follow-up marker found in issues #%d and #%d; reusing #%d", existing.Number, issue.Number, existing.Number))
+					continue
+				}
 				existingByMarker[marker] = issue
 			}
 		}

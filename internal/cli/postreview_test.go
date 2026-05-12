@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -721,6 +722,51 @@ func TestPostApprovedFollowUpIssues_DedupesAcrossPRs(t *testing.T) {
 	require.Len(t, comments, 1)
 	assert.Contains(t, comments[0].Body, "Existing follow-up issues")
 	assert.Contains(t, comments[0].Body, "#12")
+}
+
+func TestPostApprovedFollowUpIssues_WarnsOnDuplicateMarkers(t *testing.T) {
+	finding := ReviewFinding{
+		Severity:    "low",
+		Category:    "docs",
+		File:        "README.md",
+		Line:        7,
+		Description: "Document the new flag.",
+		Actionable:  true,
+	}
+	marker := reviewFollowupIssueMarker("acme", "repo", finding)
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-review[bot]"
+	fc.OpenIssues = map[string][]forge.Issue{
+		"acme/repo": {
+			{
+				Number: 12,
+				Title:  "Existing follow-up",
+				Body:   marker + "\n\nAlready tracked.",
+				URL:    "https://github.com/acme/repo/issues/12",
+				Labels: []string{"type/chore"},
+			},
+			{
+				Number: 13,
+				Title:  "Duplicate follow-up",
+				Body:   marker + "\n\nManually duplicated.",
+				URL:    "https://github.com/acme/repo/issues/13",
+				Labels: []string{"type/chore"},
+			},
+		},
+	}
+	var out bytes.Buffer
+	printer := ui.New(&out)
+	parsed := ReviewResult{Action: "approve", Findings: []ReviewFinding{finding}}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 10, parsed, false, printer)
+	require.NoError(t, err)
+
+	assert.Empty(t, fc.CreatedIssues)
+	comments := fc.IssueComments["acme/repo/10"]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].Body, "#12")
+	assert.NotContains(t, comments[0].Body, "#13")
+	assert.Contains(t, out.String(), "Duplicate review follow-up marker found in issues #12 and #13; reusing #12")
 }
 
 func TestPostApprovedFollowUpIssues_DryRun(t *testing.T) {
