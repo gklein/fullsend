@@ -65,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           SRC=".defaults/internal/scaffold/fullsend-repo"
-          LAYERED_DIRS="agents skills schemas harness policies scripts"
+          LAYERED_DIRS="agents skills schemas harness policies scripts env"
           for dir in ${LAYERED_DIRS}; do
             if [[ -d "${SRC}/${dir}" ]]; then
               mkdir -p "${dir}"

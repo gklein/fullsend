@@ -58,6 +58,7 @@ var layeredDirs = []string{
 	"harness/",
 	"policies/",
 	"scripts/",
+	"env/",
 }
 
 // upstreamOnlyDirs are referenced directly from upstream in reusable

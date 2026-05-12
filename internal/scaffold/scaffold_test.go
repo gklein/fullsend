@@ -242,6 +242,7 @@ func TestLayeredDirsNotInstalled(t *testing.T) {
 		"harness/",
 		"policies/",
 		"scripts/",
+		"env/",
 		".github/actions/",
 		".github/scripts/",
 	}
