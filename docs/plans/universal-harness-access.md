@@ -232,7 +232,7 @@ The URL fetch mechanism must prevent Server-Side Request Forgery attacks.
        allowed_domains:
          - github.com              # Exact match only
          - "*.github.io"           # Explicit wildcard: matches any subdomain
-         - cdn.fullsend.ai         # Exact match only
+         - example.org             # User-configured allowed domain
        # Reject all others
    ```
    **Subdomain matching:** By default, domain entries match **exact hostnames only**. To allow subdomains, use explicit wildcard syntax: `*.example.com` permits `subdomain.example.com` but requires the wildcard prefix to make the security-sensitive behavior visible. This prevents accidental allowlisting of shared-hosting domains where users can register arbitrary subdomains.
@@ -359,7 +359,7 @@ The harness declares all allowed remote resource prefixes:
 agent: agents/code.md
 allowed_remote_resources:
   - https://github.com/fullsend-ai/library/
-  - https://cdn.fullsend.ai/
+  - https://github.com/myorg/agent-resources/
 skills:
   - https://github.com/fullsend-ai/library/skills/rust-conventions/SKILL.md
 ```
@@ -502,7 +502,7 @@ Add `allowed_remote_resources` to the harness schema:
 agent: agents/code.md
 allowed_remote_resources:
   - https://github.com/fullsend-ai/library/
-  - https://cdn.fullsend.ai/
+  - https://github.com/myorg/agent-resources/
 skills:
   - https://github.com/fullsend-ai/library/skills/rust-conventions/SKILL.md
 ```
@@ -645,12 +645,15 @@ type FetchPolicy struct {
 }
 
 var DefaultPolicy = FetchPolicy{
-    AllowedDomains: []string{"github.com", "gitlab.com", "cdn.fullsend.ai"},
+    AllowedDomains: []string{"github.com", "gitlab.com"},
     MaxSizeBytes:   10 * 1024 * 1024, // 10 MB
     Timeout:        30 * time.Second,
     MaxDepth:       10, // Maximum recursion depth for dependencies
     MaxResources:   50, // Maximum total resources fetched per harness
 }
+// Note: Organizations configure allowed_remote_resources in config.yaml.
+// The default shipped configuration includes "https://github.com/fullsend-ai/library/"
+// but this carries no special privilege - it's user-editable.
 
 // FetchURL fetches a URL with SSRF protection and returns the content.
 func FetchURL(ctx context.Context, rawURL string, policy FetchPolicy) ([]byte, error) {
@@ -949,7 +952,9 @@ func ResolveHarness(ctx context.Context, workspaceRoot string, h *harness.Harnes
         }
     }
 
-    // Resolve skills (each skill may have transitive dependencies)
+    // Resolve skills
+    // Phase 1: Single-level only (skills themselves cannot reference URLs)
+    // Phase 2+: Each skill may have transitive dependencies (code below)
     for _, skill := range h.Skills {
         skillPath, err := resolveResourceWithLimits(ctx, workspaceRoot, skill, h.AllowedRemoteResources, policy, 0, &resourceCount)
         if err != nil {
@@ -957,7 +962,7 @@ func ResolveHarness(ctx context.Context, workspaceRoot string, h *harness.Harnes
         }
         resolved.SkillPaths = append(resolved.SkillPaths, skillPath)
 
-        // Parse skill to extract transitive dependencies
+        // Phase 2+: Parse skill to extract transitive dependencies
         // (skill format TBD — may have a dependencies: field in frontmatter)
         // Recursively resolve those dependencies
     }
@@ -966,13 +971,15 @@ func ResolveHarness(ctx context.Context, workspaceRoot string, h *harness.Harnes
 }
 
 // resolveResourceWithLimits resolves a single resource with depth and count limits.
+// Phase 1: depth is always 0 (no transitive resolution)
+// Phase 2+: depth tracking prevents cycles and runaway recursion
 func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, allowedPrefixes []string, policy fetch.FetchPolicy, depth int, resourceCount *int) (string, error) {
-    // Check depth limit
+    // Phase 2+: Check depth limit (Phase 1 always passes since depth=0)
     if depth > policy.MaxDepth {
         return "", fmt.Errorf("exceeded maximum dependency depth of %d", policy.MaxDepth)
     }
 
-    // Check resource count limit
+    // Check resource count limit (applies to all phases)
     if *resourceCount >= policy.MaxResources {
         return "", fmt.Errorf("exceeded maximum resource count of %d", policy.MaxResources)
     }
@@ -1286,7 +1293,7 @@ harnesses:
 
 - `internal/fetch/fetch_test.go`: Test SSRF protection (internal IPs, redirects, non-HTTPS)
 - `internal/fetch/cache_test.go`: Test cache storage and retrieval
-- `internal/resolve/resolve_test.go`: Test dependency resolution, cycle detection
+- `internal/resolve/resolve_test.go`: Test dependency resolution (Phase 2+: cycle detection)
 
 ### Integration tests
 
