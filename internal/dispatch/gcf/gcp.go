@@ -36,6 +36,7 @@ type OIDCProviderConfig struct {
 // WIFProviderInfo holds metadata about a WIF OIDC provider.
 type WIFProviderInfo struct {
 	AttributeCondition string
+	AllowedAudiences   []string
 }
 
 // FunctionInfo holds metadata about a deployed Cloud Function.
@@ -237,21 +238,33 @@ func (c *LiveGCFClient) GetWIFProvider(ctx context.Context, projectNumber, poolI
 
 	var provider struct {
 		AttributeCondition string `json:"attributeCondition"`
+		OIDC               struct {
+			AllowedAudiences []string `json:"allowedAudiences"`
+		} `json:"oidc"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&provider); err != nil {
 		return nil, fmt.Errorf("decoding WIF provider: %w", err)
 	}
 
-	return &WIFProviderInfo{AttributeCondition: provider.AttributeCondition}, nil
+	return &WIFProviderInfo{
+		AttributeCondition: provider.AttributeCondition,
+		AllowedAudiences:   provider.OIDC.AllowedAudiences,
+	}, nil
 }
 
-// UpdateWIFProvider patches an existing WIF OIDC provider's attribute condition.
+// UpdateWIFProvider patches an existing WIF OIDC provider's attribute condition
+// and allowed audiences.
 func (c *LiveGCFClient) UpdateWIFProvider(ctx context.Context, projectNumber, poolID, providerID string, cfg OIDCProviderConfig) error {
-	patchURL := fmt.Sprintf("https://iam.googleapis.com/v1/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s?updateMask=attributeCondition",
+	patchURL := fmt.Sprintf("https://iam.googleapis.com/v1/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s?updateMask=attributeCondition,oidc.allowedAudiences",
 		url.PathEscape(projectNumber), url.PathEscape(poolID), url.PathEscape(providerID))
 
 	payloadObj := map[string]interface{}{
 		"attributeCondition": cfg.AttributeCondition,
+	}
+	if len(cfg.AllowedAudiences) > 0 {
+		payloadObj["oidc"] = map[string]interface{}{
+			"allowedAudiences": cfg.AllowedAudiences,
+		}
 	}
 	payloadBytes, err := json.Marshal(payloadObj)
 	if err != nil {
@@ -897,6 +910,13 @@ func (c *LiveGCFClient) GetProjectNumber(ctx context.Context, projectID string) 
 	}
 
 	return result.ProjectNumber, nil
+}
+
+// iamAudience returns the IAM-format audience URI for a WIF provider.
+// google-github-actions/auth@v3 uses this format for STS token exchange.
+func iamAudience(projectNumber, poolID, providerID string) string {
+	return fmt.Sprintf("https://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s",
+		projectNumber, poolID, providerID)
 }
 
 // encodeBase64 encodes data as standard base64.

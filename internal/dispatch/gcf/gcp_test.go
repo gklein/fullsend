@@ -151,7 +151,7 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("already exists", func(t *testing.T) {
+	t.Run("already exists updates condition and audiences", func(t *testing.T) {
 		callCount := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callCount++
@@ -161,7 +161,14 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 				return
 			}
 			assert.Equal(t, http.MethodPatch, r.Method)
-			assert.Contains(t, r.URL.RawQuery, "updateMask=attributeCondition")
+			assert.Contains(t, r.URL.RawQuery, "attributeCondition")
+			assert.Contains(t, r.URL.RawQuery, "oidc.allowedAudiences")
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			oidc, ok := body["oidc"].(map[string]interface{})
+			assert.True(t, ok, "oidc config should be in PATCH body")
+			audiences := oidc["allowedAudiences"].([]interface{})
+			assert.Equal(t, []interface{}{"fullsend-mint", "https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/gh-oidc"}, audiences)
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprintln(w, `{}`)
 		}))
@@ -169,30 +176,39 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 
 		err := newTestClient(srv).CreateWIFProvider(context.Background(), "123", "pool", "gh-oidc", OIDCProviderConfig{
 			AttributeCondition: "assertion.repository_owner == 'my-org'",
+			AllowedAudiences:   []string{"fullsend-mint", "https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/gh-oidc"},
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 2, callCount)
 	})
+}
 
-	t.Run("already exists update succeeds", func(t *testing.T) {
-		callCount := 0
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			callCount++
-			if callCount == 1 {
-				w.WriteHeader(http.StatusConflict)
-				return
-			}
-			assert.Equal(t, http.MethodPatch, r.Method)
+// --- GetWIFProvider ---
+
+func TestLiveGCFClient_GetWIFProvider(t *testing.T) {
+	t.Run("returns condition and audiences", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprintln(w, `{}`)
+			fmt.Fprintln(w, `{"attributeCondition":"assertion.repository_owner == 'acme'","oidc":{"allowedAudiences":["fullsend-mint","https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/prov"]}}`)
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).CreateWIFProvider(context.Background(), "123", "pool", "gh-oidc", OIDCProviderConfig{
-			AttributeCondition: "assertion.repository_owner == 'my-org'",
-		})
+		info, err := newTestClient(srv).GetWIFProvider(context.Background(), "123", "pool", "prov")
 		require.NoError(t, err)
-		assert.Equal(t, 2, callCount)
+		require.NotNil(t, info)
+		assert.Equal(t, "assertion.repository_owner == 'acme'", info.AttributeCondition)
+		assert.Equal(t, []string{"fullsend-mint", "https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/prov"}, info.AllowedAudiences)
+	})
+
+	t.Run("not found returns nil", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		info, err := newTestClient(srv).GetWIFProvider(context.Background(), "123", "pool", "prov")
+		require.NoError(t, err)
+		assert.Nil(t, info)
 	})
 }
 
@@ -717,6 +733,13 @@ func TestLiveGCFClient_GetProjectNumber(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected status 403")
 	})
+}
+
+// --- iamAudience ---
+
+func TestIAMAudience(t *testing.T) {
+	got := iamAudience("123456789", "fullsend-pool", "github-oidc")
+	assert.Equal(t, "https://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc", got)
 }
 
 // --- encodeBase64 ---

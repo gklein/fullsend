@@ -1166,6 +1166,27 @@ func TestProvisioner_Provision_SingleOrg_WIFCondition(t *testing.T) {
 		fake.lastWIFProviderConfig.AttributeCondition)
 }
 
+func TestProvisioner_Provision_WIF_AllowedAudiences(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfoAfterCreate = &FunctionInfo{URI: "https://mint.run.app"}
+
+	p := newTestProvisioner(Config{
+		ProjectID:         "test-project-id",
+		GitHubOrgs:        []string{"acme"},
+		AgentPEMs:         singleRolePEMs(),
+		AgentAppIDs:       singleRoleAppIDs(),
+		FunctionSourceDir: fakeFunctionSourceDir(t),
+	}, fake)
+
+	_, err := p.Provision(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{
+		"fullsend-mint",
+		"https://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc",
+	}, fake.lastWIFProviderConfig.AllowedAudiences)
+}
+
 func TestProvisioner_Provision_MultiOrg_PEMStorage(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.functionInfoAfterCreate = &FunctionInfo{URI: "https://mint.run.app"}

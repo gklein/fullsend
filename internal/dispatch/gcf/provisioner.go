@@ -346,10 +346,11 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	}
 
 	attrCondition := buildAttributeCondition(p.cfg.GitHubOrgs)
+	audiences := []string{oidcAudience, iamAudience(projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)}
 	if err := p.gcpAPI.CreateWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider, OIDCProviderConfig{
 		IssuerURI:          oidcIssuer,
 		AttributeCondition: attrCondition,
-		AllowedAudiences:   []string{oidcAudience},
+		AllowedAudiences:   audiences,
 	}); err != nil {
 		return nil, fmt.Errorf("creating WIF provider: %w", err)
 	}
