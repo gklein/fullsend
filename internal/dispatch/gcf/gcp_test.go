@@ -369,6 +369,97 @@ func TestLiveGCFClient_SetSecretIAMBinding(t *testing.T) {
 	})
 }
 
+// --- SetProjectIAMBinding ---
+
+func TestLiveGCFClient_SetProjectIAMBinding(t *testing.T) {
+	t.Run("adds new binding", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			assert.Equal(t, http.MethodPost, r.Method)
+			if callCount == 1 {
+				assert.Contains(t, r.URL.Path, ":getIamPolicy")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintln(w, `{"bindings":[],"etag":"v1"}`)
+				return
+			}
+			assert.Contains(t, r.URL.Path, ":setIamPolicy")
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			policy := body["policy"].(map[string]interface{})
+			assert.Equal(t, "v1", policy["etag"])
+			bindings := policy["bindings"].([]interface{})
+			assert.Len(t, bindings, 1)
+			b := bindings[0].(map[string]interface{})
+			assert.Equal(t, "roles/aiplatform.user", b["role"])
+			members := b["members"].([]interface{})
+			assert.Contains(t, members, "principalSet://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/attribute.repository_owner/my-org")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).SetProjectIAMBinding(context.Background(),
+			"my-project",
+			"principalSet://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/attribute.repository_owner/my-org",
+			"roles/aiplatform.user")
+		require.NoError(t, err)
+		assert.Equal(t, 2, callCount)
+	})
+
+	t.Run("member already bound", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintln(w, `{"bindings":[{"role":"roles/aiplatform.user","members":["principalSet://example"]}]}`)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).SetProjectIAMBinding(context.Background(),
+			"my-project", "principalSet://example", "roles/aiplatform.user")
+		require.NoError(t, err)
+	})
+
+	t.Run("retries on 409 conflict", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			if callCount <= 2 {
+				if callCount%2 == 1 {
+					w.WriteHeader(http.StatusOK)
+					fmt.Fprintln(w, `{"bindings":[],"etag":"v1"}`)
+					return
+				}
+				w.WriteHeader(http.StatusConflict)
+				fmt.Fprintln(w, `{"error":{"message":"conflict"}}`)
+				return
+			}
+			if callCount == 3 {
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintln(w, `{"bindings":[],"etag":"v2"}`)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).SetProjectIAMBinding(context.Background(),
+			"proj", "member", "role")
+		require.NoError(t, err)
+		assert.Equal(t, 4, callCount)
+	})
+
+	t.Run("getIamPolicy error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintln(w, `{"error":{"message":"denied"}}`)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).SetProjectIAMBinding(context.Background(), "proj", "m", "role")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "getting IAM policy returned 403")
+	})
+}
+
 // --- SetCloudRunInvoker ---
 
 func TestLiveGCFClient_SetCloudRunInvoker(t *testing.T) {

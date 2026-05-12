@@ -61,7 +61,7 @@ var gcpRegionPattern = regexp.MustCompile(`^[a-z]+-[a-z]+[0-9]+$`)
 var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 const (
-	saName          = "fullsend-dispatch"
+	saName          = "fullsend-mint"
 	defaultPool     = "fullsend-pool"
 	defaultProvider = "github-oidc"
 	defaultRegion   = "us-central1"
@@ -194,10 +194,11 @@ func (p *Provisioner) StoreAgentPEM(ctx context.Context, org, role string, pemDa
 //  1. Look up project number
 //  2. Create/verify service account
 //  3. Create/verify WIF pool + provider
-//  4. Store all agent PEMs in Secret Manager
-//  5. Grant SA access to all role secrets
-//  6. Deploy Cloud Function
-//  7. Return FULLSEND_MINT_URL
+//  4. Grant Vertex AI access to each org's WIF principalSet (direct WIF)
+//  5. Store all agent PEMs in Secret Manager
+//  6. Grant SA access to all role secrets
+//  7. Deploy Cloud Function
+//  8. Return FULLSEND_MINT_URL
 //
 // When MintURL is set, reuses an existing mint:
 //  1. Store all agent PEMs in Secret Manager
@@ -360,6 +361,16 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		AllowedAudiences:   audiences,
 	}); err != nil {
 		return nil, fmt.Errorf("creating WIF provider: %w", err)
+	}
+
+	// Step 4b: Grant Vertex AI access to each installing org's .fullsend repo
+	// at the project level (direct WIF — no intermediate service account).
+	for _, org := range installingOrgs {
+		principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository/%s/.fullsend",
+			projectNumber, p.cfg.WIFPoolName, org)
+		if err := p.gcpAPI.SetProjectIAMBinding(ctx, p.cfg.ProjectID, principal, "roles/aiplatform.user"); err != nil {
+			return nil, fmt.Errorf("granting Vertex AI access for org %s: %w", org, err)
+		}
 	}
 
 	// Step 5a: Store new agent PEMs only for installing orgs.
@@ -573,21 +584,24 @@ func deriveAllowedRoles(roleAppIDsJSON string) string {
 	return strings.Join(roles, ",")
 }
 
-// buildAttributeCondition constructs a WIF CEL condition from an org list.
+// buildAttributeCondition constructs a WIF CEL condition scoped to each org's
+// .fullsend repo (not org-wide) to limit which workflows can authenticate.
 func buildAttributeCondition(orgs []string) string {
 	if len(orgs) == 1 {
-		return fmt.Sprintf("assertion.repository_owner == '%s'", orgs[0])
+		return fmt.Sprintf("assertion.repository == '%s/.fullsend'", orgs[0])
 	}
 	quoted := make([]string, len(orgs))
 	for i, org := range orgs {
-		quoted[i] = fmt.Sprintf("'%s'", org)
+		quoted[i] = fmt.Sprintf("'%s/.fullsend'", org)
 	}
-	return fmt.Sprintf("assertion.repository_owner in [%s]", strings.Join(quoted, ", "))
+	return fmt.Sprintf("assertion.repository in [%s]", strings.Join(quoted, ", "))
 }
 
+const fullsendRepoSuffix = "/.fullsend"
+
 // parseConditionOrgs extracts GitHub org names from a WIF attribute condition.
-// Supports both single-org ("assertion.repository_owner == 'org1'") and
-// multi-org ("assertion.repository_owner in ['org1', 'org2']") formats.
+// Supports both repo-scoped ("assertion.repository == 'org/.fullsend'") and
+// legacy org-scoped ("assertion.repository_owner == 'org'") formats.
 func parseConditionOrgs(condition string) []string {
 	var orgs []string
 	for _, part := range strings.Split(condition, "'") {
@@ -595,7 +609,12 @@ func parseConditionOrgs(condition string) []string {
 		if part == "" {
 			continue
 		}
-		if githubOrgPattern.MatchString(part) {
+		if strings.HasSuffix(part, fullsendRepoSuffix) {
+			org := strings.TrimSuffix(part, fullsendRepoSuffix)
+			if githubOrgPattern.MatchString(org) {
+				orgs = append(orgs, org)
+			}
+		} else if githubOrgPattern.MatchString(part) {
 			orgs = append(orgs, part)
 		}
 	}

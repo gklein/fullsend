@@ -99,7 +99,6 @@ func newInstallCmd() *cobra.Command {
 	var gcpServiceAccount string
 	var gcpCredentialsFile string
 	var gcpWIFProvider string
-	var gcpWIFSAEmail string
 	var mintProvider string
 	var mintProject string
 	var mintRegion string
@@ -156,8 +155,8 @@ func newInstallCmd() *cobra.Command {
 			}
 
 			// Validate GCP flag dependencies.
-			if gcpProject == "" && (gcpServiceAccount != "" || gcpCredentialsFile != "" || gcpRegion != "" || gcpWIFProvider != "" || gcpWIFSAEmail != "") {
-				return fmt.Errorf("--gcp-service-account, --gcp-credentials-file, --gcp-wif-provider, --gcp-wif-sa-email, and --gcp-region require --gcp-project to be set")
+			if gcpProject == "" && (gcpServiceAccount != "" || gcpCredentialsFile != "" || gcpRegion != "" || gcpWIFProvider != "") {
+				return fmt.Errorf("--gcp-service-account, --gcp-credentials-file, --gcp-wif-provider, and --gcp-region require --gcp-project to be set")
 			}
 			if gcpProject != "" && gcpRegion == "" {
 				return fmt.Errorf("--gcp-region is required when --gcp-project is set")
@@ -168,9 +167,6 @@ func newInstallCmd() *cobra.Command {
 			if gcpWIFProvider != "" && gcpServiceAccount != "" {
 				return fmt.Errorf("--gcp-wif-provider and --gcp-service-account are mutually exclusive")
 			}
-			if (gcpWIFProvider != "") != (gcpWIFSAEmail != "") {
-				return fmt.Errorf("--gcp-wif-provider and --gcp-wif-sa-email must be provided together")
-			}
 
 			// Build inference provider from GCP flags.
 			var inferenceProvider inference.Provider
@@ -180,7 +176,6 @@ func newInstallCmd() *cobra.Command {
 				if gcpWIFProvider != "" {
 					vcfg.Mode = vertex.AuthModeWIF
 					vcfg.WIFProvider = gcpWIFProvider
-					vcfg.WIFServiceAccount = gcpWIFSAEmail
 				} else {
 					vcfg.ServiceAccountName = gcpServiceAccount
 					if gcpCredentialsFile != "" {
@@ -292,7 +287,6 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().StringVar(&gcpServiceAccount, "gcp-service-account", "", "existing GCP service account name (optional, used with --gcp-project)")
 	cmd.Flags().StringVar(&gcpCredentialsFile, "gcp-credentials-file", "", "path to pre-made GCP service account key JSON (optional, used with --gcp-project)")
 	cmd.Flags().StringVar(&gcpWIFProvider, "gcp-wif-provider", "", "full Workload Identity Federation provider resource name (e.g. projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER)")
-	cmd.Flags().StringVar(&gcpWIFSAEmail, "gcp-wif-sa-email", "", "GCP service account email for WIF impersonation (required with --gcp-wif-provider)")
 	cmd.Flags().StringVar(&mintProvider, "mint-provider", "gcf", "token mint provider (gcf)")
 	cmd.Flags().StringVar(&mintProject, "mint-project", "", "cloud project for token mint (e.g. GCP project ID)")
 	cmd.Flags().StringVar(&mintRegion, "mint-region", "us-central1", "cloud region for token mint")

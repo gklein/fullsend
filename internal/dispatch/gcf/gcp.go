@@ -76,6 +76,9 @@ type GCFClient interface {
 	// IAM binding (Secret Manager resources)
 	SetSecretIAMBinding(ctx context.Context, resource, member, role string) error
 
+	// IAM binding (project-level)
+	SetProjectIAMBinding(ctx context.Context, projectID, member, role string) error
+
 	// Cloud Run IAM (for function invoker policy)
 	SetCloudRunInvoker(ctx context.Context, projectID, region, serviceName string) error
 
@@ -370,7 +373,7 @@ func (c *LiveGCFClient) SetSecretIAMBinding(ctx context.Context, resource, membe
 	setURL := fmt.Sprintf("https://secretmanager.googleapis.com/v1/%s:setIamPolicy", resource)
 
 	for attempt := range maxRetries {
-		err := c.trySetIAMBinding(ctx, getURL, setURL, member, role)
+		err := c.trySetIAMBinding(ctx, http.MethodGet, "", getURL, setURL, member, role)
 		if err == nil {
 			return nil
 		}
@@ -386,8 +389,48 @@ func (c *LiveGCFClient) SetSecretIAMBinding(ctx context.Context, resource, membe
 	return fmt.Errorf("IAM policy update failed after %d retries", maxRetries)
 }
 
-func (c *LiveGCFClient) trySetIAMBinding(ctx context.Context, getURL, setURL, member, role string) error {
-	resp, err := c.Client.DoRequest(ctx, http.MethodGet, getURL, "")
+type conflictError struct{ status int }
+
+func (e *conflictError) Error() string {
+	return fmt.Sprintf("IAM policy conflict (status %d)", e.status)
+}
+
+func isConflict(err error) bool {
+	var ce *conflictError
+	return errors.As(err, &ce)
+}
+
+// SetProjectIAMBinding sets an IAM binding on a GCP project.
+// Uses read-modify-write with retry on 409 Conflict (etag mismatch).
+func (c *LiveGCFClient) SetProjectIAMBinding(ctx context.Context, projectID, member, role string) error {
+	const maxRetries = 3
+	getURL := fmt.Sprintf("https://cloudresourcemanager.googleapis.com/v1/projects/%s:getIamPolicy",
+		url.PathEscape(projectID))
+	setURL := fmt.Sprintf("https://cloudresourcemanager.googleapis.com/v1/projects/%s:setIamPolicy",
+		url.PathEscape(projectID))
+
+	for attempt := range maxRetries {
+		err := c.trySetIAMBinding(ctx, http.MethodPost, "{}", getURL, setURL, member, role)
+		if err == nil {
+			return nil
+		}
+		if !isConflict(err) || attempt == maxRetries-1 {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(200*(attempt+1)) * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("project IAM policy update failed after %d retries", maxRetries)
+}
+
+// trySetIAMBinding performs a single read-modify-write IAM policy update.
+// getMethod/getBody control the getIamPolicy request (GET+"" for Secret Manager,
+// POST+"{}" for Cloud Resource Manager). setIamPolicy always uses POST.
+func (c *LiveGCFClient) trySetIAMBinding(ctx context.Context, getMethod, getBody, getURL, setURL, member, role string) error {
+	resp, err := c.Client.DoRequest(ctx, getMethod, getURL, getBody)
 	if err != nil {
 		return fmt.Errorf("getting IAM policy: %w", err)
 	}
@@ -454,17 +497,6 @@ func (c *LiveGCFClient) trySetIAMBinding(ctx context.Context, getURL, setURL, me
 		return fmt.Errorf("unexpected status %d setting IAM policy: %s", setResp.StatusCode, gcp.ExtractErrorMessage(body))
 	}
 	return nil
-}
-
-type conflictError struct{ status int }
-
-func (e *conflictError) Error() string {
-	return fmt.Sprintf("IAM policy conflict (status %d)", e.status)
-}
-
-func isConflict(err error) bool {
-	var ce *conflictError
-	return errors.As(err, &ce)
 }
 
 // SetCloudRunInvoker ensures allUsers has roles/run.invoker on the Cloud Run

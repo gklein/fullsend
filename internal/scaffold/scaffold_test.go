@@ -291,6 +291,7 @@ func TestCodeWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "./.github/actions/validate-enrollment")
 	assert.NotContains(t, s, "create-github-app-token")
 	assert.NotContains(t, s, "FULLSEND_CODER_CLIENT_ID")
+	assert.NotContains(t, s, "GCP_WIF_SA_EMAIL")
 	// Verify concurrency group prevents overlapping runs for same issue
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-code-")
@@ -370,7 +371,7 @@ func TestSetupGcpActionContent(t *testing.T) {
 	assert.Contains(t, s, "inputs:")
 	assert.Contains(t, s, "gcp_auth_mode:")
 	assert.Contains(t, s, "gcp_wif_provider:")
-	assert.Contains(t, s, "gcp_wif_sa_email:")
+	assert.NotContains(t, s, "gcp_wif_sa_email:")
 	assert.Contains(t, s, "gcp_sa_key_json:")
 	// Verify pre-mask step
 	assert.Contains(t, s, "Pre-mask GCP credential file path")
@@ -379,7 +380,7 @@ func TestSetupGcpActionContent(t *testing.T) {
 	assert.Contains(t, s, "if: inputs.gcp_auth_mode == 'wif'")
 	assert.Contains(t, s, "google-github-actions/auth@v3")
 	assert.Contains(t, s, "workload_identity_provider:")
-	assert.Contains(t, s, "service_account:")
+	assert.NotContains(t, s, "service_account:")
 	// Verify SA key authentication path
 	assert.Contains(t, s, "if: inputs.gcp_auth_mode != 'wif'")
 	assert.Contains(t, s, "credentials_json:")

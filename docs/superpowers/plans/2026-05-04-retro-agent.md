@@ -816,7 +816,6 @@ jobs:
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.FULLSEND_GCP_WIF_SA_EMAIL }}
 
       - name: Authenticate to Google Cloud (SA key)
         if: vars.FULLSEND_GCP_AUTH_MODE != 'wif'

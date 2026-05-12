@@ -44,10 +44,6 @@ const (
 	// Stored as a secret so the value is masked in GitHub Actions logs.
 	SecretWIFProvider = "FULLSEND_GCP_WIF_PROVIDER"
 
-	// SecretWIFServiceAccount is the repo secret for the SA email used with WIF.
-	// Stored as a secret so the value is masked in GitHub Actions logs.
-	SecretWIFServiceAccount = "FULLSEND_GCP_WIF_SA_EMAIL"
-
 	// defaultSAName is the service account name created in mode 1.
 	defaultSAName = "fullsend-agent"
 )
@@ -72,7 +68,6 @@ type Config struct {
 	ServiceAccountName string   // optional: existing SA name (sa_key mode 2)
 	CredentialJSON     []byte   // optional: pre-made key JSON (sa_key mode 3)
 	WIFProvider        string   // WIF mode: full provider resource name
-	WIFServiceAccount  string   // WIF mode: service account email
 }
 
 // Provider implements inference.Provider for Vertex AI.
@@ -106,7 +101,7 @@ func (p *Provider) Name() string {
 // SecretNames returns the secret names this provider manages.
 func (p *Provider) SecretNames() []string {
 	if p.cfg.Mode == AuthModeWIF {
-		return []string{SecretWIFProvider, SecretWIFServiceAccount, SecretProjectID}
+		return []string{SecretWIFProvider, SecretProjectID}
 	}
 	return []string{SecretCredentials, SecretProjectID}
 }
@@ -138,13 +133,9 @@ func (p *Provider) provisionWIF() (map[string]string, error) {
 	if p.cfg.WIFProvider == "" {
 		return nil, fmt.Errorf("WIF provider resource name is required")
 	}
-	if p.cfg.WIFServiceAccount == "" {
-		return nil, fmt.Errorf("WIF service account email is required")
-	}
 	return map[string]string{
-		SecretWIFProvider:       p.cfg.WIFProvider,
-		SecretWIFServiceAccount: p.cfg.WIFServiceAccount,
-		SecretProjectID:         p.cfg.ProjectID,
+		SecretWIFProvider: p.cfg.WIFProvider,
+		SecretProjectID:   p.cfg.ProjectID,
 	}, nil
 }
 
