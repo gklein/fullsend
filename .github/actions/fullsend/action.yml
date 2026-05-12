@@ -124,7 +124,7 @@ runs:
         attempt=1
         delay=5
         while true; do
-          if curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/v0.0.36/install.sh | sh; then
+          if curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/v0.0.36/install.sh | OPENSHELL_VERSION=v0.0.36 sh; then
             break
           fi
           if (( attempt >= max_attempts )); then
