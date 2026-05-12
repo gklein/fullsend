@@ -225,7 +225,7 @@ func (c *LiveGCFClient) GetWIFProvider(ctx context.Context, projectNumber, poolI
 	getURL := fmt.Sprintf("https://iam.googleapis.com/v1/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s",
 		url.PathEscape(projectNumber), url.PathEscape(poolID), url.PathEscape(providerID))
 
-	resp, err := c.Client.DoRequest(ctx, http.MethodGet, getURL, "")
+	resp, err := c.Client.DoRequest(ctx, http.MethodGet, providerURL, "")
 	if err != nil {
 		return nil, fmt.Errorf("getting WIF provider: %w", err)
 	}

@@ -212,6 +212,32 @@ func TestLiveGCFClient_GetWIFProvider(t *testing.T) {
 	})
 }
 
+// --- audiencesMatch ---
+
+func Test_audiencesMatch(t *testing.T) {
+	tests := []struct {
+		name  string
+		have  []string
+		want  []string
+		match bool
+	}{
+		{"both nil", nil, nil, true},
+		{"both empty", []string{}, []string{}, true},
+		{"equal", []string{"a", "b"}, []string{"a", "b"}, true},
+		{"different order", []string{"b", "a"}, []string{"a", "b"}, true},
+		{"length mismatch", []string{"a"}, []string{"a", "b"}, false},
+		{"different values", []string{"a", "b"}, []string{"a", "c"}, false},
+		{"duplicates in want", []string{"a", "b"}, []string{"a", "a"}, false},
+		{"duplicates in have", []string{"a", "a"}, []string{"a", "b"}, false},
+		{"matching duplicates", []string{"a", "a"}, []string{"a", "a"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.match, audiencesMatch(tt.have, tt.want))
+		})
+	}
+}
+
 // --- GetSecret ---
 
 func TestLiveGCFClient_GetSecret(t *testing.T) {

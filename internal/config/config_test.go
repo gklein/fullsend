@@ -546,3 +546,121 @@ func TestOrgConfigMarshal_WithDispatchMode(t *testing.T) {
 	assert.Contains(t, string(data), "mode: oidc-mint")
 	assert.Contains(t, string(data), "mint_url: https://fullsend-mint.run.app")
 }
+
+func TestNewPerRepoConfig_DefaultRoles(t *testing.T) {
+	cfg := NewPerRepoConfig(nil)
+	assert.Equal(t, "1", cfg.Version)
+	assert.Equal(t, DefaultAgentRoles(), cfg.Roles)
+	assert.False(t, cfg.KillSwitch)
+}
+
+func TestNewPerRepoConfig_CustomRoles(t *testing.T) {
+	cfg := NewPerRepoConfig([]string{"triage", "review"})
+	assert.Equal(t, []string{"triage", "review"}, cfg.Roles)
+}
+
+func TestPerRepoConfigValidate_Valid(t *testing.T) {
+	cfg := &PerRepoConfig{
+		Version: "1",
+		Roles:   []string{"fullsend", "triage", "coder"},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestPerRepoConfigValidate_InvalidVersion(t *testing.T) {
+	cfg := &PerRepoConfig{
+		Version: "2",
+		Roles:   []string{"fullsend"},
+	}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported version")
+}
+
+func TestPerRepoConfigValidate_InvalidRole(t *testing.T) {
+	cfg := &PerRepoConfig{
+		Version: "1",
+		Roles:   []string{"fullsend", "invalid-role"},
+	}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid role")
+}
+
+func TestPerRepoConfigValidate_DuplicateRole(t *testing.T) {
+	cfg := &PerRepoConfig{
+		Version: "1",
+		Roles:   []string{"fullsend", "triage", "fullsend"},
+	}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate role")
+}
+
+func TestPerRepoConfigValidate_EmptyRoles(t *testing.T) {
+	cfg := &PerRepoConfig{
+		Version: "1",
+		Roles:   []string{},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestParsePerRepoConfig(t *testing.T) {
+	yamlData := `
+version: "1"
+kill_switch: true
+roles:
+  - fullsend
+  - triage
+  - review
+`
+	cfg, err := ParsePerRepoConfig([]byte(yamlData))
+	require.NoError(t, err)
+	assert.Equal(t, "1", cfg.Version)
+	assert.True(t, cfg.KillSwitch)
+	assert.Equal(t, []string{"fullsend", "triage", "review"}, cfg.Roles)
+}
+
+func TestParsePerRepoConfig_Invalid(t *testing.T) {
+	_, err := ParsePerRepoConfig([]byte("not: [valid: yaml"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing per-repo config")
+}
+
+func TestPerRepoConfigMarshal(t *testing.T) {
+	cfg := &PerRepoConfig{
+		Version: "1",
+		Roles:   []string{"fullsend", "triage"},
+	}
+	data, err := cfg.Marshal()
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "fullsend per-repo configuration")
+	assert.Contains(t, string(data), "version: \"1\"")
+	assert.Contains(t, string(data), "- fullsend")
+	assert.Contains(t, string(data), "- triage")
+}
+
+func TestPerRepoConfigMarshal_KillSwitchOmitted(t *testing.T) {
+	cfg := &PerRepoConfig{
+		Version: "1",
+		Roles:   []string{"fullsend"},
+	}
+	data, err := cfg.Marshal()
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "kill_switch")
+}
+
+func TestPerRepoConfig_RoundTrip(t *testing.T) {
+	original := NewPerRepoConfig([]string{"fullsend", "triage", "coder", "review", "fix"})
+	data, err := original.Marshal()
+	require.NoError(t, err)
+
+	headerEnd := strings.Index(string(data), "version:")
+	require.True(t, headerEnd > 0)
+
+	parsed, err := ParsePerRepoConfig(data[headerEnd:])
+	require.NoError(t, err)
+	assert.Equal(t, original.Version, parsed.Version)
+	assert.Equal(t, original.Roles, parsed.Roles)
+	assert.Equal(t, original.KillSwitch, parsed.KillSwitch)
+}

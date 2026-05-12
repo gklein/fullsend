@@ -192,3 +192,66 @@ func (c *OrgConfig) AgentSlugs() map[string]string {
 func (c *OrgConfig) DefaultRoles() []string {
 	return c.Defaults.Roles
 }
+
+// PerRepoConfig holds configuration for per-repo installation mode.
+// Stored in .fullsend/config.yaml within the target repository.
+type PerRepoConfig struct {
+	Version    string   `yaml:"version"`
+	KillSwitch bool     `yaml:"kill_switch,omitempty"`
+	Roles      []string `yaml:"roles,omitempty"`
+}
+
+const perRepoConfigHeader = `# fullsend per-repo configuration
+# https://github.com/fullsend-ai/fullsend
+#
+# This file configures fullsend for per-repo installation mode.
+# See ADR 0033 for details.
+`
+
+// NewPerRepoConfig creates a new PerRepoConfig with the given roles.
+func NewPerRepoConfig(roles []string) *PerRepoConfig {
+	if roles == nil {
+		roles = DefaultAgentRoles()
+	}
+	return &PerRepoConfig{
+		Version: "1",
+		Roles:   roles,
+	}
+}
+
+// ParsePerRepoConfig parses YAML bytes into a PerRepoConfig.
+func ParsePerRepoConfig(data []byte) (*PerRepoConfig, error) {
+	var cfg PerRepoConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing per-repo config: %w", err)
+	}
+	return &cfg, nil
+}
+
+// Marshal serializes the PerRepoConfig to YAML with a descriptive header.
+func (c *PerRepoConfig) Marshal() ([]byte, error) {
+	body, err := yaml.Marshal(c)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling per-repo config: %w", err)
+	}
+	return []byte(perRepoConfigHeader + string(body)), nil
+}
+
+// Validate checks the PerRepoConfig for structural correctness.
+func (c *PerRepoConfig) Validate() error {
+	if c.Version != "1" {
+		return fmt.Errorf("unsupported version %q: must be \"1\"", c.Version)
+	}
+	valid := ValidRoles()
+	seen := make(map[string]bool, len(c.Roles))
+	for _, role := range c.Roles {
+		if !slices.Contains(valid, role) {
+			return fmt.Errorf("invalid role %q: must be one of %s", role, strings.Join(valid, ", "))
+		}
+		if seen[role] {
+			return fmt.Errorf("duplicate role %q in roles", role)
+		}
+		seen[role] = true
+	}
+	return nil
+}

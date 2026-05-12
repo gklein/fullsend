@@ -5,8 +5,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/inference"
 	"github.com/fullsend-ai/fullsend/internal/inference/vertex"
 	"github.com/fullsend-ai/fullsend/internal/layers"
+	"github.com/fullsend-ai/fullsend/internal/scaffold"
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
@@ -86,6 +89,44 @@ func validateOrgName(org string) error {
 	return nil
 }
 
+// githubOwnerPattern matches valid GitHub usernames and org names
+// (alphanumeric and single hyphens only, no dots or underscores).
+var githubOwnerPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$`)
+
+// githubRepoPattern matches valid GitHub repository names
+// (alphanumeric, hyphens, dots, and underscores).
+var githubRepoPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$`)
+
+// rolePattern validates agent role names (lowercase alphanumeric, hyphens, underscores).
+var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+// perOrgOnlyFlags are flags that only apply to per-org mode.
+var perOrgOnlyFlags = []string{
+	"skip-app-setup", "vendor-fullsend-binary", "enroll-all", "enroll-none",
+	"gcp-service-account",
+	"mint-provider", "mint-project", "mint-region", "mint-source-dir",
+	"skip-mint-deploy", "force-mint-deploy", "public",
+}
+
+// perRepoOnlyFlags are flags that only apply to per-repo mode.
+var perRepoOnlyFlags = []string{
+	"mint-url", "gcp-auth-mode", "scaffold-customized",
+}
+
+// parseAgentRoles splits a comma-separated agents string into a validated role list.
+func parseAgentRoles(agents string) ([]string, error) {
+	var roles []string
+	for _, entry := range strings.Split(agents, ",") {
+		if trimmed := strings.TrimSpace(entry); trimmed != "" {
+			if !rolePattern.MatchString(trimmed) {
+				return nil, fmt.Errorf("invalid role name %q: must match %s", trimmed, rolePattern.String())
+			}
+			roles = append(roles, trimmed)
+		}
+	}
+	return roles, nil
+}
+
 func newInstallCmd() *cobra.Command {
 	var agents string
 	var dryRun bool
@@ -103,14 +144,44 @@ func newInstallCmd() *cobra.Command {
 	var mintSkipDeploy bool
 	var mintForceDeploy bool
 	var publicApps bool
+	// Per-repo flags.
+	var mintURL string
+	var gcpAuthMode string
+	var scaffoldCustomized bool
 
 	cmd := &cobra.Command{
-		Use:   "install <org>",
-		Short: "Install fullsend in a GitHub organization",
-		Long:  "Sets up the fullsend agentic development pipeline for a GitHub organization, including app creation, config repo, workflows, secrets, and repo enrollment.",
-		Args:  cobra.ExactArgs(1),
+		Use:   "install <org-or-owner/repo>",
+		Short: "Install fullsend in an organization or repository",
+		Long: `Sets up the fullsend agentic development pipeline.
+
+Per-org mode (argument is an org name, e.g. "acme"):
+  Creates the .fullsend config repo, per-role GitHub Apps, token mint,
+  shim workflows, secrets, and repo enrollment.
+
+Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
+  Bootstraps a single repository with the shim workflow and .fullsend/
+  configuration directory. No config repo or cross-repo dispatch needed.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			org := args[0]
+			arg := args[0]
+			if strings.Contains(arg, "/") {
+				for _, name := range perOrgOnlyFlags {
+					if cmd.Flags().Changed(name) {
+						return fmt.Errorf("--%s is only valid for per-org installation (fullsend admin install <org>)", name)
+					}
+				}
+				return runPerRepoInstall(cmd.Context(), arg, agents, mintURL, gcpRegion, gcpAuthMode,
+					gcpProject, gcpCredentialsFile, gcpWIFProvider, gcpWIFSAEmail,
+					scaffoldCustomized, dryRun)
+			}
+
+			for _, name := range perRepoOnlyFlags {
+				if cmd.Flags().Changed(name) {
+					return fmt.Errorf("--%s is only valid for per-repo installation (fullsend admin install <owner/repo>)", name)
+				}
+			}
+
+			org := arg
 			if err := validateOrgName(org); err != nil {
 				return err
 			}
@@ -129,12 +200,9 @@ func newInstallCmd() *cobra.Command {
 			printer.Header("Installing fullsend for " + org)
 			printer.Blank()
 
-			// Parse roles from --agents flag.
-			var roles []string
-			for _, entry := range strings.Split(agents, ",") {
-				if trimmed := strings.TrimSpace(entry); trimmed != "" {
-					roles = append(roles, trimmed)
-				}
+			roles, err := parseAgentRoles(agents)
+			if err != nil {
+				return err
 			}
 
 			// Validate mint provider (only required for real installs, not dry-run).
@@ -262,8 +330,222 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&mintSkipDeploy, "skip-mint-deploy", false, "skip Cloud Function deployment, reuse existing mint URL")
 	cmd.Flags().BoolVar(&mintForceDeploy, "force-mint-deploy", false, "force Cloud Function redeployment even if unchanged")
 	cmd.Flags().BoolVar(&publicApps, "public", false, "create public (unlisted) GitHub Apps installable by other orgs")
+	// Per-repo flags.
+	cmd.Flags().StringVar(&mintURL, "mint-url", "", "token mint URL for OIDC token exchange (per-repo mode)")
+	cmd.Flags().StringVar(&gcpAuthMode, "gcp-auth-mode", "sa_key", "GCP authentication mode: wif or sa_key (per-repo mode)")
+	cmd.Flags().BoolVar(&scaffoldCustomized, "scaffold-customized", false, "create .fullsend/customized/ directory structure (per-repo mode)")
 
 	return cmd
+}
+
+func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRegion, gcpAuthMode,
+	gcpProject, gcpCredentialsFile, gcpWIFProvider, gcpWIFSAEmail string,
+	scaffoldCustomized, dryRun bool) error {
+	if strings.Contains(repoFullName, "://") || strings.HasPrefix(repoFullName, "www.") {
+		return fmt.Errorf("expected owner/repo format, got a URL — use just the owner/repo portion (e.g. acme/widget)")
+	}
+	parts := strings.SplitN(repoFullName, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("repo must be in owner/repo format, got %q", repoFullName)
+	}
+	owner, repo := parts[0], parts[1]
+	if !githubOwnerPattern.MatchString(owner) {
+		return fmt.Errorf("invalid owner name %q: must contain only alphanumeric characters and hyphens", owner)
+	}
+	if !githubRepoPattern.MatchString(repo) {
+		return fmt.Errorf("invalid repo name %q: must contain only alphanumeric characters, hyphens, dots, or underscores", repo)
+	}
+
+	if mintURL == "" {
+		return fmt.Errorf("--mint-url is required for per-repo installation")
+	}
+	parsedMintURL, err := url.Parse(mintURL)
+	if err != nil || parsedMintURL.Scheme != "https" || parsedMintURL.Host == "" {
+		scheme := ""
+		if parsedMintURL != nil {
+			scheme = parsedMintURL.Scheme
+		}
+		return fmt.Errorf("--mint-url must be a valid HTTPS URL (got scheme=%q)", scheme)
+	}
+	if gcpRegion == "" {
+		return fmt.Errorf("--gcp-region is required for per-repo installation")
+	}
+	if gcpAuthMode != "wif" && gcpAuthMode != "sa_key" {
+		return fmt.Errorf("invalid --gcp-auth-mode %q: must be 'wif' or 'sa_key'", gcpAuthMode)
+	}
+	if gcpProject == "" {
+		return fmt.Errorf("--gcp-project is required for per-repo installation")
+	}
+	roles, err := parseAgentRoles(agents)
+	if err != nil {
+		return err
+	}
+
+	if gcpAuthMode == "wif" {
+		if gcpWIFProvider == "" {
+			return fmt.Errorf("--gcp-wif-provider is required when --gcp-auth-mode is 'wif'")
+		}
+		if gcpWIFSAEmail == "" {
+			return fmt.Errorf("--gcp-wif-sa-email is required when --gcp-auth-mode is 'wif'")
+		}
+		if gcpCredentialsFile != "" {
+			return fmt.Errorf("--gcp-credentials-file cannot be used with --gcp-auth-mode 'wif'")
+		}
+	} else {
+		if gcpCredentialsFile == "" {
+			return fmt.Errorf("--gcp-credentials-file is required when --gcp-auth-mode is 'sa_key'")
+		}
+		if gcpWIFProvider != "" || gcpWIFSAEmail != "" {
+			return fmt.Errorf("--gcp-wif-provider and --gcp-wif-sa-email cannot be used with --gcp-auth-mode 'sa_key'")
+		}
+	}
+
+	var saKeyJSON []byte
+	if gcpCredentialsFile != "" {
+		info, statErr := os.Lstat(gcpCredentialsFile)
+		if statErr != nil {
+			return fmt.Errorf("checking credentials file: %w", statErr)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("credentials file %s must be a regular file", gcpCredentialsFile)
+		}
+		data, err := os.ReadFile(gcpCredentialsFile)
+		if err != nil {
+			return fmt.Errorf("reading --gcp-credentials-file: %w", err)
+		}
+		if err := validateCredentialJSON(data); err != nil {
+			return err
+		}
+		saKeyJSON = data
+	}
+	defer func() {
+		for i := range saKeyJSON {
+			saKeyJSON[i] = 0
+		}
+	}()
+
+	token, err := resolveToken()
+	if err != nil {
+		return err
+	}
+
+	client := gh.New(token)
+	printer := ui.New(os.Stdout)
+
+	printer.Banner()
+	printer.Blank()
+	printer.Header("Installing per-repo fullsend for " + repoFullName)
+	printer.Blank()
+
+	cfg := config.NewPerRepoConfig(roles)
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	shimContent, err := scaffold.PerRepoShimTemplate()
+	if err != nil {
+		return fmt.Errorf("loading per-repo shim template: %w", err)
+	}
+
+	cfgYAML, err := cfg.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshaling per-repo config: %w", err)
+	}
+
+	var files []forge.TreeFile
+	files = append(files, forge.TreeFile{
+		Path:    ".github/workflows/fullsend.yml",
+		Content: shimContent,
+		Mode:    "100644",
+	})
+	files = append(files, forge.TreeFile{
+		Path:    ".fullsend/config.yaml",
+		Content: cfgYAML,
+		Mode:    "100644",
+	})
+
+	if scaffoldCustomized {
+		for _, dir := range scaffold.PerRepoCustomizedDirs() {
+			files = append(files, forge.TreeFile{
+				Path:    dir + "/.gitkeep",
+				Content: []byte(""),
+				Mode:    "100644",
+			})
+		}
+	}
+
+	repoVars := map[string]string{
+		"FULLSEND_MINT_URL":       mintURL,
+		"FULLSEND_GCP_REGION":     gcpRegion,
+		"FULLSEND_GCP_AUTH_MODE":  gcpAuthMode,
+	}
+
+	repoSecrets := map[string]string{
+		"FULLSEND_GCP_PROJECT_ID": gcpProject,
+	}
+	if gcpAuthMode == "wif" {
+		repoSecrets["FULLSEND_GCP_WIF_PROVIDER"] = gcpWIFProvider
+		repoSecrets["FULLSEND_GCP_WIF_SA_EMAIL"] = gcpWIFSAEmail
+	} else {
+		repoSecrets["FULLSEND_GCP_SA_KEY_JSON"] = string(saKeyJSON)
+	}
+
+	if dryRun {
+		printer.StepInfo("Dry run — no changes will be made")
+		printer.Blank()
+		for _, f := range files {
+			printer.StepDone(fmt.Sprintf("Would write: %s (%d bytes)", f.Path, len(f.Content)))
+		}
+		printer.Blank()
+		printer.StepInfo("Would set repository variables:")
+		for _, name := range sortedStringMapKeys(repoVars) {
+			printer.StepInfo(fmt.Sprintf("  %s = %s", name, repoVars[name]))
+		}
+		printer.StepInfo(fmt.Sprintf("Would set %d repository secrets:", len(repoSecrets)))
+		for _, name := range sortedStringMapKeys(repoSecrets) {
+			printer.StepInfo(fmt.Sprintf("  %s", name))
+		}
+		return nil
+	}
+
+	if err := checkPerRepoScopes(ctx, client, printer); err != nil {
+		return err
+	}
+
+	printer.StepStart("Writing per-repo scaffold files")
+	committed, err := client.CommitFiles(ctx, owner, repo,
+		"chore: initialize fullsend per-repo installation", files)
+	if err != nil {
+		printer.StepFail("Failed to write scaffold files")
+		return fmt.Errorf("committing scaffold files: %w", err)
+	}
+	if committed {
+		printer.StepDone(fmt.Sprintf("Wrote %d files", len(files)))
+	} else {
+		printer.StepDone("Scaffold up to date")
+	}
+
+	printer.StepStart("Configuring repository variables")
+	for _, name := range sortedStringMapKeys(repoVars) {
+		if err := client.CreateOrUpdateRepoVariable(ctx, owner, repo, name, repoVars[name]); err != nil {
+			printer.StepFail(fmt.Sprintf("Failed to set variable %s", name))
+			return fmt.Errorf("setting repo variable %s: %w", name, err)
+		}
+	}
+	printer.StepDone(fmt.Sprintf("Set %d repository variables", len(repoVars)))
+
+	printer.StepStart("Configuring repository secrets")
+	for _, name := range sortedStringMapKeys(repoSecrets) {
+		if err := client.CreateRepoSecret(ctx, owner, repo, name, repoSecrets[name]); err != nil {
+			printer.StepFail(fmt.Sprintf("Failed to set secret %s", name))
+			return fmt.Errorf("setting repo secret %s: %w", name, err)
+		}
+	}
+	printer.StepDone(fmt.Sprintf("Set %d repository secrets", len(repoSecrets)))
+
+	printer.Blank()
+	printer.StepDone(fmt.Sprintf("Per-repo installation complete for %s/%s", owner, repo))
+	return nil
 }
 
 // vendorFullsendBinary cross-compiles the fullsend binary for linux/amd64
@@ -714,12 +996,16 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 	// the apps. Without this fallback, a partial uninstall leaves orphaned
 	// apps that block reinstallation (PEM keys are one-shot).
 	var agentSlugs []string
+	var configMode string
 	cfgData, err := client.GetFileContent(ctx, org, forge.ConfigRepoName, "config.yaml")
 	if err == nil {
-		if cfg, parseErr := config.ParseOrgConfig(cfgData); parseErr == nil {
-			for _, agent := range cfg.Agents {
+		if parsedCfg, parseErr := config.ParseOrgConfig(cfgData); parseErr == nil {
+			for _, agent := range parsedCfg.Agents {
 				agentSlugs = append(agentSlugs, agent.Slug)
 			}
+			configMode = parsedCfg.Dispatch.Mode
+		} else {
+			printer.StepWarn(fmt.Sprintf("Could not parse existing config: %v; using defaults", parseErr))
 		}
 	}
 	if len(agentSlugs) == 0 {
@@ -727,14 +1013,8 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 		for _, role := range config.DefaultAgentRoles() {
 			agentSlugs = append(agentSlugs, appsetup.AppSlug(role))
 		}
-		printer.StepInfo("Config repo unavailable; using default app names")
-	}
-
-	// Detect dispatch mode from existing config.
-	var configMode string
-	if cfgData != nil {
-		if existingCfg, parseErr := config.ParseOrgConfig(cfgData); parseErr == nil {
-			configMode = existingCfg.Dispatch.Mode
+		if err != nil {
+			printer.StepInfo("Config repo unavailable; using default app names")
 		}
 	}
 
@@ -931,50 +1211,14 @@ func buildLayerStack(
 // all layers; TestCheckInstallScopes_SyncWithLayers asserts parity.
 var installRequiredScopes = []string{"repo", "workflow", "admin:org"}
 
+// perRepoRequiredScopes is the set of OAuth scopes needed for per-repo install.
+var perRepoRequiredScopes = []string{"repo", "workflow"}
+
 // checkInstallScopes verifies that the token has the scopes needed for
 // install before starting interactive app setup. This avoids wasting
 // time on browser-based app creation only to fail on missing scopes.
 func checkInstallScopes(ctx context.Context, client forge.Client, printer *ui.Printer) error {
-	printer.StepStart("Checking token permissions")
-
-	granted, err := client.GetTokenScopes(ctx)
-	if err != nil {
-		printer.StepFail("Could not verify token permissions")
-		return fmt.Errorf("checking token scopes: %w", err)
-	}
-
-	if granted == nil {
-		printer.StepWarn("Preflight skipped: fine-grained token detected (scopes cannot be verified)")
-		return nil
-	}
-
-	required := installRequiredScopes
-	grantedSet := make(map[string]bool, len(granted))
-	for _, s := range granted {
-		grantedSet[s] = true
-	}
-
-	var missing []string
-	for _, scope := range required {
-		if !grantedSet[scope] {
-			missing = append(missing, scope)
-		}
-	}
-
-	if len(missing) > 0 {
-		printer.StepFail("Token is missing required scopes")
-		printer.Blank()
-		result := &layers.PreflightResult{
-			Required: required,
-			Granted:  granted,
-			Missing:  missing,
-		}
-		printer.ErrorBox("Missing token scopes", result.Error())
-		return fmt.Errorf("token is missing required scopes: %s", strings.Join(missing, ", "))
-	}
-
-	printer.StepDone("Token permissions verified")
-	return nil
+	return checkTokenScopes(ctx, client, printer, installRequiredScopes)
 }
 
 // runPreflight checks that the token has all required scopes for the
@@ -1531,7 +1775,64 @@ func saveRepoConfig(ctx context.Context, client forge.Client, printer *ui.Printe
 	return nil
 }
 
+// checkPerRepoScopes verifies the token has sufficient permissions for per-repo install.
+func checkPerRepoScopes(ctx context.Context, client forge.Client, printer *ui.Printer) error {
+	return checkTokenScopes(ctx, client, printer, perRepoRequiredScopes)
+}
+
+// checkTokenScopes verifies the token has all required OAuth scopes.
+func checkTokenScopes(ctx context.Context, client forge.Client, printer *ui.Printer, required []string) error {
+	printer.StepStart("Checking token permissions")
+
+	granted, err := client.GetTokenScopes(ctx)
+	if err != nil {
+		printer.StepFail("Could not verify token permissions")
+		return fmt.Errorf("checking token scopes: %w", err)
+	}
+
+	if granted == nil {
+		printer.StepWarn("Preflight skipped: fine-grained token detected (scopes cannot be verified)")
+		return nil
+	}
+
+	grantedSet := make(map[string]bool, len(granted))
+	for _, s := range granted {
+		grantedSet[s] = true
+	}
+
+	var missing []string
+	for _, scope := range required {
+		if !grantedSet[scope] {
+			missing = append(missing, scope)
+		}
+	}
+
+	if len(missing) > 0 {
+		printer.StepFail("Token is missing required scopes")
+		printer.Blank()
+		result := &layers.PreflightResult{
+			Required: required,
+			Granted:  granted,
+			Missing:  missing,
+		}
+		printer.ErrorBox("Missing token scopes", result.Error())
+		return fmt.Errorf("token is missing required scopes: %s", strings.Join(missing, ", "))
+	}
+
+	printer.StepDone("Token permissions verified")
+	return nil
+}
+
 // Helper functions.
+
+func sortedStringMapKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 func repoNameList(repos []forge.Repository) []string {
 	names := make([]string, len(repos))

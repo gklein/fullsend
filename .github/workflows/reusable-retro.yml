@@ -24,6 +24,10 @@ on:
         required: false
         type: string
         default: 'latest'
+      install_mode:
+        required: false
+        type: string
+        default: 'per-org'
     secrets:
       FULLSEND_GCP_WIF_PROVIDER:
         required: true
@@ -53,9 +57,15 @@ jobs:
           sparse-checkout: |
             internal/scaffold/fullsend-repo/
 
-      - name: Prepare workspace (upstream defaults + org overrides)
+      - name: Prepare workspace (upstream defaults + org/repo overrides)
+        env:
+          INSTALL_MODE: ${{ inputs.install_mode }}
         run: |
           set -euo pipefail
+          if [[ "${INSTALL_MODE}" != "per-org" && "${INSTALL_MODE}" != "per-repo" ]]; then
+            echo "::error::Invalid install_mode '${INSTALL_MODE}': must be 'per-org' or 'per-repo'"
+            exit 1
+          fi
           SRC=".defaults/internal/scaffold/fullsend-repo"
           LAYERED_DIRS="agents skills schemas harness policies scripts env"
           for dir in ${LAYERED_DIRS}; do
@@ -64,11 +74,15 @@ jobs:
               cp -r "${SRC}/${dir}/." "${dir}/"
             fi
           done
+          CUSTOM_BASE="customized"
+          if [[ "${INSTALL_MODE}" == "per-repo" ]]; then
+            CUSTOM_BASE=".fullsend/customized"
+          fi
           for dir in ${LAYERED_DIRS}; do
-            if [[ -d "customized/${dir}" ]]; then
-              find "customized/${dir}" -type f ! -name '.gitkeep' -print0 \
+            if [[ -d "${CUSTOM_BASE}/${dir}" ]]; then
+              find "${CUSTOM_BASE}/${dir}" -type f ! -name '.gitkeep' -print0 \
                 | while IFS= read -r -d '' f; do
-                    rel="${f#customized/}"
+                    rel="${f#${CUSTOM_BASE}/}"
                     mkdir -p "$(dirname "${rel}")"
                     cp "${f}" "${rel}"
                   done
@@ -83,13 +97,14 @@ jobs:
         uses: fullsend-ai/fullsend/.github/actions/validate-enrollment@v0
         with:
           source_repo: ${{ inputs.source_repo }}
+          install_mode: ${{ inputs.install_mode }}
 
       - name: Mint retro token
         id: app-token
         uses: fullsend-ai/fullsend/.github/actions/mint-token@v0
         with:
           role: retro
-          repos: ${{ steps.repo-parts.outputs.name }},.fullsend
+          repos: ${{ inputs.install_mode == 'per-repo' && steps.repo-parts.outputs.name || format('{0},.fullsend', steps.repo-parts.outputs.name) }}
           mint_url: ${{ inputs.mint_url }}
 
       - name: Checkout target repository

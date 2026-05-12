@@ -1215,6 +1215,10 @@ func TestProvisioner_Provision_MultiOrg_WIFCondition(t *testing.T) {
 
 	assert.Equal(t, "assertion.repository in ['acme/.fullsend', 'widgetco/.fullsend']",
 		fake.lastWIFProviderConfig.AttributeCondition)
+
+	expectedIAMAudience := "https://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc"
+	assert.Equal(t, []string{"fullsend-mint", expectedIAMAudience},
+		fake.lastWIFProviderConfig.AllowedAudiences)
 }
 
 func TestProvisioner_Provision_SingleOrg_WIFCondition(t *testing.T) {
@@ -1234,6 +1238,10 @@ func TestProvisioner_Provision_SingleOrg_WIFCondition(t *testing.T) {
 
 	assert.Equal(t, "assertion.repository == 'acme/.fullsend'",
 		fake.lastWIFProviderConfig.AttributeCondition)
+
+	expectedIAMAudience := "https://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc"
+	assert.Equal(t, []string{"fullsend-mint", expectedIAMAudience},
+		fake.lastWIFProviderConfig.AllowedAudiences)
 }
 
 func TestProvisioner_Provision_WIF_AllowedAudiences(t *testing.T) {
