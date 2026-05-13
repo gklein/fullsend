@@ -191,7 +191,8 @@ jobs:
             COMMENT_BODY="$(echo "${EVENT_PAYLOAD}" | jq -r '.comment.body // empty')"
             if [[ -n "${COMMENT_BODY}" ]]; then
               # Strip the /fix prefix to get the instruction.
-              INSTRUCTION="$(echo "${COMMENT_BODY}" | sed 's|^/fix[[:space:]]*||')"
+              INSTRUCTION="${COMMENT_BODY#/fix}"
+              INSTRUCTION="${INSTRUCTION#"${INSTRUCTION%%[![:space:]]*}"}"
             fi
             if [[ -z "${INSTRUCTION}" && -n "${INPUT_INSTRUCTION}" ]]; then
               INSTRUCTION="${INPUT_INSTRUCTION}"
