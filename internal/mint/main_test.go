@@ -658,6 +658,27 @@ func TestHandler_OIDCPrevalidation_WorkflowAllowlist(t *testing.T) {
 	}
 }
 
+func TestHandler_OIDCPrevalidation_WorkflowAllowlistUnset(t *testing.T) {
+	t.Setenv("ALLOWED_WORKFLOW_FILES", "")
+	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
+
+	token := makeTestOIDCToken(
+		"https://token.actions.githubusercontent.com",
+		"fullsend-mint",
+		"test-org/.fullsend",
+		"test-org",
+		"test-org/.fullsend/.github/workflows/dispatch.yml@refs/heads/main",
+		time.Now().Add(10*time.Minute).Unix(),
+	)
+	_, err := h.prevalidateOIDCToken(token)
+	if err == nil {
+		t.Fatal("prevalidation should reject when ALLOWED_WORKFLOW_FILES is unset")
+	}
+	if !strings.Contains(err.Error(), "not in allowed list") {
+		t.Fatalf("expected 'not in allowed list' error, got: %v", err)
+	}
+}
+
 func TestHandler_OIDCValidationFailure(t *testing.T) {
 	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{err: fmt.Errorf("STS returned status 403")})

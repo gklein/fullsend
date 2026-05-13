@@ -264,6 +264,7 @@ func TestCustomizedDirsInstalled(t *testing.T) {
 		"customized/harness/.gitkeep":  false,
 		"customized/policies/.gitkeep": false,
 		"customized/scripts/.gitkeep":  false,
+		"customized/env/.gitkeep":      false,
 	}
 	err := WalkFullsendRepo(func(path string, _ []byte) error {
 		if _, ok := expected[path]; ok {

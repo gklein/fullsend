@@ -594,19 +594,19 @@ func (h *Handler) prevalidateOIDCToken(token string) (*oidcClaims, error) {
 		return nil, fmt.Errorf("job_workflow_ref does not reference a workflow file")
 	}
 
-	// If ALLOWED_WORKFLOW_FILES is set, restrict to those specific files.
-	if len(h.allowedWorkflows) > 0 {
-		workflowFile := strings.TrimPrefix(relPath, ".github/workflows/")
-		allowed := false
-		for _, wf := range h.allowedWorkflows {
-			if strings.EqualFold(wf, workflowFile) {
-				allowed = true
-				break
-			}
+	// Fail closed: only workflow files explicitly listed in
+	// ALLOWED_WORKFLOW_FILES may mint tokens. An empty or unset value
+	// denies all requests. Set to "*" to allow any workflow file.
+	workflowFile := strings.TrimPrefix(relPath, ".github/workflows/")
+	allowed := false
+	for _, wf := range h.allowedWorkflows {
+		if wf == "*" || strings.EqualFold(wf, workflowFile) {
+			allowed = true
+			break
 		}
-		if !allowed {
-			return nil, fmt.Errorf("workflow file %q not in allowed list", workflowFile)
-		}
+	}
+	if !allowed {
+		return nil, fmt.Errorf("workflow file %q not in allowed list", workflowFile)
 	}
 
 	return &claims, nil

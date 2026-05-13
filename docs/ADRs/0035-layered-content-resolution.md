@@ -62,13 +62,14 @@ in layered directories (`agents/`, `skills/`, `schemas/`, `harness/`,
 
 File categories after this change:
 
-- **Org-only** (~18 files): `env/`, `dispatch.yml`, thin callers, shim
-  template, `AGENTS.md` — always installed, never overwritten by upstream.
-- **Org overrides** (7 `.gitkeep` files): `customized/{agents,skills,...}/` —
+- **Org-only** (~11 files): `dispatch.yml`, thin callers, shim template,
+  `AGENTS.md` — always installed, never overwritten by upstream.
+- **Org overrides** (7 `.gitkeep` files):
+  `customized/{agents,skills,schemas,harness,policies,scripts,env}/` —
   scaffold creates the structure, orgs add real files.
-- **Upstream defaults** (~53 files): agents, skills, schemas, harness,
-  policies, scripts — authoritative in `fullsend-ai/fullsend`, provided at
-  runtime via sparse checkout of the release tag.
+- **Upstream defaults** (~60 files): agents, skills, schemas, harness,
+  policies, scripts, env — authoritative in `fullsend-ai/fullsend`, provided
+  at runtime via sparse checkout of the release tag.
 - **Upstream infrastructure** (~5 files): composite actions,
   `setup-agent-env.sh` — referenced directly from upstream, never in `.fullsend`.
 

@@ -88,7 +88,7 @@ jobs:
         id: app-token
         uses: fullsend-ai/fullsend/.github/actions/mint-token@v0
         with:
-          role: fullsend
+          role: retro
           repos: ${{ steps.repo-parts.outputs.name }},.fullsend
           mint_url: ${{ inputs.mint_url }}
 
