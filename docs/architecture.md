@@ -43,6 +43,7 @@ Infrastructure platform choice and configuration are specified in the adopting o
 - Shim workflow security: `pull_request_target` prevents PR authors from modifying the shim workflow. No long-lived secrets flow through the shim — OIDC tokens are issued by the GitHub runtime and scoped to the workflow run ([ADR 0009](ADRs/0009-pull-request-target-in-shim-workflows.md)).
 - Repo maintenance: a workflow in `.fullsend` (`.github/workflows/repo-maintenance.yml`) reconciles enrollment shims in target repos when `config.yaml` changes or on manual dispatch. The CLI's `EnrollmentLayer.Install()` dispatches this workflow via `workflow_dispatch` and monitors it for completion, then reports any enrollment PRs created in target repos.
 - Installer scaffold: the `WorkflowsLayer` deploys content from an embedded scaffold (`internal/scaffold/`), keeping deployable files as real files under version control rather than Go string constants.
+- Reusable workflows: agent workflows in `.fullsend` are thin callers (~40-70 lines) that delegate infrastructure logic to upstream reusable workflows (`fullsend-ai/fullsend/.github/workflows/reusable-*.yml`) via `workflow_call`. Infrastructure patches ship once upstream and propagate to all orgs without re-install ([ADR 0031](ADRs/0031-reusable-workflows-for-action-installed-distribution.md)).
 
 **Open questions:**
 
@@ -324,6 +325,15 @@ AGENTS.md files follow the same layering. A repo's `.fullsend/AGENTS.md` gives a
 
 See [ADR 0003](ADRs/0003-org-config-repo-convention.md) for the config repo convention and [ADR 0024](ADRs/0024-harness-definitions.md) for harness definitions.
 
+**Decided:**
+
+- Layered content resolution: upstream defaults (agents, skills, schemas,
+  harness, policies, scripts) are provided at runtime via reusable workflow
+  sparse-checkout of `fullsend-ai/fullsend@v0`. The scaffold installs only
+  org-specific files and a `customized/` directory for org overrides. Org files
+  in `customized/` overwrite upstream defaults at runtime
+  ([ADR 0035](ADRs/0035-layered-content-resolution.md)).
+
 ## Multi-org deployment model
 
 Each organization that adopts fullsend operates independently. There is no shared control plane, no central service, and no relationship between orgs. Each org brings its own inference API keys and runs its own version of fullsend.
@@ -591,8 +601,8 @@ GitHub event ──► SHIM WORKFLOW (fullsend.yml in enrolled repo)
 
 | Abstract layer | MVP technology | ADR |
 |---|---|---|
-| Dispatcher | Shim workflow (`fullsend.yml`) in enrolled repo → `workflow_call` to `.fullsend/dispatch.yml` → OIDC mint → per-role agent workflows | [ADR 0008](ADRs/0008-workflow-dispatch-for-cross-repo-dispatch.md) |
-| Agent runner | GitHub Actions job → `fullsend run` CLI (via `.github/actions/fullsend` composite action) | |
+| Dispatcher | Shim workflow (`fullsend.yml`) in enrolled repo → `workflow_call` to `.fullsend/dispatch.yml` → OIDC mint → per-role agent workflows (thin callers → upstream reusable workflows) | [ADR 0008](ADRs/0008-workflow-dispatch-for-cross-repo-dispatch.md), [ADR 0031](ADRs/0031-reusable-workflows-for-action-installed-distribution.md) |
+| Agent runner | GitHub Actions job → `fullsend run` CLI (via `fullsend-ai/fullsend@v0` composite action) | |
 | Harness store | YAML files in `.fullsend/harness/` (e.g. `code.yaml`, `triage.yaml`) | |
 | Sandbox | OpenShell with per-agent L7 network policies (endpoint + binary restrictions) | |
 | Agent runtime | Claude Code (`claude --agent --dangerously-skip-permissions`) | |

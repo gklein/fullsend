@@ -25,10 +25,10 @@ The admin CLI creates or reuses per-role GitHub Apps and must persist the minimu
 
 ## Decision
 
-**Adopt credential surface v1** as specified in [SPEC.md](../normative/admin-install/v1/adr-0014-github-apps-and-secrets/SPEC.md): expected app slugs and manifest/install behavior per role, and repository secrets `FULLSEND_<ROLE>_APP_PRIVATE_KEY` plus variables `FULLSEND_<ROLE>_CLIENT_ID` on the `.fullsend` repo, with uppercase role suffixes matching `internal/layers/secrets.go` and `internal/cli/admin.go`.
+**Adopt credential surface v1**: expected app slugs and manifest/install behavior per role, and repository secrets `FULLSEND_<ROLE>_APP_PRIVATE_KEY` plus variables `FULLSEND_<ROLE>_CLIENT_ID` on the `.fullsend` repo, with uppercase role suffixes matching `internal/layers/secrets.go` and `internal/cli/admin.go`.
 
 ## Consequences
 
-- Any change to secret/variable names or install outcomes must update the SPEC and this ADR together.
+- Any change to secret/variable names or install outcomes must update the implementation and this ADR together.
 - Adopters can grep `.fullsend` for `FULLSEND_` to audit stored app credentials without reading Go source.
 - Client secret and webhook secret from the manifest flow remain outside this v1 repo surface unless a future ADR extends the surface.

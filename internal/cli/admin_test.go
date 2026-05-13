@@ -878,7 +878,7 @@ func TestCheckInstallScopes_SyncWithLayers(t *testing.T) {
 	emptyCfg := &config.OrgConfig{}
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer("test-org", nil, emptyCfg, ui.New(&discardWriter{}), false),
-		layers.NewWorkflowsLayer("test-org", nil, ui.New(&discardWriter{}), "", ""),
+		layers.NewWorkflowsLayer("test-org", nil, ui.New(&discardWriter{}), ""),
 		layers.NewSecretsLayer("test-org", nil, nil, ui.New(&discardWriter{})),
 		layers.NewInferenceLayer("test-org", nil, nil, ui.New(&discardWriter{})),
 		layers.NewOIDCDispatchLayer("test-org", nil, nil, nil, ui.New(&discardWriter{})),

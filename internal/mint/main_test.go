@@ -527,6 +527,52 @@ func TestHandler_OIDCPrevalidation_MissingJobWorkflowRef(t *testing.T) {
 	}
 }
 
+func TestHandler_OIDCPrevalidation_UpstreamWorkflowRef(t *testing.T) {
+	setMintEnv(t)
+	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
+
+	// When reusable workflows are invoked via workflow_call, the OIDC
+	// job_workflow_ref reflects fullsend-ai/fullsend, not {org}/.fullsend.
+	oidcToken := makeTestOIDCToken(
+		"https://token.actions.githubusercontent.com",
+		"fullsend-mint",
+		"test-org/.fullsend",
+		"test-org",
+		"fullsend-ai/fullsend/.github/workflows/reusable-code.yml@refs/tags/v1",
+		time.Now().Add(10*time.Minute).Unix(),
+	)
+
+	claims, err := h.prevalidateOIDCToken(oidcToken)
+	if err != nil {
+		t.Fatalf("prevalidation should accept upstream workflow ref: %v", err)
+	}
+	if claims.RepositoryOwner != "test-org" {
+		t.Fatalf("expected owner test-org, got %s", claims.RepositoryOwner)
+	}
+}
+
+func TestHandler_OIDCPrevalidation_UpstreamNonWorkflowPath(t *testing.T) {
+	setMintEnv(t)
+	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
+
+	oidcToken := makeTestOIDCToken(
+		"https://token.actions.githubusercontent.com",
+		"fullsend-mint",
+		"test-org/.fullsend",
+		"test-org",
+		"fullsend-ai/fullsend/scripts/evil.sh@refs/tags/v1",
+		time.Now().Add(10*time.Minute).Unix(),
+	)
+
+	_, err := h.prevalidateOIDCToken(oidcToken)
+	if err == nil {
+		t.Fatal("prevalidation should reject upstream non-workflow path")
+	}
+	if !strings.Contains(err.Error(), "does not reference a workflow file") {
+		t.Fatalf("expected workflow file error, got: %v", err)
+	}
+}
+
 func TestHandler_OIDCPrevalidation_BadJobWorkflowRef(t *testing.T) {
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 
@@ -606,6 +652,27 @@ func TestHandler_OIDCPrevalidation_WorkflowAllowlist(t *testing.T) {
 	_, err = h.prevalidateOIDCToken(disallowedToken)
 	if err == nil {
 		t.Fatal("prevalidation should reject disallowed workflow")
+	}
+	if !strings.Contains(err.Error(), "not in allowed list") {
+		t.Fatalf("expected 'not in allowed list' error, got: %v", err)
+	}
+}
+
+func TestHandler_OIDCPrevalidation_WorkflowAllowlistUnset(t *testing.T) {
+	t.Setenv("ALLOWED_WORKFLOW_FILES", "")
+	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
+
+	token := makeTestOIDCToken(
+		"https://token.actions.githubusercontent.com",
+		"fullsend-mint",
+		"test-org/.fullsend",
+		"test-org",
+		"test-org/.fullsend/.github/workflows/dispatch.yml@refs/heads/main",
+		time.Now().Add(10*time.Minute).Unix(),
+	)
+	_, err := h.prevalidateOIDCToken(token)
+	if err == nil {
+		t.Fatal("prevalidation should reject when ALLOWED_WORKFLOW_FILES is unset")
 	}
 	if !strings.Contains(err.Error(), "not in allowed list") {
 		t.Fatalf("expected 'not in allowed list' error, got: %v", err)

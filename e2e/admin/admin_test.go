@@ -314,7 +314,7 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 	require.NoError(t, err, "pre-installing config-repo layer")
 	registerRepoCleanup(t, env.client, testOrg, forge.ConfigRepoName)
 
-	workflowsLayer := layers.NewWorkflowsLayer(testOrg, env.client, env.printer, user, "")
+	workflowsLayer := layers.NewWorkflowsLayer(testOrg, env.client, env.printer, user)
 	err = workflowsLayer.Install(ctx)
 	require.NoError(t, err, "pre-installing workflows layer")
 
@@ -333,7 +333,7 @@ func runUninstall(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
@@ -350,7 +350,7 @@ func runUninstallAllowNotFound(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
@@ -385,38 +385,26 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 	assert.Len(t, parsedCfg.Agents, len(defaultRoles))
 
 	// Agent runtime files exist (from scaffold).
+	// ADR 35: only non-layered, non-upstream-only files are installed.
+	// Layered dirs (agents/, skills/, schemas/, harness/, policies/, scripts/,
+	// env/) and upstream-only dirs (.github/actions/, .github/scripts/) are
+	// provided at runtime via sparse checkout in reusable workflows.
 	for _, path := range []string{
 		".github/workflows/triage.yml",
 		".github/workflows/code.yml",
 		".github/workflows/review.yml",
-		".github/workflows/repo-maintenance.yml",
-		".github/actions/fullsend/action.yml",
-		".github/scripts/setup-agent-env.sh",
-		"agents/triage.md",
-		"agents/code.md",
-		"harness/triage.yaml",
-		"harness/code.yaml",
-		"policies/triage.yaml",
-		"policies/code.yaml",
-		"env/triage.env",
-		"env/code-agent.env",
-		"env/gcp-vertex.env",
-		"scripts/scan-secrets",
-		"scripts/pre-code.sh",
-		"scripts/post-code.sh",
-		"scripts/post-triage.sh",
-		"scripts/reconcile-repos.sh",
-		"skills/code-implementation/SKILL.md",
-		"skills/fix-review/SKILL.md",
 		".github/workflows/fix.yml",
-		"agents/fix.md",
-		"harness/fix.yaml",
-		"policies/fix.yaml",
-		"env/fix-agent.env",
-		"schemas/fix-result.schema.json",
-		"scripts/pre-fix.sh",
-		"scripts/post-fix.sh",
-		"scripts/process-fix-result.py",
+		".github/workflows/dispatch.yml",
+		".github/workflows/repo-maintenance.yml",
+		".github/workflows/prioritize.yml",
+		".github/workflows/prioritize-scheduler.yml",
+		"customized/agents/.gitkeep",
+		"customized/skills/.gitkeep",
+		"customized/schemas/.gitkeep",
+		"customized/harness/.gitkeep",
+		"customized/policies/.gitkeep",
+		"customized/scripts/.gitkeep",
+		"customized/env/.gitkeep",
 		"templates/shim-workflow-call.yaml",
 		"CODEOWNERS",
 	} {
@@ -514,7 +502,7 @@ func verifyNotInstalled(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
@@ -832,7 +820,7 @@ func buildTestLayerStack(
 ) *layers.Stack {
 	return layers.NewStack(
 		layers.NewConfigRepoLayer(org, client, cfg, printer, hasPrivate),
-		layers.NewWorkflowsLayer(org, client, printer, user, ""),
+		layers.NewWorkflowsLayer(org, client, printer, user),
 		layers.NewSecretsLayer(org, client, agentCreds, printer).WithOIDCMode(),
 		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
 		layers.NewOIDCDispatchLayer(org, client, enrolledRepoIDs, &e2eDispatcher{}, printer),

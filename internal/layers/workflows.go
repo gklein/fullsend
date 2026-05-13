@@ -1,10 +1,8 @@
 package layers
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"regexp"
 
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	"github.com/fullsend-ai/fullsend/internal/scaffold"
@@ -27,24 +25,15 @@ func init() {
 	managedFiles = append(managedFiles, codeownersPath)
 }
 
-// actionYMLPath is the repo-relative path to the composite action that
-// contains the CLI version input default.
-const actionYMLPath = ".github/actions/fullsend/action.yml"
-
-// versionDefault is the placeholder in the embedded action.yml that gets
-// replaced with the installing CLI's version.
-var versionDefault = []byte("    default: latest")
-
 // WorkflowsLayer manages workflow files and CODEOWNERS in the .fullsend
-// config repo. It writes the reusable agent dispatch workflow, the repo
-// onboarding workflow, and a CODEOWNERS file that grants the installing
-// user ownership of all config-repo contents.
+// config repo. It writes the thin caller workflows, composite actions,
+// and a CODEOWNERS file that grants the installing user ownership of all
+// config-repo contents.
 type WorkflowsLayer struct {
 	org               string
 	client            forge.Client
 	ui                *ui.Printer
 	authenticatedUser string
-	cliVersion        string
 }
 
 // Compile-time check that WorkflowsLayer implements Layer.
@@ -52,16 +41,12 @@ var _ Layer = (*WorkflowsLayer)(nil)
 
 // NewWorkflowsLayer creates a new WorkflowsLayer.
 // user is the authenticated user who will own CODEOWNERS entries.
-// cliVersion is the version of the fullsend CLI performing the install;
-// it is injected into the composite action's version input default so
-// that workflow runs use the same CLI that produced the scaffold.
-func NewWorkflowsLayer(org string, client forge.Client, printer *ui.Printer, user, cliVersion string) *WorkflowsLayer {
+func NewWorkflowsLayer(org string, client forge.Client, printer *ui.Printer, user string) *WorkflowsLayer {
 	return &WorkflowsLayer{
 		org:               org,
 		client:            client,
 		ui:                printer,
 		authenticatedUser: user,
-		cliVersion:        cliVersion,
 	}
 }
 
@@ -91,9 +76,6 @@ func (l *WorkflowsLayer) RequiredScopes(op Operation) []string {
 func (l *WorkflowsLayer) Install(ctx context.Context) error {
 	var files []forge.TreeFile
 	err := scaffold.WalkFullsendRepo(func(path string, content []byte) error {
-		if path == actionYMLPath {
-			content = l.pinVersionInAction(content)
-		}
 		files = append(files, forge.TreeFile{
 			Path:    path,
 			Content: content,
@@ -172,26 +154,6 @@ func (l *WorkflowsLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	}
 
 	return report, nil
-}
-
-// releaseVersionPattern matches a clean release tag: v1.2.3 or 1.2.3.
-// Dev builds from git describe (e.g. v0.7.0-58-g4273effb, v0.7.0-dirty)
-// will NOT match and are treated as non-release.
-var releaseVersionPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
-
-// pinVersionInAction replaces the "default: latest" line in the action.yml
-// version input with the concrete CLI version. Non-release versions (dev
-// builds, git-describe output like v0.7.0-58-gXXXXXXX) fall back to
-// "latest" so that workflows don't try to download a nonexistent release.
-func (l *WorkflowsLayer) pinVersionInAction(content []byte) []byte {
-	if !releaseVersionPattern.MatchString(l.cliVersion) {
-		if l.cliVersion != "" {
-			l.ui.StepWarn(fmt.Sprintf("CLI version %q is not a release; action.yml will use \"latest\" (unpinned)", l.cliVersion))
-		}
-		return content
-	}
-	pinned := []byte(fmt.Sprintf("    default: %s", l.cliVersion))
-	return bytes.Replace(content, versionDefault, pinned, 1)
 }
 
 func (l *WorkflowsLayer) codeownersContent() string {
