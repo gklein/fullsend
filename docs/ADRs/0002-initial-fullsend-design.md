@@ -1,5 +1,5 @@
 ---
-title: "Initial Fullsend Design"
+title: "2. Initial Fullsend Design"
 status: Proposed
 relates_to:
   - agent-architecture
@@ -15,7 +15,7 @@ topics:
   - agents
 ---
 
-# Initial Fullsend Design
+# 2. Initial Fullsend Design
 
 Date: 2026-03-23
 
