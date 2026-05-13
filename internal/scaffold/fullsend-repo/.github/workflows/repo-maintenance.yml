@@ -45,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p scripts
-          cp -rP ".defaults/internal/scaffold/fullsend-repo/scripts/." scripts/
+          cp -r ".defaults/internal/scaffold/fullsend-repo/scripts/." scripts/
           if [[ -d "customized/scripts" ]]; then
             find "customized/scripts" -type f ! -name '.gitkeep' -print0 \
               | while IFS= read -r -d '' f; do

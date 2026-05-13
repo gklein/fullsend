@@ -283,7 +283,11 @@ jobs:
           set -euo pipefail
           HEAD_REPO=$(gh api "repos/$SOURCE_REPO/pulls/$PR_NUMBER" --jq '.head.repo.full_name' 2>/dev/null || true)
           BASE_REPO=$(gh api "repos/$SOURCE_REPO/pulls/$PR_NUMBER" --jq '.base.repo.full_name' 2>/dev/null || true)
-          if [[ -n "$HEAD_REPO" && -n "$BASE_REPO" && "$HEAD_REPO" != "$BASE_REPO" ]]; then
+          if [[ -z "$HEAD_REPO" || -z "$BASE_REPO" ]]; then
+            echo "::error::Cannot determine fork status — blocking fix agent (fail-closed)"
+            exit 1
+          fi
+          if [[ "$HEAD_REPO" != "$BASE_REPO" ]]; then
             echo "::error::Fork PR detected (head=$HEAD_REPO, base=$BASE_REPO) — fix agent blocked"
             exit 1
           fi

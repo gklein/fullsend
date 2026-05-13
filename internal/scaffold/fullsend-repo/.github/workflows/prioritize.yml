@@ -55,12 +55,12 @@ jobs:
             src=".defaults/internal/scaffold/fullsend-repo/${dir}"
             if [[ -d "${src}" ]]; then
               mkdir -p "${dir}"
-              cp -rP "${src}/." "${dir}/"
+              cp -r "${src}/." "${dir}/"
             fi
           done
           if [[ -d ".defaults/.github/scripts" ]]; then
             mkdir -p .github/scripts
-            cp -rP ".defaults/.github/scripts/." .github/scripts/
+            cp -r ".defaults/.github/scripts/." .github/scripts/
           fi
           for dir in agents skills schemas harness policies scripts; do
             if [[ -d "customized/${dir}" ]]; then
