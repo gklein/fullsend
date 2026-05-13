@@ -58,8 +58,9 @@ func TestInstallCmd_Flags(t *testing.T) {
 	wifProviderFlag := cmd.Flags().Lookup("gcp-wif-provider")
 	require.NotNil(t, wifProviderFlag, "expected --gcp-wif-provider flag")
 
+	// --gcp-wif-sa-email removed (direct WIF, no intermediate SA)
 	wifSAEmailFlag := cmd.Flags().Lookup("gcp-wif-sa-email")
-	require.NotNil(t, wifSAEmailFlag, "expected --gcp-wif-sa-email flag")
+	assert.Nil(t, wifSAEmailFlag, "--gcp-wif-sa-email flag should have been removed")
 
 	// --repo flag should not exist (issue #495)
 	repoFlag := cmd.Flags().Lookup("repo")

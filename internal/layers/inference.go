@@ -46,7 +46,7 @@ func (l *InferenceLayer) RequiredScopes(op Operation) []string {
 
 // Install provisions inference credentials and stores them as repo secrets.
 // If all expected secrets already exist, provisioning is skipped to maintain
-// idempotency (avoids accumulating SA keys against GCP's 10-key limit).
+// idempotency (avoids unnecessary re-provisioning).
 func (l *InferenceLayer) Install(ctx context.Context) error {
 	if l.provider == nil {
 		l.ui.StepInfo("no inference provider configured, skipping")

@@ -68,6 +68,15 @@ type fakeGCFClient struct {
 
 	// Captured env vars from the last CreateFunction or UpdateFunction call.
 	lastCreateFunctionEnvVars map[string]string
+
+	// Captured project IAM binding arguments.
+	projectIAMBindings []projectIAMBinding
+}
+
+type projectIAMBinding struct {
+	ProjectID string
+	Member    string
+	Role      string
 }
 
 func newFakeGCFClient() *fakeGCFClient {
@@ -119,6 +128,10 @@ func (f *fakeGCFClient) AddSecretVersion(_ context.Context, _ string, secretID s
 }
 func (f *fakeGCFClient) SetSecretIAMBinding(_ context.Context, _, _, _ string) error {
 	return f.record("SetSecretIAMBinding")
+}
+func (f *fakeGCFClient) SetProjectIAMBinding(_ context.Context, projectID, member, role string) error {
+	f.projectIAMBindings = append(f.projectIAMBindings, projectIAMBinding{projectID, member, role})
+	return f.record("SetProjectIAMBinding")
 }
 func (f *fakeGCFClient) SetCloudRunInvoker(_ context.Context, _, _, _ string) error {
 	return f.record("SetCloudRunInvoker")
@@ -328,6 +341,7 @@ func TestProvisioner_Provision_FullFlow(t *testing.T) {
 		"CreateWIFPool",
 		"GetWIFProvider",
 		"CreateWIFProvider",
+		"SetProjectIAMBinding",
 		"GetSecret",
 		"CreateSecret",
 		"AddSecretVersion",
@@ -343,6 +357,13 @@ func TestProvisioner_Provision_FullFlow(t *testing.T) {
 
 	require.Contains(t, vars, "FULLSEND_MINT_URL")
 	assert.Equal(t, "https://fullsend-mint-abc123.run.app", vars["FULLSEND_MINT_URL"])
+
+	// Verify project IAM binding arguments.
+	require.Len(t, fake.projectIAMBindings, 1)
+	assert.Equal(t, "my-project", fake.projectIAMBindings[0].ProjectID)
+	assert.Equal(t, "roles/aiplatform.user", fake.projectIAMBindings[0].Role)
+	assert.Contains(t, fake.projectIAMBindings[0].Member, "principalSet://iam.googleapis.com/")
+	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/test-org/.fullsend")
 
 	// Verify PEMs were zeroed.
 	for role, pem := range p.cfg.AgentPEMs {
@@ -1038,6 +1059,46 @@ func TestProvisioner_Provision_AddSecretVersionError(t *testing.T) {
 	assert.Contains(t, err.Error(), "version error")
 }
 
+func TestProvisioner_Provision_SetProjectIAMBindingError(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["SetProjectIAMBinding"] = fmt.Errorf("project iam denied")
+
+	p := newTestProvisioner(Config{
+		ProjectID:         "test-project-id",
+		GitHubOrgs:        []string{"org"},
+		AgentPEMs:         singleRolePEMs(),
+		AgentAppIDs:       singleRoleAppIDs(),
+		FunctionSourceDir: fakeFunctionSourceDir(t),
+	}, fake)
+
+	_, err := p.Provision(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "granting Vertex AI access for org org")
+	assert.Contains(t, err.Error(), "project iam denied")
+}
+
+func TestProvisioner_Provision_MultiOrg_ProjectIAMBindings(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfoAfterCreate = &FunctionInfo{URI: "https://mint.run.app"}
+
+	p := newTestProvisioner(Config{
+		ProjectID:         "shared-project",
+		GitHubOrgs:        []string{"org-a", "org-b"},
+		AgentPEMs:         singleRolePEMs(),
+		AgentAppIDs:       singleRoleAppIDs(),
+		FunctionSourceDir: fakeFunctionSourceDir(t),
+	}, fake)
+
+	_, err := p.Provision(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, fake.projectIAMBindings, 2)
+	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/org-a/.fullsend")
+	assert.Contains(t, fake.projectIAMBindings[1].Member, "attribute.repository/org-b/.fullsend")
+	assert.Equal(t, "roles/aiplatform.user", fake.projectIAMBindings[0].Role)
+	assert.Equal(t, "roles/aiplatform.user", fake.projectIAMBindings[1].Role)
+}
+
 func TestProvisioner_Provision_SetIAMBindingError(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.errs["SetSecretIAMBinding"] = fmt.Errorf("iam error")
@@ -1152,7 +1213,7 @@ func TestProvisioner_Provision_MultiOrg_WIFCondition(t *testing.T) {
 	_, err := p.Provision(context.Background())
 	require.NoError(t, err)
 
-	assert.Equal(t, "assertion.repository_owner in ['acme', 'widgetco']",
+	assert.Equal(t, "assertion.repository in ['acme/.fullsend', 'widgetco/.fullsend']",
 		fake.lastWIFProviderConfig.AttributeCondition)
 }
 
@@ -1171,7 +1232,7 @@ func TestProvisioner_Provision_SingleOrg_WIFCondition(t *testing.T) {
 	_, err := p.Provision(context.Background())
 	require.NoError(t, err)
 
-	assert.Equal(t, "assertion.repository_owner == 'acme'",
+	assert.Equal(t, "assertion.repository == 'acme/.fullsend'",
 		fake.lastWIFProviderConfig.AttributeCondition)
 }
 
@@ -1257,7 +1318,7 @@ func TestProvisioner_Provision_MultiOrg_MergeDoesNotOverwriteExistingPEMs(t *tes
 	}
 
 	// WIF condition should include both orgs.
-	assert.Equal(t, "assertion.repository_owner in ['existing-org', 'new-org']",
+	assert.Equal(t, "assertion.repository in ['existing-org/.fullsend', 'new-org/.fullsend']",
 		fake.lastWIFProviderConfig.AttributeCondition)
 
 	// ROLE_APP_IDS should preserve existing-org's entries and add new-org's.

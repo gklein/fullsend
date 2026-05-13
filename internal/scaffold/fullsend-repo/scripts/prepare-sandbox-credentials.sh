@@ -32,16 +32,11 @@ if [[ "$CRED_TYPE" == "external_account" ]]; then
 
   SANDBOX_CREDS="$RUNNER_TEMP/sandbox-gcp-credentials.json"
   jq '{
-    type: .type,
-    audience: .audience,
-    subject_token_type: .subject_token_type,
-    token_url: .token_url,
-    service_account_impersonation_url: .service_account_impersonation_url,
-    credential_source: {
-      file: "/tmp/workspace/.gcp-oidc-token",
-      format: .credential_source.format
-    }
-  }' "$CRED_CONFIG" > "$SANDBOX_CREDS"
+    type, audience, subject_token_type, token_url,
+    credential_source: { file: "/tmp/workspace/.gcp-oidc-token", format: .credential_source.format }
+  } + (if .service_account_impersonation_url then
+    {service_account_impersonation_url}
+  else {} end)' "$CRED_CONFIG" > "$SANDBOX_CREDS"
 
   OIDC_AUTH_FILE="$RUNNER_TEMP/gcp-oidc-auth"
   printf '%s' "$OIDC_AUTH" > "$OIDC_AUTH_FILE"

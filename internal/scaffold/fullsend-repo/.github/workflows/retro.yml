@@ -57,10 +57,8 @@ jobs:
       - name: Setup GCP and prepare credentials
         uses: ./.github/actions/setup-gcp
         with:
-          gcp_auth_mode: ${{ vars.FULLSEND_GCP_AUTH_MODE }}
           gcp_wif_provider: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}
-          gcp_wif_sa_email: ${{ secrets.FULLSEND_GCP_WIF_SA_EMAIL }}
-          gcp_sa_key_json: ${{ secrets.FULLSEND_GCP_SA_KEY_JSON }}
+          gcp_project_id: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}
 
       - name: Setup agent environment
         env:

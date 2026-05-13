@@ -3,7 +3,6 @@ package cli
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -96,10 +95,7 @@ func newInstallCmd() *cobra.Command {
 	var enrollNoneFlag bool
 	var gcpProject string
 	var gcpRegion string
-	var gcpServiceAccount string
-	var gcpCredentialsFile string
 	var gcpWIFProvider string
-	var gcpWIFSAEmail string
 	var mintProvider string
 	var mintProject string
 	var mintRegion string
@@ -156,57 +152,26 @@ func newInstallCmd() *cobra.Command {
 			}
 
 			// Validate GCP flag dependencies.
-			if gcpProject == "" && (gcpServiceAccount != "" || gcpCredentialsFile != "" || gcpRegion != "" || gcpWIFProvider != "" || gcpWIFSAEmail != "") {
-				return fmt.Errorf("--gcp-service-account, --gcp-credentials-file, --gcp-wif-provider, --gcp-wif-sa-email, and --gcp-region require --gcp-project to be set")
+			if gcpProject == "" && (gcpRegion != "" || gcpWIFProvider != "") {
+				return fmt.Errorf("--gcp-wif-provider and --gcp-region require --gcp-project to be set")
 			}
 			if gcpProject != "" && gcpRegion == "" {
 				return fmt.Errorf("--gcp-region is required when --gcp-project is set")
 			}
-			if gcpWIFProvider != "" && gcpCredentialsFile != "" {
-				return fmt.Errorf("--gcp-wif-provider and --gcp-credentials-file are mutually exclusive: use WIF or SA key, not both")
-			}
-			if gcpWIFProvider != "" && gcpServiceAccount != "" {
-				return fmt.Errorf("--gcp-wif-provider and --gcp-service-account are mutually exclusive")
-			}
-			if (gcpWIFProvider != "") != (gcpWIFSAEmail != "") {
-				return fmt.Errorf("--gcp-wif-provider and --gcp-wif-sa-email must be provided together")
+			if gcpProject != "" && gcpWIFProvider == "" {
+				return fmt.Errorf("--gcp-wif-provider is required when --gcp-project is set")
 			}
 
 			// Build inference provider from GCP flags.
 			var inferenceProvider inference.Provider
 			var inferenceProviderName string
 			if gcpProject != "" {
-				vcfg := vertex.Config{ProjectID: gcpProject, Region: gcpRegion}
-				if gcpWIFProvider != "" {
-					vcfg.Mode = vertex.AuthModeWIF
-					vcfg.WIFProvider = gcpWIFProvider
-					vcfg.WIFServiceAccount = gcpWIFSAEmail
-				} else {
-					vcfg.ServiceAccountName = gcpServiceAccount
-					if gcpCredentialsFile != "" {
-						info, statErr := os.Lstat(gcpCredentialsFile)
-						if statErr != nil {
-							return fmt.Errorf("checking credentials file: %w", statErr)
-						}
-						if !info.Mode().IsRegular() {
-							return fmt.Errorf("credentials file %s must be a regular file", gcpCredentialsFile)
-						}
-						credData, readErr := os.ReadFile(gcpCredentialsFile)
-						if readErr != nil {
-							return fmt.Errorf("reading credentials file: %w", readErr)
-						}
-						defer func() {
-							for i := range credData {
-								credData[i] = 0
-							}
-						}()
-						if err := validateCredentialJSON(credData); err != nil {
-							return err
-						}
-						vcfg.CredentialJSON = credData
-					}
+				vcfg := vertex.Config{
+					ProjectID:   gcpProject,
+					Region:      gcpRegion,
+					WIFProvider: gcpWIFProvider,
 				}
-				inferenceProvider = vertex.New(vcfg, vertex.NewLiveGCPClient())
+				inferenceProvider = vertex.New(vcfg)
 				inferenceProviderName = "vertex"
 			} else {
 				// Preserve existing inference config if no GCP flags provided.
@@ -289,10 +254,7 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&enrollNoneFlag, "enroll-none", false, "skip repository enrollment without prompting")
 	cmd.Flags().StringVar(&gcpProject, "gcp-project", "", "GCP project ID for Vertex AI inference")
 	cmd.Flags().StringVar(&gcpRegion, "gcp-region", "", "GCP region for Vertex AI (e.g. global, required with --gcp-project)")
-	cmd.Flags().StringVar(&gcpServiceAccount, "gcp-service-account", "", "existing GCP service account name (optional, used with --gcp-project)")
-	cmd.Flags().StringVar(&gcpCredentialsFile, "gcp-credentials-file", "", "path to pre-made GCP service account key JSON (optional, used with --gcp-project)")
 	cmd.Flags().StringVar(&gcpWIFProvider, "gcp-wif-provider", "", "full Workload Identity Federation provider resource name (e.g. projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER)")
-	cmd.Flags().StringVar(&gcpWIFSAEmail, "gcp-wif-sa-email", "", "GCP service account email for WIF impersonation (required with --gcp-wif-provider)")
 	cmd.Flags().StringVar(&mintProvider, "mint-provider", "gcf", "token mint provider (gcf)")
 	cmd.Flags().StringVar(&mintProject, "mint-project", "", "cloud project for token mint (e.g. GCP project ID)")
 	cmd.Flags().StringVar(&mintRegion, "mint-region", "us-central1", "cloud region for token mint")
@@ -908,17 +870,10 @@ func runAnalyze(ctx context.Context, client forge.Client, printer *ui.Printer, o
 		return fmt.Errorf("getting authenticated user: %w", err)
 	}
 
-	// Detect inference provider and auth mode from existing config.
+	// Detect inference provider from existing config.
 	var inferenceProvider inference.Provider
 	if providerName := loadExistingInferenceProvider(ctx, client, org); providerName != "" {
-		mode := vertex.AuthModeSAKey
-		wifExists, err := client.RepoSecretExists(ctx, org, forge.ConfigRepoName, vertex.SecretWIFProvider)
-		if err != nil {
-			printer.StepWarn(fmt.Sprintf("Could not check WIF secret: %v (defaulting to SA key mode)", err))
-		} else if wifExists {
-			mode = vertex.AuthModeWIF
-		}
-		inferenceProvider = vertex.NewAnalyzeOnly(mode)
+		inferenceProvider = vertex.NewAnalyzeOnly()
 	}
 
 	dispatcher := gcf.NewProvisioner(gcf.Config{}, nil)
@@ -1128,22 +1083,6 @@ func loadExistingEnabledRepos(ctx context.Context, client forge.Client, org stri
 	}
 	return cfg.EnabledRepos()
 }
-
-// validateCredentialJSON checks that raw bytes look like a GCP service account key.
-func validateCredentialJSON(data []byte) error {
-	var keyFile struct {
-		Type      string `json:"type"`
-		ProjectID string `json:"project_id"`
-	}
-	if err := json.Unmarshal(data, &keyFile); err != nil {
-		return fmt.Errorf("credentials file is not valid JSON: %w", err)
-	}
-	if keyFile.Type != "service_account" {
-		return fmt.Errorf("credentials file type is %q, expected \"service_account\"", keyFile.Type)
-	}
-	return nil
-}
-
 // loadKnownSlugs tries to read agent slugs from an existing config.
 func loadKnownSlugs(ctx context.Context, client forge.Client, org string) map[string]string {
 	data, err := client.GetFileContent(ctx, org, forge.ConfigRepoName, "config.yaml")

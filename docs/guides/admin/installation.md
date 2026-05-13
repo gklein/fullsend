@@ -36,31 +36,14 @@ The `--gcp-region` flag is required when `--gcp-project` is set. Use `global` fo
 
 ## 1. Set up GCP authentication
 
-Fullsend supports two methods for authenticating to Vertex AI. **Workload Identity Federation (WIF) is recommended** — it eliminates long-lived credentials entirely.
+Fullsend uses [Workload Identity Federation (WIF)](https://cloud.google.com/iam/docs/workload-identity-federation) to authenticate GitHub Actions to Vertex AI. WIF eliminates long-lived credentials — GitHub Actions exchange short-lived OIDC tokens for GCP access tokens. See the [google-github-actions/auth documentation](https://github.com/google-github-actions/auth#direct-workload-identity-federation) for background on direct WIF.
 
-### Option A: Workload Identity Federation (recommended)
-
-WIF lets GitHub Actions exchange short-lived OIDC tokens for GCP access tokens. No service account keys are stored.
-
-**1a. Create a service account**
+**1a. Create a Workload Identity Pool and OIDC Provider**
 
 ```bash
 export GCP_PROJECT="<gcp-project>"
 export ORG_NAME="<org-name>"
 
-gcloud iam service-accounts create fullsend-agent \
-  --display-name="Fullsend agent inference" \
-  --project="$GCP_PROJECT"
-
-gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
-  --member="serviceAccount:fullsend-agent@$GCP_PROJECT.iam.gserviceaccount.com" \
-  --role="roles/aiplatform.user" \
-  --condition=None
-```
-
-**1b. Create a Workload Identity Pool and OIDC Provider**
-
-```bash
 gcloud iam workload-identity-pools create github-actions \
   --location=global \
   --display-name="GitHub Actions" \
@@ -71,65 +54,28 @@ gcloud iam workload-identity-pools providers create-oidc github \
   --workload-identity-pool=github-actions \
   --issuer-uri="https://token.actions.githubusercontent.com" \
   --attribute-mapping="google.subject=assertion.sub,attribute.repository_owner=assertion.repository_owner,attribute.repository=assertion.repository" \
-  --attribute-condition="assertion.repository_owner == '$ORG_NAME'" \
+  --attribute-condition="assertion.repository == '$ORG_NAME/.fullsend'" \
   --project="$GCP_PROJECT"
 ```
 
-The `attribute-condition` restricts which GitHub Actions workflows can exchange OIDC tokens for GCP credentials.
+The `attribute-condition` restricts which GitHub Actions workflows can exchange OIDC tokens for GCP credentials. Scoping to `$ORG_NAME/.fullsend` ensures only the `.fullsend` config repo can authenticate — workflows in other repos cannot obtain Vertex AI credentials.
 
-- **Org-wide** (`repository_owner`): any repo in the org can authenticate. Simpler to maintain but means a compromised or misconfigured workflow in *any* repo could obtain Vertex AI credentials.
-- **Repo-scoped** (`repository`): only the `.fullsend` repo can authenticate. Limits blast radius — recommended for orgs where not all repos are equally trusted.
-
-For repo-scoped access, replace the `attribute-condition` above with:
-
-```bash
---attribute-condition="assertion.repository == '$ORG_NAME/.fullsend'"
-```
-
-If you choose repo-scoped access, also update the `--member` in step 1c to match:
-
-```bash
---member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions/attribute.repository/$ORG_NAME/.fullsend"
-```
-
-**1c. Grant the service account impersonation permission**
+**1b. Grant Vertex AI access to the WIF principal**
 
 ```bash
 export PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
+export WIF_PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions/attribute.repository/$ORG_NAME/.fullsend"
 
-gcloud iam service-accounts add-iam-policy-binding \
-  "fullsend-agent@$GCP_PROJECT.iam.gserviceaccount.com" \
-  --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions/attribute.repository_owner/$ORG_NAME" \
-  --project="$GCP_PROJECT"
+gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+  --role="roles/aiplatform.user" \
+  --member="$WIF_PRINCIPAL" \
+  --condition=None
 ```
 
-**1d. Note the WIF provider resource name**
+**1c. Note the WIF provider resource name**
 
 ```bash
 export WIF_PROVIDER="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions/providers/github"
-export WIF_SA_EMAIL="fullsend-agent@$GCP_PROJECT.iam.gserviceaccount.com"
-```
-
-### Option B: Service account key (legacy)
-
-Create a service account with the `Vertex AI User` role and download its key:
-
-```bash
-export GCP_PROJECT="<gcp-project>"
-export ORG_NAME="<org-name>"
-
-gcloud iam service-accounts create "$ORG_NAME" \
-  --display-name="Fullsend for $ORG_NAME" \
-  --project="$GCP_PROJECT"
-
-gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
-  --member="serviceAccount:$ORG_NAME@$GCP_PROJECT.iam.gserviceaccount.com" \
-  --role="roles/aiplatform.user" \
-  --condition=None
-
-gcloud iam service-accounts keys create sa-key.json \
-  --iam-account="$ORG_NAME@$GCP_PROJECT.iam.gserviceaccount.com"
 ```
 
 ## 2. Run the installer
@@ -151,11 +97,10 @@ fullsend admin install "$ORG_NAME" \
   --gcp-project "$GCP_PROJECT" \
   --gcp-region global \
   --gcp-wif-provider "$WIF_PROVIDER" \
-  --gcp-wif-sa-email "$WIF_SA_EMAIL" \
   --mint-project "$GCP_PROJECT"
 ```
 
-`--mint-project` specifies the GCP project where the OIDC token mint Cloud Function is deployed. It can be the same project as `--gcp-project` or a separate project. The installer automatically provisions a Cloud Function, WIF pool (`fullsend-pool`), WIF provider (`github-oidc`), and Secret Manager secrets in the mint project. A service account (`fullsend-dispatch`) is also created as the Cloud Function's runtime identity to access Secret Manager — this is internal infrastructure and does not require any admin setup.
+`--mint-project` specifies the GCP project where the OIDC token mint Cloud Function is deployed. It can be the same project as `--gcp-project` or a separate project. The installer automatically provisions a Cloud Function, WIF pool (`fullsend-pool`), WIF provider (`github-oidc`), and Secret Manager secrets in the mint project. A service account (`fullsend-mint`) is also created as the Cloud Function's runtime identity to access Secret Manager — this is internal infrastructure and does not require any admin setup.
 
 Additional mint flags:
 
@@ -180,7 +125,6 @@ fullsend admin install "$FIRST_ORG" \
   --gcp-project "$GCP_PROJECT" \
   --gcp-region global \
   --gcp-wif-provider "$WIF_PROVIDER" \
-  --gcp-wif-sa-email "$WIF_SA_EMAIL" \
   --mint-project "$GCP_PROJECT" \
   --public
 ```
@@ -194,43 +138,12 @@ fullsend admin install "$ADDITIONAL_ORG" \
   --gcp-project "$GCP_PROJECT" \
   --gcp-region global \
   --gcp-wif-provider "$WIF_PROVIDER" \
-  --gcp-wif-sa-email "$WIF_SA_EMAIL" \
   --mint-url "$MINT_URL"
 ```
 
 `--mint-url` skips Cloud Function deployment and stores PEMs in the existing mint's GCP project. PEMs use org-scoped naming (`fullsend-{org}--{role}-app-pem`), so each org's secrets are stored independently. For public apps (shared across orgs), the provisioner stores the same PEM under each org's scoped key.
 
 > **Note:** Multi-org with `--public` requires all orgs to share the same GitHub Apps. Private apps (the default) are single-org only.
-
-**With SA key (legacy):**
-
-```bash
-fullsend admin install "$ORG_NAME" \
-  --gcp-project "$GCP_PROJECT" \
-  --gcp-region global \
-  --gcp-credentials-file sa-key.json \
-  --mint-project "$GCP_PROJECT"
-rm sa-key.json
-```
-
-### Migrating from SA key to WIF
-
-If you already have fullsend installed with a service account key:
-
-1. Create the WIF resources (steps 1a–1d in Option A above)
-2. Re-run the installer with WIF flags (the installer updates secrets in-place):
-   ```bash
-   fullsend admin install "$ORG_NAME" \
-     --skip-app-setup \
-     --gcp-project "$GCP_PROJECT" \
-     --gcp-region global \
-     --gcp-wif-provider "$WIF_PROVIDER" \
-     --gcp-wif-sa-email "$WIF_SA_EMAIL" \
-     --mint-project "$GCP_PROJECT"
-   ```
-3. Verify a workflow run succeeds with WIF auth (check for "Authenticated using Workload Identity Federation" in the auth step output)
-4. Delete the old SA key: `gcloud iam service-accounts keys delete <KEY_ID> --iam-account=...`
-5. Remove the `FULLSEND_GCP_SA_KEY_JSON` secret from the `.fullsend` repo settings once the scaffolded agent workflows have been updated to use WIF (re-running `fullsend admin install` with `--skip-app-setup` updates the workflows)
 
 ## 3. Merge enrollment PRs
 
