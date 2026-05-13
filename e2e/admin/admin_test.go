@@ -831,7 +831,7 @@ func buildTestLayerStack(
 ) *layers.Stack {
 	return layers.NewStack(
 		layers.NewConfigRepoLayer(org, client, cfg, printer, hasPrivate),
-		layers.NewWorkflowsLayer(org, client, printer, user, ""),
+		layers.NewWorkflowsLayer(org, client, printer, user),
 		layers.NewSecretsLayer(org, client, agentCreds, printer).WithOIDCMode(),
 		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
 		layers.NewOIDCDispatchLayer(org, client, enrolledRepoIDs, &e2eDispatcher{}, printer),
