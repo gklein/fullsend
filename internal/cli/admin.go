@@ -454,6 +454,13 @@ func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, or
 	// when the called repo is public, across all GitHub plan tiers.
 	privateRepo := false
 
+	// When enabledRepos is nil the user chose not to modify enrollment.
+	// Preserve existing enrollment so the dry-run analysis is accurate.
+	// See #861.
+	if enabledRepos == nil {
+		enabledRepos = loadExistingEnabledRepos(ctx, client, org)
+	}
+
 	// Validate that every enabled repository matches a discovered repo.
 	if err := validateEnabledRepos(enabledRepos, repoNames); err != nil {
 		return err
@@ -646,6 +653,14 @@ func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, o
 
 	privateRepo := false
 	printer.Blank()
+
+	// When enabledRepos is nil the user chose not to modify enrollment.
+	// Preserve existing enrollment from the current config.yaml so that
+	// re-running install without repo selection does not unenroll everything.
+	// See #861.
+	if enabledRepos == nil {
+		enabledRepos = loadExistingEnabledRepos(ctx, client, org)
+	}
 
 	// Validate that every enabled repository matches a discovered repo.
 	if err := validateEnabledRepos(enabledRepos, repoNames); err != nil {
@@ -935,6 +950,16 @@ func buildLayerStack(
 ) *layers.Stack {
 	dispatchLayer := layers.NewOIDCDispatchLayer(org, client, enrolledRepoIDs, dispatcher, printer)
 
+	// When enabledRepos is nil the caller chose not to modify enrollment
+	// (e.g. --enroll-none or the user answered "n" at the prompt). In that
+	// case we must also suppress the disabled-repos list so the enrollment
+	// layer becomes a no-op instead of creating unenrollment PRs for every
+	// previously enrolled repo. See #861.
+	var disabledRepos []string
+	if enabledRepos != nil {
+		disabledRepos = cfg.DisabledRepos()
+	}
+
 	return layers.NewStack(
 		layers.NewConfigRepoLayer(org, client, cfg, printer, privateRepo),
 		layers.NewWorkflowsLayer(org, client, printer, user, version),
@@ -942,7 +967,7 @@ func buildLayerStack(
 		layers.NewSecretsLayer(org, client, agentCreds, printer).WithOIDCMode(),
 		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
 		dispatchLayer,
-		layers.NewEnrollmentLayer(org, client, enabledRepos, cfg.DisabledRepos(), printer),
+		layers.NewEnrollmentLayer(org, client, enabledRepos, disabledRepos, printer),
 	)
 }
 
@@ -1087,6 +1112,21 @@ func loadExistingInferenceProvider(ctx context.Context, client forge.Client, org
 		return ""
 	}
 	return cfg.Inference.Provider
+}
+
+// loadExistingEnabledRepos reads the enabled repos list from an existing
+// config.yaml in .fullsend, if available. This prevents re-installs
+// without repo selection from silently unenrolling all repos. See #861.
+func loadExistingEnabledRepos(ctx context.Context, client forge.Client, org string) []string {
+	data, err := client.GetFileContent(ctx, org, forge.ConfigRepoName, "config.yaml")
+	if err != nil {
+		return nil
+	}
+	cfg, err := config.ParseOrgConfig(data)
+	if err != nil {
+		return nil
+	}
+	return cfg.EnabledRepos()
 }
 
 // validateCredentialJSON checks that raw bytes look like a GCP service account key.
