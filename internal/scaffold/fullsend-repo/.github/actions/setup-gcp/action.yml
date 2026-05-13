@@ -8,6 +8,9 @@ inputs:
   gcp_wif_provider:
     description: 'Workload Identity Federation provider (required if gcp_auth_mode is "wif")'
     required: false
+  gcp_project_id:
+    description: 'GCP project ID — passed to google-github-actions/auth so the runner env has GOOGLE_CLOUD_PROJECT for direct WIF'
+    required: false
   gcp_sa_key_json:
     description: 'Service account key JSON (required if gcp_auth_mode is not "wif")'
     required: false
@@ -24,6 +27,7 @@ runs:
       uses: google-github-actions/auth@v3
       with:
         workload_identity_provider: ${{ inputs.gcp_wif_provider }}
+        project_id: ${{ inputs.gcp_project_id }}
 
     - name: Authenticate to Google Cloud (SA key)
       if: inputs.gcp_auth_mode != 'wif'
