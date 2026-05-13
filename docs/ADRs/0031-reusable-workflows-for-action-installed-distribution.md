@@ -82,10 +82,10 @@ the upstream repo, not the caller's repo. This is why the four composite actions
 must live upstream. `run:` steps execute in the caller's workspace, so scripts
 in `.fullsend/scripts/` remain accessible.
 
-`dispatch.yml` stays unchanged — thin callers retain `# fullsend-stage:`
-markers, so stage-based dispatch
-([ADR 0026](0026-stage-based-dispatch-for-agent-workflow-decoupling.md))
-continues to work without modification.
+`dispatch.yml` is enhanced with centralized routing logic
+([ADR 0034](0034-centralized-shim-routing-via-dispatch.md)). Thin callers
+retain `# fullsend-stage:` markers so dispatch can route events to the correct
+agent workflow.
 
 The dispatch chain uses 1 level of `workflow_call` nesting (limit is 4):
 
