@@ -329,7 +329,7 @@ See [ADR 0003](ADRs/0003-org-config-repo-convention.md) for the config repo conv
 
 - Layered content resolution: upstream defaults (agents, skills, schemas,
   harness, policies, scripts) are provided at runtime via reusable workflow
-  sparse-checkout of `fullsend-ai/fullsend@v1`. The scaffold installs only
+  sparse-checkout of `fullsend-ai/fullsend@v0`. The scaffold installs only
   org-specific files and a `customized/` directory for org overrides. Org files
   in `customized/` overwrite upstream defaults at runtime
   ([ADR 0035](ADRs/0035-layered-content-resolution.md)).

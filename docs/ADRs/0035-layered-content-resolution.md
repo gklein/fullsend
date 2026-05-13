@@ -49,7 +49,7 @@ populated at runtime from upstream.
 
 **B. Runtime layering via reusable workflows.** Each reusable workflow adds a
 "Prepare workspace" step that sparse-checkouts upstream defaults from
-`fullsend-ai/fullsend@v1`, copies them into the main dirs (`agents/`, `skills/`,
+`fullsend-ai/fullsend@v0`, copies them into the main dirs (`agents/`, `skills/`,
 etc.), then copies `customized/*` on top so org files overwrite upstream
 defaults. The harness sees a single flat workspace — no changes to
 `ResolveRelativeTo()` or `--fullsend-dir`.
