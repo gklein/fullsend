@@ -34,9 +34,9 @@ The table below lists every scope the installer may request and why. You are nev
 
 The `--gcp-region` flag is required when `--gcp-project` is set. Use `global` for the broadest model availability. For a list of all available regions, see the [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions).
 
-## 1. Set up GCP authentication
+## 1. Set up inference authentication with GCP Agent Platform
 
-Fullsend uses [Workload Identity Federation (WIF)](https://cloud.google.com/iam/docs/workload-identity-federation) to authenticate GitHub Actions to Vertex AI. WIF eliminates long-lived credentials — GitHub Actions exchange short-lived OIDC tokens for GCP access tokens. See the [google-github-actions/auth documentation](https://github.com/google-github-actions/auth#direct-workload-identity-federation) for background on direct WIF.
+Fullsend uses [Workload Identity Federation (WIF)](https://cloud.google.com/iam/docs/workload-identity-federation) to authenticate GitHub Actions to [GCP Agent Platform](https://cloud.google.com/products/agent-platform) (formerly Vertex AI). WIF eliminates long-lived credentials — GitHub Actions exchange short-lived OIDC tokens for GCP access tokens. See the [google-github-actions/auth documentation](https://github.com/google-github-actions/auth#direct-workload-identity-federation) for background on direct WIF.
 
 **1a. Create a Workload Identity Pool and OIDC Provider**
 
@@ -72,6 +72,8 @@ gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --condition=None
 ```
 
+> **Note:** IAM policy bindings may take several minutes to propagate. If the agent workflow fails with a permission error immediately after setup, wait a few minutes and retry.
+
 **1c. Note the WIF provider resource name**
 
 ```bash
@@ -89,8 +91,6 @@ During installation, you'll be prompted to choose repository enrollment:
 The installer creates the `.fullsend` config repo as **public** by default. This is required for cross-repo `workflow_call` to work with enrolled repos of any visibility (public, private, or internal) across all GitHub plan tiers. If an admin later makes `.fullsend` private, only other private repos in the org will be able to trigger agent workflows — public and internal repos will fail silently.
 
 If the installer fails partway through, run `fullsend admin uninstall "$ORG_NAME"` to clean up before retrying. The uninstall preflight will prompt you to add the `delete_repo` scope if it is missing.
-
-**With WIF (recommended):**
 
 ```bash
 fullsend admin install "$ORG_NAME" \
