@@ -415,6 +415,7 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 
 	// Step 4b: Grant Vertex AI access to each installing org's .fullsend repo
 	// at the project level (direct WIF — no intermediate service account).
+	// IAM policy changes can take up to 7 minutes to propagate.
 	for _, org := range installingOrgs {
 		principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository/%s/.fullsend",
 			projectNumber, p.cfg.WIFPoolName, org)
@@ -422,6 +423,7 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 			return nil, fmt.Errorf("granting Vertex AI access for org %s: %w", org, err)
 		}
 	}
+	log.Printf("granted roles/aiplatform.user to %d org(s) (propagation may take several minutes)", len(installingOrgs))
 
 	// Step 5a: Store new agent PEMs only for installing orgs.
 	for _, org := range installingOrgs {
@@ -741,26 +743,26 @@ func (p *Provisioner) waitForReady(ctx context.Context, mintURL string) error {
 // principal binding) needed for GitHub Actions to authenticate via OIDC.
 // All operations are idempotent. Returns the full WIF provider resource path
 // and service account email.
-func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider, saEmail string, err error) {
+func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err error) {
 	if p.cfg.ProjectID == "" {
-		return "", "", fmt.Errorf("GCP project ID is required")
+		return "", fmt.Errorf("GCP project ID is required")
 	}
 	if !gcpProjectIDPattern.MatchString(p.cfg.ProjectID) {
-		return "", "", fmt.Errorf("invalid GCP project ID: %q", p.cfg.ProjectID)
+		return "", fmt.Errorf("invalid GCP project ID: %q", p.cfg.ProjectID)
 	}
 	if len(p.cfg.GitHubOrgs) == 0 {
-		return "", "", fmt.Errorf("at least one GitHub org is required")
+		return "", fmt.Errorf("at least one GitHub org is required")
 	}
 
 	orgs := make([]string, len(p.cfg.GitHubOrgs))
 	seen := make(map[string]bool)
 	for i, org := range p.cfg.GitHubOrgs {
 		if !githubOrgPattern.MatchString(org) {
-			return "", "", fmt.Errorf("invalid GitHub org name: %q", org)
+			return "", fmt.Errorf("invalid GitHub org name: %q", org)
 		}
 		lower := strings.ToLower(org)
 		if seen[lower] {
-			return "", "", fmt.Errorf("duplicate GitHub org after normalization: %q", org)
+			return "", fmt.Errorf("duplicate GitHub org after normalization: %q", org)
 		}
 		seen[lower] = true
 		orgs[i] = lower
@@ -768,15 +770,11 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider, saEmail st
 
 	projectNumber, err := p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
 	if err != nil {
-		return "", "", fmt.Errorf("getting project number: %w", err)
-	}
-
-	if err := p.gcpAPI.CreateServiceAccount(ctx, p.cfg.ProjectID, saName, "Fullsend token mint service account"); err != nil {
-		return "", "", fmt.Errorf("creating service account: %w", err)
+		return "", fmt.Errorf("getting project number: %w", err)
 	}
 
 	if err := p.gcpAPI.CreateWIFPool(ctx, projectNumber, p.cfg.WIFPoolName, "Fullsend GitHub OIDC Pool"); err != nil {
-		return "", "", fmt.Errorf("creating WIF pool: %w", err)
+		return "", fmt.Errorf("creating WIF pool: %w", err)
 	}
 
 	var attrCondition string
@@ -794,30 +792,33 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider, saEmail st
 		AttributeCondition: attrCondition,
 		AllowedAudiences:   audiences,
 	}); err != nil {
-		return "", "", fmt.Errorf("creating WIF provider: %w", err)
+		return "", fmt.Errorf("creating WIF provider: %w", err)
 	}
 
-	saEmail = fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, p.cfg.ProjectID)
+	// IAM policy changes can take up to 7 minutes to propagate.
+	// Workflows that rely on these bindings may fail during that window.
 	if p.cfg.Repo != "" {
 		principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository/%s",
 			projectNumber, p.cfg.WIFPoolName, p.cfg.Repo)
-		if err := p.gcpAPI.SetServiceAccountIAMBinding(ctx, p.cfg.ProjectID, saEmail, principal, "roles/iam.workloadIdentityUser"); err != nil {
-			return "", "", fmt.Errorf("binding WIF principal for repo %s: %w", p.cfg.Repo, err)
+		if err := p.gcpAPI.SetProjectIAMBinding(ctx, p.cfg.ProjectID, principal, "roles/aiplatform.user"); err != nil {
+			return "", fmt.Errorf("granting Vertex AI access for repo %s: %w", p.cfg.Repo, err)
 		}
+		log.Printf("granted roles/aiplatform.user to %s (propagation may take several minutes)", p.cfg.Repo)
 	} else {
 		for _, org := range orgs {
-			principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository_owner/%s",
+			principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository/%s/.fullsend",
 				projectNumber, p.cfg.WIFPoolName, org)
-			if err := p.gcpAPI.SetServiceAccountIAMBinding(ctx, p.cfg.ProjectID, saEmail, principal, "roles/iam.workloadIdentityUser"); err != nil {
-				return "", "", fmt.Errorf("binding WIF principal for org %s to service account: %w", org, err)
+			if err := p.gcpAPI.SetProjectIAMBinding(ctx, p.cfg.ProjectID, principal, "roles/aiplatform.user"); err != nil {
+				return "", fmt.Errorf("granting Vertex AI access for org %s: %w", org, err)
 			}
 		}
+		log.Printf("granted roles/aiplatform.user to %d org(s) (propagation may take several minutes)", len(orgs))
 	}
 
 	wifProvider = fmt.Sprintf("projects/%s/locations/global/workloadIdentityPools/%s/providers/%s",
 		projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)
 
-	return wifProvider, saEmail, nil
+	return wifProvider, nil
 }
 
 func (p *Provisioner) zeroPEMs() {

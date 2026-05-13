@@ -45,12 +45,9 @@ jobs:
       event_action: ${{ github.event.action }}
       install_mode: per-repo
       mint_url: ${{ vars.FULLSEND_MINT_URL }}
-      gcp_auth_mode: ${{ vars.FULLSEND_GCP_AUTH_MODE || 'sa_key' }}
       gcp_region: ${{ vars.FULLSEND_GCP_REGION }}
     secrets:
       FULLSEND_GCP_WIF_PROVIDER: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}
-      FULLSEND_GCP_WIF_SA_EMAIL: ${{ secrets.FULLSEND_GCP_WIF_SA_EMAIL }}
-      FULLSEND_GCP_SA_KEY_JSON: ${{ secrets.FULLSEND_GCP_SA_KEY_JSON }}
       FULLSEND_GCP_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}
 
   stop-fix:

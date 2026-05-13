@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -86,9 +85,9 @@ func TestInstallCmd_Flags(t *testing.T) {
 	mintURLFlag := cmd.Flags().Lookup("mint-url")
 	require.NotNil(t, mintURLFlag, "expected --mint-url flag")
 
+	// --gcp-auth-mode removed (WIF is the only mode)
 	gcpAuthModeFlag := cmd.Flags().Lookup("gcp-auth-mode")
-	require.NotNil(t, gcpAuthModeFlag, "expected --gcp-auth-mode flag")
-	assert.Equal(t, "sa_key", gcpAuthModeFlag.DefValue)
+	assert.Nil(t, gcpAuthModeFlag, "--gcp-auth-mode flag should have been removed")
 
 	scaffoldCustomizedFlag := cmd.Flags().Lookup("scaffold-customized")
 	require.NotNil(t, scaffoldCustomizedFlag, "expected --scaffold-customized flag")
@@ -127,14 +126,6 @@ func TestInstallCmd_PerRepoRejectsMultiSlash(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid repo name")
 }
 
-func TestInstallCmd_PerRepoRejectsInvalidGCPAuthMode(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com", "--gcp-region", "us-central1", "--gcp-auth-mode", "invalid"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid --gcp-auth-mode")
-}
-
 func TestInstallCmd_PerRepoRejectsNonHTTPSMintURL(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "http://mint.example.com", "--gcp-region", "us-central1"})
@@ -163,91 +154,10 @@ func TestInstallCmd_PerRepoRequiresGCPProject(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "acme/widget",
 		"--mint-url", "https://mint.example.com",
-		"--gcp-region", "us-central1",
-		"--gcp-credentials-file", "/nonexistent/key.json"})
+		"--gcp-region", "us-central1"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--gcp-project is required for per-repo installation")
-}
-
-func TestInstallCmd_PerRepoSAKeyRequiresCredentialsFile(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget",
-		"--mint-url", "https://mint.example.com",
-		"--gcp-region", "us-central1",
-		"--gcp-project", "my-project"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--gcp-credentials-file is required when --gcp-auth-mode is 'sa_key'")
-}
-
-func TestInstallCmd_PerRepoWIFRejectsMismatchedFlags(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-	}{
-		{
-			"provider without sa-email",
-			[]string{"admin", "install", "acme/widget",
-				"--mint-url", "https://mint.example.com",
-				"--gcp-region", "us-central1",
-				"--gcp-project", "my-project",
-				"--gcp-auth-mode", "wif",
-				"--gcp-wif-provider", "projects/123/locations/global/workloadIdentityPools/pool/providers/prov"},
-		},
-		{
-			"sa-email without provider",
-			[]string{"admin", "install", "acme/widget",
-				"--mint-url", "https://mint.example.com",
-				"--gcp-region", "us-central1",
-				"--gcp-project", "my-project",
-				"--gcp-auth-mode", "wif",
-				"--gcp-wif-sa-email", "sa@project.iam.gserviceaccount.com"},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cmd := newRootCmd()
-			cmd.SetArgs(tc.args)
-			err := cmd.Execute()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "--gcp-wif-provider and --gcp-wif-sa-email must be provided together")
-		})
-	}
-}
-
-func TestInstallCmd_PerRepoRejectsWIFWithCredentialsFile(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget",
-		"--mint-url", "https://mint.example.com",
-		"--gcp-region", "us-central1",
-		"--gcp-project", "my-project",
-		"--gcp-auth-mode", "wif",
-		"--gcp-wif-provider", "projects/123/locations/global/workloadIdentityPools/pool/providers/prov",
-		"--gcp-wif-sa-email", "sa@project.iam.gserviceaccount.com",
-		"--gcp-credentials-file", "/some/key.json"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--gcp-credentials-file cannot be used with --gcp-auth-mode 'wif'")
-}
-
-func TestInstallCmd_PerRepoRejectsSAKeyWithWIFFlags(t *testing.T) {
-	tmpFile, err := os.CreateTemp("", "test-sa-key-*.json")
-	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
-	_, _ = tmpFile.WriteString(`{"type":"service_account"}`)
-	tmpFile.Close()
-
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget",
-		"--mint-url", "https://mint.example.com",
-		"--gcp-region", "us-central1",
-		"--gcp-project", "my-project",
-		"--gcp-credentials-file", tmpFile.Name(),
-		"--gcp-wif-provider", "projects/123/locations/global/workloadIdentityPools/pool/providers/prov"})
-	err = cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--gcp-wif-provider and --gcp-wif-sa-email cannot be used with --gcp-auth-mode 'sa_key'")
 }
 
 func TestParseAgentRoles(t *testing.T) {
@@ -1158,8 +1068,7 @@ func TestInstallCmd_PerRepoRejectsInvalidRole(t *testing.T) {
 		"--agents", "triage,INVALID",
 		"--mint-url", "https://mint.example.com",
 		"--gcp-region", "us-central1",
-		"--gcp-project", "my-project",
-		"--gcp-credentials-file", "/nonexistent"})
+		"--gcp-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid role name")

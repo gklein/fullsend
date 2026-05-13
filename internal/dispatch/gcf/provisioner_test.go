@@ -1372,19 +1372,17 @@ func TestProvisionWIF_HappyPath(t *testing.T) {
 		GitHubOrgs: []string{"acme"},
 	}, fake)
 
-	wifProvider, saEmail, err := p.ProvisionWIF(context.Background())
+	wifProvider, err := p.ProvisionWIF(context.Background())
 	require.NoError(t, err)
 
 	assert.Equal(t, "projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc", wifProvider)
-	assert.Equal(t, "fullsend-dispatch@my-project.iam.gserviceaccount.com", saEmail)
 
 	assert.Contains(t, fake.calls, "GetProjectNumber")
-	assert.Contains(t, fake.calls, "CreateServiceAccount")
 	assert.Contains(t, fake.calls, "CreateWIFPool")
 	assert.Contains(t, fake.calls, "CreateWIFProvider")
-	assert.Contains(t, fake.calls, "SetServiceAccountIAMBinding")
+	assert.Contains(t, fake.calls, "SetProjectIAMBinding")
 
-	assert.Equal(t, "assertion.repository_owner == 'acme'", fake.lastWIFProviderConfig.AttributeCondition)
+	assert.Equal(t, "assertion.repository == 'acme/.fullsend'", fake.lastWIFProviderConfig.AttributeCondition)
 }
 
 func TestProvisionWIF_MissingProjectID(t *testing.T) {
@@ -1393,7 +1391,7 @@ func TestProvisionWIF_MissingProjectID(t *testing.T) {
 		GitHubOrgs: []string{"acme"},
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GCP project ID is required")
 }
@@ -1404,35 +1402,22 @@ func TestProvisionWIF_MissingOrgs(t *testing.T) {
 		ProjectID: "my-project",
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "at least one GitHub org is required")
 }
 
-func TestProvisionWIF_SACreationFails(t *testing.T) {
-	fake := newFakeGCFClient()
-	fake.errs["CreateServiceAccount"] = fmt.Errorf("permission denied")
-	p := NewProvisioner(Config{
-		ProjectID:  "my-project",
-		GitHubOrgs: []string{"acme"},
-	}, fake)
-
-	_, _, err := p.ProvisionWIF(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "creating service account")
-}
-
 func TestProvisionWIF_IAMBindingFails(t *testing.T) {
 	fake := newFakeGCFClient()
-	fake.errs["SetServiceAccountIAMBinding"] = fmt.Errorf("policy error")
+	fake.errs["SetProjectIAMBinding"] = fmt.Errorf("policy error")
 	p := NewProvisioner(Config{
 		ProjectID:  "my-project",
 		GitHubOrgs: []string{"acme"},
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "binding WIF principal for org acme to service account")
+	assert.Contains(t, err.Error(), "granting Vertex AI access for org acme")
 }
 
 func TestProvisionWIF_MultipleOrgs(t *testing.T) {
@@ -1442,13 +1427,13 @@ func TestProvisionWIF_MultipleOrgs(t *testing.T) {
 		GitHubOrgs: []string{"acme", "beta"},
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, "assertion.repository_owner in ['acme', 'beta']", fake.lastWIFProviderConfig.AttributeCondition)
+	assert.Equal(t, "assertion.repository in ['acme/.fullsend', 'beta/.fullsend']", fake.lastWIFProviderConfig.AttributeCondition)
 
-	require.Len(t, fake.saBindingPrincipals, 2)
-	assert.Contains(t, fake.saBindingPrincipals[0], "attribute.repository_owner/acme")
-	assert.Contains(t, fake.saBindingPrincipals[1], "attribute.repository_owner/beta")
+	require.Len(t, fake.projectIAMBindings, 2)
+	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/.fullsend")
+	assert.Contains(t, fake.projectIAMBindings[1].Member, "attribute.repository/beta/.fullsend")
 }
 
 func TestProvisionWIF_GetProjectNumberFails(t *testing.T) {
@@ -1459,7 +1444,7 @@ func TestProvisionWIF_GetProjectNumberFails(t *testing.T) {
 		GitHubOrgs: []string{"acme"},
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "getting project number")
 }
@@ -1472,7 +1457,7 @@ func TestProvisionWIF_CreateWIFPoolFails(t *testing.T) {
 		GitHubOrgs: []string{"acme"},
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating WIF pool")
 }
@@ -1485,7 +1470,7 @@ func TestProvisionWIF_CreateWIFProviderFails(t *testing.T) {
 		GitHubOrgs: []string{"acme"},
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating WIF provider")
 }
@@ -1497,7 +1482,7 @@ func TestProvisionWIF_InvalidOrgName(t *testing.T) {
 		GitHubOrgs: []string{"bad org!"},
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid GitHub org name")
 }
@@ -1509,7 +1494,7 @@ func TestProvisionWIF_DuplicateOrg(t *testing.T) {
 		GitHubOrgs: []string{"acme", "ACME"},
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate GitHub org after normalization")
 }
@@ -1522,7 +1507,7 @@ func TestProvisionWIF_DoesNotMutateInput(t *testing.T) {
 		GitHubOrgs: orgs,
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "ACME", orgs[0], "ProvisionWIF should not mutate the input slice")
 }
@@ -1534,7 +1519,7 @@ func TestProvisionWIF_InvalidProjectID(t *testing.T) {
 		GitHubOrgs: []string{"acme"},
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid GCP project ID")
 }
@@ -1546,9 +1531,9 @@ func TestProvisionWIF_NormalizesOrgCase(t *testing.T) {
 		GitHubOrgs: []string{"ACME"},
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, "assertion.repository_owner == 'acme'", fake.lastWIFProviderConfig.AttributeCondition)
+	assert.Equal(t, "assertion.repository == 'acme/.fullsend'", fake.lastWIFProviderConfig.AttributeCondition)
 }
 
 func TestProvisionWIF_RepoScoped(t *testing.T) {
@@ -1559,16 +1544,15 @@ func TestProvisionWIF_RepoScoped(t *testing.T) {
 		Repo:       "acme/widget",
 	}, fake)
 
-	wifPath, saEmail, err := p.ProvisionWIF(context.Background())
+	wifPath, err := p.ProvisionWIF(context.Background())
 	require.NoError(t, err)
 
 	assert.Equal(t, "gh-acme-widget", fake.lastWIFProviderID)
 	assert.Equal(t, "assertion.repository == 'acme/widget'", fake.lastWIFProviderConfig.AttributeCondition)
 	assert.Contains(t, wifPath, "gh-acme-widget")
-	assert.NotEmpty(t, saEmail)
 
-	require.Len(t, fake.saBindingPrincipals, 1)
-	assert.Contains(t, fake.saBindingPrincipals[0], "attribute.repository/acme/widget")
+	require.Len(t, fake.projectIAMBindings, 1)
+	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/widget")
 
 	assert.NotContains(t, fake.calls, "GetWIFProvider")
 }
@@ -1584,7 +1568,7 @@ func TestProvisionWIF_RepoScoped_DoesNotTouchSharedProvider(t *testing.T) {
 		Repo:       "acme/widget",
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.NoError(t, err)
 
 	assert.Equal(t, "gh-acme-widget", fake.lastWIFProviderID)
@@ -1598,12 +1582,13 @@ func TestProvisionWIF_OrgScoped_Unchanged(t *testing.T) {
 		GitHubOrgs: []string{"acme"},
 	}, fake)
 
-	_, _, err := p.ProvisionWIF(context.Background())
+	_, err := p.ProvisionWIF(context.Background())
 	require.NoError(t, err)
 
 	assert.Equal(t, "github-oidc", fake.lastWIFProviderID)
-	assert.Equal(t, "assertion.repository_owner == 'acme'", fake.lastWIFProviderConfig.AttributeCondition)
-	assert.Contains(t, fake.saBindingPrincipals[0], "attribute.repository_owner/acme")
+	assert.Equal(t, "assertion.repository == 'acme/.fullsend'", fake.lastWIFProviderConfig.AttributeCondition)
+	require.Len(t, fake.projectIAMBindings, 1)
+	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/.fullsend")
 }
 
 func TestBuildRepoProviderID(t *testing.T) {

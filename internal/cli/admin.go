@@ -103,14 +103,13 @@ var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 // perOrgOnlyFlags are flags that only apply to per-org mode.
 var perOrgOnlyFlags = []string{
 	"skip-app-setup", "vendor-fullsend-binary", "enroll-all", "enroll-none",
-	"gcp-service-account",
 	"mint-provider", "mint-project", "mint-region", "mint-source-dir",
 	"skip-mint-deploy", "force-mint-deploy", "public",
 }
 
 // perRepoOnlyFlags are flags that only apply to per-repo mode.
 var perRepoOnlyFlags = []string{
-	"mint-url", "gcp-auth-mode", "scaffold-customized",
+	"mint-url", "scaffold-customized",
 }
 
 // parseAgentRoles splits a comma-separated agents string into a validated role list.
@@ -146,7 +145,6 @@ func newInstallCmd() *cobra.Command {
 	var publicApps bool
 	// Per-repo flags.
 	var mintURL string
-	var gcpAuthMode string
 	var scaffoldCustomized bool
 
 	cmd := &cobra.Command{
@@ -170,8 +168,8 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 						return fmt.Errorf("--%s is only valid for per-org installation (fullsend admin install <org>)", name)
 					}
 				}
-				return runPerRepoInstall(cmd.Context(), arg, agents, mintURL, gcpRegion, gcpAuthMode,
-					gcpProject, gcpCredentialsFile, gcpWIFProvider, gcpWIFSAEmail,
+				return runPerRepoInstall(cmd.Context(), arg, agents, mintURL, gcpRegion,
+					gcpProject, gcpWIFProvider,
 					scaffoldCustomized, dryRun)
 			}
 
@@ -332,8 +330,6 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 	cmd.Flags().BoolVar(&enrollNoneFlag, "enroll-none", false, "skip repository enrollment without prompting")
 	cmd.Flags().StringVar(&gcpProject, "gcp-project", "", "GCP project ID for Vertex AI inference")
 	cmd.Flags().StringVar(&gcpRegion, "gcp-region", "", "GCP region for Vertex AI (e.g. global, required with --gcp-project)")
-	cmd.Flags().StringVar(&gcpServiceAccount, "gcp-service-account", "", "existing GCP service account name (optional, used with --gcp-project)")
-	cmd.Flags().StringVar(&gcpCredentialsFile, "gcp-credentials-file", "", "path to pre-made GCP service account key JSON (optional, used with --gcp-project)")
 	cmd.Flags().StringVar(&gcpWIFProvider, "gcp-wif-provider", "", "full Workload Identity Federation provider resource name (e.g. projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER)")
 	cmd.Flags().StringVar(&mintProvider, "mint-provider", "gcf", "token mint provider (gcf)")
 	cmd.Flags().StringVar(&mintProject, "mint-project", "", "cloud project for token mint (e.g. GCP project ID)")
@@ -344,14 +340,13 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 	cmd.Flags().BoolVar(&publicApps, "public", false, "create public (unlisted) GitHub Apps installable by other orgs")
 	// Per-repo flags.
 	cmd.Flags().StringVar(&mintURL, "mint-url", "", "token mint URL for OIDC token exchange (per-repo mode)")
-	cmd.Flags().StringVar(&gcpAuthMode, "gcp-auth-mode", "sa_key", "GCP authentication mode: wif or sa_key (per-repo mode)")
 	cmd.Flags().BoolVar(&scaffoldCustomized, "scaffold-customized", false, "create .fullsend/customized/ directory structure (per-repo mode)")
 
 	return cmd
 }
 
-func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRegion, gcpAuthMode,
-	gcpProject, gcpCredentialsFile, gcpWIFProvider, gcpWIFSAEmail string,
+func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRegion,
+	gcpProject, gcpWIFProvider string,
 	scaffoldCustomized, dryRun bool) error {
 	if strings.Contains(repoFullName, "://") || strings.HasPrefix(repoFullName, "www.") {
 		return fmt.Errorf("expected owner/repo format, got a URL — use just the owner/repo portion (e.g. acme/widget)")
@@ -382,9 +377,6 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 	if gcpRegion == "" {
 		return fmt.Errorf("--gcp-region is required for per-repo installation")
 	}
-	if gcpAuthMode != "wif" && gcpAuthMode != "sa_key" {
-		return fmt.Errorf("invalid --gcp-auth-mode %q: must be 'wif' or 'sa_key'", gcpAuthMode)
-	}
 	if gcpProject == "" {
 		return fmt.Errorf("--gcp-project is required for per-repo installation")
 	}
@@ -392,46 +384,6 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 	if err != nil {
 		return err
 	}
-
-	if gcpAuthMode == "wif" {
-		if (gcpWIFProvider == "") != (gcpWIFSAEmail == "") {
-			return fmt.Errorf("--gcp-wif-provider and --gcp-wif-sa-email must be provided together")
-		}
-		if gcpCredentialsFile != "" {
-			return fmt.Errorf("--gcp-credentials-file cannot be used with --gcp-auth-mode 'wif'")
-		}
-	} else {
-		if gcpCredentialsFile == "" {
-			return fmt.Errorf("--gcp-credentials-file is required when --gcp-auth-mode is 'sa_key'")
-		}
-		if gcpWIFProvider != "" || gcpWIFSAEmail != "" {
-			return fmt.Errorf("--gcp-wif-provider and --gcp-wif-sa-email cannot be used with --gcp-auth-mode 'sa_key'")
-		}
-	}
-
-	var saKeyJSON []byte
-	if gcpCredentialsFile != "" {
-		info, statErr := os.Lstat(gcpCredentialsFile)
-		if statErr != nil {
-			return fmt.Errorf("checking credentials file: %w", statErr)
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("credentials file %s must be a regular file", gcpCredentialsFile)
-		}
-		data, err := os.ReadFile(gcpCredentialsFile)
-		if err != nil {
-			return fmt.Errorf("reading --gcp-credentials-file: %w", err)
-		}
-		if err := validateCredentialJSON(data); err != nil {
-			return err
-		}
-		saKeyJSON = data
-	}
-	defer func() {
-		for i := range saKeyJSON {
-			saKeyJSON[i] = 0
-		}
-	}()
 
 	token, err := resolveToken()
 	if err != nil {
@@ -483,12 +435,11 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 		}
 	}
 
-	needsWIFProvision := gcpAuthMode == "wif" && gcpWIFProvider == ""
+	needsWIFProvision := gcpWIFProvider == ""
 
 	repoVars := map[string]string{
-		"FULLSEND_MINT_URL":       mintURL,
-		"FULLSEND_GCP_REGION":     gcpRegion,
-		"FULLSEND_GCP_AUTH_MODE":  gcpAuthMode,
+		"FULLSEND_MINT_URL":   mintURL,
+		"FULLSEND_GCP_REGION": gcpRegion,
 	}
 
 	if dryRun {
@@ -496,7 +447,7 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 		printer.Blank()
 		if needsWIFProvision {
 			printer.StepInfo("Would provision WIF infrastructure in GCP project " + gcpProject)
-			printer.StepInfo(fmt.Sprintf("  Service account: fullsend-dispatch@%s.iam.gserviceaccount.com", gcpProject))
+			printer.StepInfo(fmt.Sprintf("  Service account: fullsend-mint@%s.iam.gserviceaccount.com", gcpProject))
 			printer.StepInfo("  WIF pool: fullsend-pool")
 			printer.StepInfo(fmt.Sprintf("  WIF provider: %s", gcf.BuildRepoProviderID(owner, repo)))
 			printer.StepInfo(fmt.Sprintf("  Repo restriction: %s/%s", owner, repo))
@@ -510,12 +461,7 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 		for _, name := range sortedStringMapKeys(repoVars) {
 			printer.StepInfo(fmt.Sprintf("  %s = %s", name, repoVars[name]))
 		}
-		secretNames := []string{"FULLSEND_GCP_PROJECT_ID"}
-		if gcpAuthMode == "wif" {
-			secretNames = append(secretNames, "FULLSEND_GCP_WIF_PROVIDER", "FULLSEND_GCP_WIF_SA_EMAIL")
-		} else {
-			secretNames = append(secretNames, "FULLSEND_GCP_SA_KEY_JSON")
-		}
+		secretNames := []string{"FULLSEND_GCP_PROJECT_ID", "FULLSEND_GCP_WIF_PROVIDER"}
 		printer.StepInfo(fmt.Sprintf("Would set %d repository secrets:", len(secretNames)))
 		for _, name := range secretNames {
 			printer.StepInfo(fmt.Sprintf("  %s", name))
@@ -535,22 +481,19 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 			Repo:       owner + "/" + repo,
 		}, gcf.NewLiveGCFClient())
 		var provErr error
-		gcpWIFProvider, gcpWIFSAEmail, provErr = provisioner.ProvisionWIF(ctx)
+		gcpWIFProvider, provErr = provisioner.ProvisionWIF(ctx)
 		if provErr != nil {
 			printer.StepFail("WIF provisioning failed")
 			return fmt.Errorf("provisioning WIF: %w", provErr)
 		}
 		printer.StepDone("WIF infrastructure ready")
+		printer.StepInfo("IAM policy changes may take up to 7 minutes to propagate")
+		printer.StepInfo("Agent workflows that authenticate via WIF may fail until propagation completes")
 	}
 
 	repoSecrets := map[string]string{
-		"FULLSEND_GCP_PROJECT_ID": gcpProject,
-	}
-	if gcpAuthMode == "wif" {
-		repoSecrets["FULLSEND_GCP_WIF_PROVIDER"] = gcpWIFProvider
-		repoSecrets["FULLSEND_GCP_WIF_SA_EMAIL"] = gcpWIFSAEmail
-	} else {
-		repoSecrets["FULLSEND_GCP_SA_KEY_JSON"] = string(saKeyJSON)
+		"FULLSEND_GCP_PROJECT_ID":   gcpProject,
+		"FULLSEND_GCP_WIF_PROVIDER": gcpWIFProvider,
 	}
 
 	printer.StepStart("Writing per-repo scaffold files")

@@ -76,9 +76,6 @@ type GCFClient interface {
 
 	// IAM bindings
 	SetSecretIAMBinding(ctx context.Context, resource, member, role string) error
-	SetServiceAccountIAMBinding(ctx context.Context, projectID, saEmail, member, role string) error
-
-	// IAM binding (project-level)
 	SetProjectIAMBinding(ctx context.Context, projectID, member, role string) error
 
 	// Cloud Run IAM (for function invoker policy)
