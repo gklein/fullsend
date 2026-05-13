@@ -1,4 +1,4 @@
-# lint-workflow-size: max-lines=240
+# lint-workflow-size: max-lines=280
 # fullsend shim workflow (workflow_call mode)
 # Routes events to agent workflows in .fullsend via workflow_call.
 # No secrets are needed in the enrolled repo — agents fetch scoped tokens
@@ -233,3 +233,46 @@ jobs:
             --add-label "fullsend-no-fix"
           gh pr comment "$PR_NUMBER" --repo "$REPO" \
             --body "Fix agent disabled for this PR. Remove the \`fullsend-no-fix\` label or use \`/fix\` to re-engage."
+
+  post-run-link:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    if: always() && !cancelled()
+    needs:
+      [
+        dispatch-triage,
+        dispatch-code,
+        dispatch-review,
+        dispatch-fix-bot,
+        dispatch-fix-human,
+        dispatch-retro,
+        dispatch-retro-command,
+        dispatch-prioritize,
+      ]
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Post run link comment
+        env:
+          AGENT: >-
+            ${{ needs.dispatch-triage.result == 'success' && 'triage'
+             || needs.dispatch-code.result == 'success' && 'code'
+             || needs.dispatch-review.result == 'success' && 'review'
+             || needs.dispatch-fix-bot.result == 'success' && 'fix'
+             || needs.dispatch-fix-human.result == 'success' && 'fix'
+             || needs.dispatch-retro.result == 'success' && 'retro'
+             || needs.dispatch-retro-command.result == 'success' && 'retro'
+             || needs.dispatch-prioritize.result == 'success' && 'prioritize'
+             || '' }}
+          SHIM_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ITEM_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+        run: |
+          if [ -z "${AGENT}" ] || [ -z "${ITEM_NUMBER}" ]; then
+            echo "No dispatch or item number — skipping comment"
+            exit 0
+          fi
+          gh issue comment "${ITEM_NUMBER}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --body "**fullsend ${AGENT}** is working on this — [view logs](${SHIM_URL})"

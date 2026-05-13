@@ -124,9 +124,45 @@ func TestShimWorkflowCallTemplateContent(t *testing.T) {
 	assert.Contains(t, s, "stage: prioritize")
 	assert.Contains(t, s, "trigger_source:")
 	assert.Contains(t, s, "secrets: {}")
+	assert.Contains(t, s, "post-run-link:")
 	assert.NotContains(t, s, "FULLSEND_DISPATCH_TOKEN")
 	assert.NotContains(t, s, "FULLSEND_DISPATCH_URL")
 	assert.NotContains(t, s, "curl")
+}
+
+func TestShimWorkflowCallPostRunLink(t *testing.T) {
+	content, err := FullsendRepoFile("templates/shim-workflow-call.yaml")
+	require.NoError(t, err)
+	s := string(content)
+
+	// Verify post-run-link job exists
+	assert.Contains(t, s, "post-run-link:")
+
+	// Extract the post-run-link job block
+	idx := strings.Index(s, "post-run-link:")
+	require.NotEqual(t, -1, idx, "post-run-link job must exist")
+	block := s[idx:]
+
+	// Verify write permissions for issues and pull-requests
+	assert.Contains(t, block, "issues: write")
+	assert.Contains(t, block, "pull-requests: write")
+
+	// Verify it runs after all dispatch jobs
+	assert.Contains(t, block, "dispatch-triage")
+	assert.Contains(t, block, "dispatch-code")
+	assert.Contains(t, block, "dispatch-review")
+	assert.Contains(t, block, "dispatch-fix-bot")
+	assert.Contains(t, block, "dispatch-fix-human")
+	assert.Contains(t, block, "dispatch-retro")
+	assert.Contains(t, block, "dispatch-retro-command")
+	assert.Contains(t, block, "dispatch-prioritize")
+
+	// Verify it posts a comment with the run URL
+	assert.Contains(t, block, "gh issue comment")
+	assert.Contains(t, block, "fullsend ${AGENT}")
+	assert.Contains(t, block, "view logs")
+	assert.Contains(t, block, "SHIM_URL")
+	assert.Contains(t, block, "ITEM_NUMBER")
 }
 
 func TestShimWorkflowCallCodeExcludesPRContext(t *testing.T) {
