@@ -369,24 +369,20 @@ func TestSetupGcpActionContent(t *testing.T) {
 	s := string(content)
 	// Verify inputs (composite actions cannot access vars/secrets directly)
 	assert.Contains(t, s, "inputs:")
-	assert.Contains(t, s, "gcp_auth_mode:")
 	assert.Contains(t, s, "gcp_wif_provider:")
+	assert.Contains(t, s, "gcp_project_id:")
 	assert.NotContains(t, s, "gcp_wif_sa_email:")
-	assert.Contains(t, s, "gcp_sa_key_json:")
+	assert.NotContains(t, s, "gcp_auth_mode:")
+	assert.NotContains(t, s, "gcp_sa_key_json:")
+	assert.NotContains(t, s, "credentials_json:")
 	// Verify pre-mask step
 	assert.Contains(t, s, "Pre-mask GCP credential file path")
 	assert.Contains(t, s, "GITHUB_WORKSPACE}/gha-creds-")
-	// Verify WIF authentication path
-	assert.Contains(t, s, "if: inputs.gcp_auth_mode == 'wif'")
+	// Verify WIF authentication
 	assert.Contains(t, s, "google-github-actions/auth@v3")
 	assert.Contains(t, s, "workload_identity_provider:")
+	assert.Contains(t, s, "project_id:")
 	assert.NotContains(t, s, "service_account:")
-	// Verify SA key authentication path
-	assert.Contains(t, s, "if: inputs.gcp_auth_mode != 'wif'")
-	assert.Contains(t, s, "credentials_json:")
-	// Verify OIDC token workaround for non-WIF
-	assert.Contains(t, s, "RUNNER_TEMP/empty-oidc-token")
-	assert.Contains(t, s, "GCP_OIDC_TOKEN_FILE")
 	// Verify credential masking
 	assert.Contains(t, s, "Mask GCP credential file paths")
 	assert.Contains(t, s, "::add-mask::")

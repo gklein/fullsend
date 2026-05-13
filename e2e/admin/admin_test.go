@@ -163,7 +163,7 @@ func TestAdminInstallUninstall(t *testing.T) {
 	// =========================================
 	// Phase 2.5: Triage dispatch smoke test
 	// =========================================
-	if os.Getenv("E2E_HALFSEND_VERTEX_KEY") != "" {
+	if os.Getenv("E2E_HALFSEND_WIF_PROVIDER") != "" {
 		t.Log("=== Phase 2.5: Triage Dispatch Smoke Test ===")
 		vendorBinaryForE2E(t, env)
 		runTriageDispatchSmokeTest(t, env)
@@ -271,29 +271,27 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 		agents[i] = ac.AgentEntry
 	}
 
-	// Build inference provider if vertex key is available (mode 3).
+	// Build inference provider if WIF provider is available.
 	var inferenceProvider inference.Provider
 	var inferenceProviderName string
-	if vertexKey := os.Getenv("E2E_HALFSEND_VERTEX_KEY"); vertexKey != "" {
+	if wifProvider := os.Getenv("E2E_HALFSEND_WIF_PROVIDER"); wifProvider != "" {
 		gcpProjectID := os.Getenv("E2E_GCP_PROJECT_ID")
 		if gcpProjectID == "" {
-			// Try to extract project_id from the key JSON.
-			gcpProjectID = extractProjectID(t, vertexKey)
+			t.Fatal("E2E_GCP_PROJECT_ID is required when E2E_HALFSEND_WIF_PROVIDER is set")
 		}
 		gcpRegion := os.Getenv("E2E_GCP_REGION")
 		if gcpRegion == "" {
 			gcpRegion = "global"
 		}
 		inferenceProvider = vertex.New(vertex.Config{
-			ProjectID:      gcpProjectID,
-			Region:         gcpRegion,
-			CredentialJSON: []byte(vertexKey),
-		}, nil)
-		// Region is stored as a variable, not a secret.
+			ProjectID:   gcpProjectID,
+			Region:      gcpRegion,
+			WIFProvider: wifProvider,
+		})
 		inferenceProviderName = "vertex"
 		t.Logf("Inference provider: vertex (project: %s)", gcpProjectID)
 	} else {
-		t.Log("E2E_HALFSEND_VERTEX_KEY not set, skipping inference layer")
+		t.Log("E2E_HALFSEND_WIF_PROVIDER not set, skipping inference layer")
 	}
 
 	orgCfg := config.NewOrgConfig(repoNames, enabledRepos, defaultRoles, agents, inferenceProviderName)
@@ -439,9 +437,9 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 		assert.True(t, exists, "variable %s should exist", varName)
 	}
 
-	// Inference secrets exist if vertex key was provided.
-	if os.Getenv("E2E_HALFSEND_VERTEX_KEY") != "" {
-		for _, secretName := range []string{"FULLSEND_GCP_SA_KEY_JSON", "FULLSEND_GCP_PROJECT_ID"} {
+	// Inference secrets exist if WIF provider was configured.
+	if os.Getenv("E2E_HALFSEND_WIF_PROVIDER") != "" {
+		for _, secretName := range []string{"FULLSEND_GCP_WIF_PROVIDER", "FULLSEND_GCP_PROJECT_ID"} {
 			exists, secErr := env.client.RepoSecretExists(ctx, testOrg, forge.ConfigRepoName, secretName)
 			assert.NoError(t, secErr, "checking inference secret %s", secretName)
 			assert.True(t, exists, "inference secret %s should exist", secretName)
@@ -857,22 +855,4 @@ func hasPrivateRepos(repos []forge.Repository) bool {
 		}
 	}
 	return false
-}
-
-// extractProjectID attempts to extract project_id from a GCP service account
-// key JSON string. Falls back to "unknown" if parsing fails.
-func extractProjectID(t *testing.T, keyJSON string) string {
-	t.Helper()
-	var key struct {
-		ProjectID string `json:"project_id"`
-	}
-	if err := json.Unmarshal([]byte(keyJSON), &key); err != nil {
-		t.Logf("warning: could not parse project_id from vertex key: %v", err)
-		return "unknown"
-	}
-	if key.ProjectID == "" {
-		t.Log("warning: vertex key has empty project_id")
-		return "unknown"
-	}
-	return key.ProjectID
 }
