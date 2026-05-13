@@ -57,14 +57,19 @@ type fakeGCFClient struct {
 	// (after CreateFunction). If nil, functionInfo is always returned.
 	functionInfoAfterCreate *FunctionInfo
 
-	// Captured WIF provider config for assertion.
+	// Captured WIF provider config and ID for assertion.
 	lastWIFProviderConfig OIDCProviderConfig
+	lastWIFProviderID     string
 
 	// WIF provider state for GetWIFProvider.
 	wifProvider *WIFProviderInfo
 
 	// Track secret names written via AddSecretVersion.
 	secretVersionNames []string
+
+	// Per-secret state for CopyAgentPEM tests.
+	secretData map[string][]byte // secretID → payload
+	secrets    map[string]bool   // secretID → exists
 
 	// Captured env vars from the last CreateFunction or UpdateFunction call.
 	lastCreateFunctionEnvVars map[string]string
@@ -97,8 +102,9 @@ func (f *fakeGCFClient) CreateServiceAccount(_ context.Context, _, _, _ string) 
 func (f *fakeGCFClient) CreateWIFPool(_ context.Context, _, _, _ string) error {
 	return f.record("CreateWIFPool")
 }
-func (f *fakeGCFClient) CreateWIFProvider(_ context.Context, _, _, _ string, cfg OIDCProviderConfig) error {
+func (f *fakeGCFClient) CreateWIFProvider(_ context.Context, _, _, providerID string, cfg OIDCProviderConfig) error {
 	f.lastWIFProviderConfig = cfg
+	f.lastWIFProviderID = providerID
 	return f.record("CreateWIFProvider")
 }
 func (f *fakeGCFClient) GetWIFProvider(_ context.Context, _, _, _ string) (*WIFProviderInfo, error) {
@@ -112,19 +118,42 @@ func (f *fakeGCFClient) UpdateWIFProvider(_ context.Context, _, _, _ string, cfg
 	f.lastWIFProviderConfig = cfg
 	return f.record("UpdateWIFProvider")
 }
-func (f *fakeGCFClient) GetSecret(_ context.Context, _, _ string) error {
+func (f *fakeGCFClient) GetSecret(_ context.Context, _ string, sid string) error {
 	f.calls = append(f.calls, "GetSecret")
 	if err := f.errs["GetSecret"]; err != nil {
 		return err
 	}
+	if f.secrets != nil {
+		if !f.secrets[sid] {
+			return ErrSecretNotFound
+		}
+	}
 	return nil
 }
-func (f *fakeGCFClient) CreateSecret(_ context.Context, _, _ string) error {
+func (f *fakeGCFClient) CreateSecret(_ context.Context, _ string, sid string) error {
+	if f.secrets != nil {
+		f.secrets[sid] = true
+	}
 	return f.record("CreateSecret")
 }
-func (f *fakeGCFClient) AddSecretVersion(_ context.Context, _ string, secretID string, _ []byte) error {
+func (f *fakeGCFClient) AddSecretVersion(_ context.Context, _ string, secretID string, data []byte) error {
 	f.secretVersionNames = append(f.secretVersionNames, secretID)
+	if f.secretData != nil {
+		f.secretData[secretID] = append([]byte(nil), data...)
+	}
 	return f.record("AddSecretVersion")
+}
+func (f *fakeGCFClient) AccessSecretVersion(_ context.Context, _ string, sid string) ([]byte, error) {
+	f.calls = append(f.calls, "AccessSecretVersion")
+	if err := f.errs["AccessSecretVersion"]; err != nil {
+		return nil, err
+	}
+	if f.secretData != nil {
+		if data, ok := f.secretData[sid]; ok {
+			return data, nil
+		}
+	}
+	return nil, fmt.Errorf("secret %s: %w", sid, ErrSecretNotFound)
 }
 func (f *fakeGCFClient) SetSecretIAMBinding(_ context.Context, _, _, _ string) error {
 	return f.record("SetSecretIAMBinding")
@@ -1215,6 +1244,10 @@ func TestProvisioner_Provision_MultiOrg_WIFCondition(t *testing.T) {
 
 	assert.Equal(t, "assertion.repository in ['acme/.fullsend', 'widgetco/.fullsend']",
 		fake.lastWIFProviderConfig.AttributeCondition)
+
+	expectedIAMAudience := "https://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc"
+	assert.Equal(t, []string{"fullsend-mint", expectedIAMAudience},
+		fake.lastWIFProviderConfig.AllowedAudiences)
 }
 
 func TestProvisioner_Provision_SingleOrg_WIFCondition(t *testing.T) {
@@ -1234,6 +1267,10 @@ func TestProvisioner_Provision_SingleOrg_WIFCondition(t *testing.T) {
 
 	assert.Equal(t, "assertion.repository == 'acme/.fullsend'",
 		fake.lastWIFProviderConfig.AttributeCondition)
+
+	expectedIAMAudience := "https://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc"
+	assert.Equal(t, []string{"fullsend-mint", expectedIAMAudience},
+		fake.lastWIFProviderConfig.AllowedAudiences)
 }
 
 func TestProvisioner_Provision_WIF_AllowedAudiences(t *testing.T) {
@@ -1326,6 +1363,257 @@ func TestProvisioner_Provision_MultiOrg_MergeDoesNotOverwriteExistingPEMs(t *tes
 	assert.Contains(t, fake.lastCreateFunctionEnvVars["ROLE_APP_IDS"], `"new-org/coder"`)
 }
 
+// --- ProvisionWIF tests ---
+
+func TestProvisionWIF_HappyPath(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	wifProvider, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, "projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc", wifProvider)
+
+	assert.Contains(t, fake.calls, "GetProjectNumber")
+	assert.Contains(t, fake.calls, "CreateWIFPool")
+	assert.Contains(t, fake.calls, "CreateWIFProvider")
+	assert.Contains(t, fake.calls, "SetProjectIAMBinding")
+
+	assert.Equal(t, "assertion.repository == 'acme/.fullsend'", fake.lastWIFProviderConfig.AttributeCondition)
+}
+
+func TestProvisionWIF_MissingProjectID(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GCP project ID is required")
+}
+
+func TestProvisionWIF_MissingOrgs(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID: "my-project",
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one GitHub org is required")
+}
+
+func TestProvisionWIF_IAMBindingFails(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["SetProjectIAMBinding"] = fmt.Errorf("policy error")
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "granting Vertex AI access for org acme")
+}
+
+func TestProvisionWIF_MultipleOrgs(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme", "beta"},
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "assertion.repository in ['acme/.fullsend', 'beta/.fullsend']", fake.lastWIFProviderConfig.AttributeCondition)
+
+	require.Len(t, fake.projectIAMBindings, 2)
+	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/.fullsend")
+	assert.Contains(t, fake.projectIAMBindings[1].Member, "attribute.repository/beta/.fullsend")
+}
+
+func TestProvisionWIF_GetProjectNumberFails(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["GetProjectNumber"] = fmt.Errorf("forbidden")
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "getting project number")
+}
+
+func TestProvisionWIF_CreateWIFPoolFails(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["CreateWIFPool"] = fmt.Errorf("quota exceeded")
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating WIF pool")
+}
+
+func TestProvisionWIF_CreateWIFProviderFails(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["CreateWIFProvider"] = fmt.Errorf("invalid config")
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating WIF provider")
+}
+
+func TestProvisionWIF_InvalidOrgName(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"bad org!"},
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid GitHub org name")
+}
+
+func TestProvisionWIF_DuplicateOrg(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme", "ACME"},
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate GitHub org after normalization")
+}
+
+func TestProvisionWIF_DoesNotMutateInput(t *testing.T) {
+	fake := newFakeGCFClient()
+	orgs := []string{"ACME"}
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: orgs,
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "ACME", orgs[0], "ProvisionWIF should not mutate the input slice")
+}
+
+func TestProvisionWIF_InvalidProjectID(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "BAD",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid GCP project ID")
+}
+
+func TestProvisionWIF_NormalizesOrgCase(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"ACME"},
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "assertion.repository == 'acme/.fullsend'", fake.lastWIFProviderConfig.AttributeCondition)
+}
+
+func TestProvisionWIF_RepoScoped(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+		Repo:       "acme/widget",
+	}, fake)
+
+	wifPath, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, "gh-acme-widget", fake.lastWIFProviderID)
+	assert.Equal(t, "assertion.repository == 'acme/widget'", fake.lastWIFProviderConfig.AttributeCondition)
+	assert.Contains(t, wifPath, "gh-acme-widget")
+
+	require.Len(t, fake.projectIAMBindings, 1)
+	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/widget")
+
+	assert.NotContains(t, fake.calls, "GetWIFProvider")
+}
+
+func TestProvisionWIF_RepoScoped_DoesNotTouchSharedProvider(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.wifProvider = &WIFProviderInfo{
+		AttributeCondition: "assertion.repository_owner == 'nonflux'",
+	}
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+		Repo:       "acme/widget",
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, "gh-acme-widget", fake.lastWIFProviderID)
+	assert.Equal(t, "assertion.repository == 'acme/widget'", fake.lastWIFProviderConfig.AttributeCondition)
+}
+
+func TestProvisionWIF_OrgScoped_Unchanged(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, "github-oidc", fake.lastWIFProviderID)
+	assert.Equal(t, "assertion.repository == 'acme/.fullsend'", fake.lastWIFProviderConfig.AttributeCondition)
+	require.Len(t, fake.projectIAMBindings, 1)
+	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/.fullsend")
+}
+
+func TestBuildRepoProviderID(t *testing.T) {
+	tests := []struct {
+		owner, repo string
+		want        string
+	}{
+		{"acme", "widget", "gh-acme-widget"},
+		{"Acme", "My.Repo_v2", "gh-acme-my-repo-v2"},
+		{"org", "very-long-repository-name-that-exceeds-limit", "gh-org-very-long-repository-name"},
+		{"a", "b", "gh-a-b"},
+		{"nonflux", "integration-service", "gh-nonflux-integration-service"},
+		{"halfsend", "test-repo", "gh-halfsend-test-repo"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.owner+"/"+tt.repo, func(t *testing.T) {
+			got := BuildRepoProviderID(tt.owner, tt.repo)
+			assert.Equal(t, tt.want, got)
+			assert.GreaterOrEqual(t, len(got), 4)
+			assert.LessOrEqual(t, len(got), 32)
+			assert.NotEqual(t, '-', rune(got[len(got)-1]))
+		})
+	}
+}
+
 // --- interface compliance ---
 
 func TestProvisioner_ImplementsDispatcher(t *testing.T) {
@@ -1336,4 +1624,124 @@ func TestProvisioner_ImplementsDispatcher(t *testing.T) {
 		OrgSecretNames() []string
 		OrgVariableNames() []string
 	} = (*Provisioner)(nil)
+}
+
+func TestCopyAgentPEM_CopiesSecret(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.secrets = map[string]bool{
+		"fullsend-srcorg--triage-app-pem": true,
+	}
+	fake.secretData = map[string][]byte{
+		"fullsend-srcorg--triage-app-pem": []byte("-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----"),
+	}
+	fake.errs["GetSecret"] = nil
+
+	p := NewProvisioner(Config{ProjectID: "proj1"}, fake)
+	err := p.CopyAgentPEM(context.Background(), "srcorg", "dstorg", "triage")
+	require.NoError(t, err)
+
+	assert.True(t, fake.secrets["fullsend-dstorg--triage-app-pem"])
+	assert.Equal(t,
+		[]byte("-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----"),
+		fake.secretData["fullsend-dstorg--triage-app-pem"],
+	)
+}
+
+func TestCopyAgentPEM_DestinationExists_Noop(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.secrets = map[string]bool{
+		"fullsend-srcorg--triage-app-pem": true,
+		"fullsend-dstorg--triage-app-pem": true,
+	}
+	fake.secretData = map[string][]byte{}
+
+	p := NewProvisioner(Config{ProjectID: "proj1"}, fake)
+	err := p.CopyAgentPEM(context.Background(), "srcorg", "dstorg", "triage")
+	require.NoError(t, err)
+	assert.NotContains(t, fake.calls, "AccessSecretVersion")
+}
+
+func TestCopyAgentPEM_SourceMissing_Error(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.secrets = map[string]bool{}
+	fake.secretData = map[string][]byte{}
+
+	p := NewProvisioner(Config{ProjectID: "proj1"}, fake)
+	err := p.CopyAgentPEM(context.Background(), "srcorg", "dstorg", "triage")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading source secret")
+}
+
+func TestCopyAgentPEM_InvalidOrg(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{ProjectID: "proj1"}, fake)
+
+	err := p.CopyAgentPEM(context.Background(), "bad org!", "dstorg", "triage")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid org name")
+}
+
+func TestCopyAgentPEM_MissingProjectID(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{}, fake)
+
+	err := p.CopyAgentPEM(context.Background(), "srcorg", "dstorg", "triage")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GCP project ID is required")
+}
+
+func TestGetExistingRoleAppIDs_ReturnsMap(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://example.com",
+		EnvVars: map[string]string{
+			"ROLE_APP_IDS": `{"nonflux/triage":"123","nonflux/coder":"456"}`,
+		},
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	m, err := p.GetExistingRoleAppIDs(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"nonflux/triage": "123",
+		"nonflux/coder":  "456",
+	}, m)
+}
+
+func TestGetExistingRoleAppIDs_NoFunction(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = nil
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	m, err := p.GetExistingRoleAppIDs(context.Background())
+	require.NoError(t, err)
+	assert.Nil(t, m)
+}
+
+func TestGetExistingRoleAppIDs_EmptyEnvVars(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI:     "https://example.com",
+		EnvVars: map[string]string{},
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	m, err := p.GetExistingRoleAppIDs(context.Background())
+	require.NoError(t, err)
+	assert.Nil(t, m)
+}
+
+func TestGetExistingRoleAppIDs_MalformedJSON(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://example.com",
+		EnvVars: map[string]string{
+			"ROLE_APP_IDS": "not-json",
+		},
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	m, err := p.GetExistingRoleAppIDs(context.Background())
+	require.NoError(t, err)
+	assert.Nil(t, m)
 }

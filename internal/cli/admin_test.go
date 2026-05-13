@@ -23,14 +23,15 @@ func TestAdminCommand_HasSubcommands(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names[sub.Use] = true
 	}
-	assert.True(t, names["install <org>"], "expected install subcommand")
+	assert.True(t, names["install <org-or-owner/repo>"], "expected install subcommand")
 	assert.True(t, names["uninstall <org>"], "expected uninstall subcommand")
 	assert.True(t, names["analyze <org>"], "expected analyze subcommand")
 	assert.True(t, names["enable"], "expected enable subcommand")
 	assert.True(t, names["disable"], "expected disable subcommand")
+	assert.False(t, names["init <owner/repo>"], "init subcommand should not exist — merged into install")
 }
 
-func TestInstallCmd_RequiresOrg(t *testing.T) {
+func TestInstallCmd_RequiresArg(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install"})
 	err := cmd.Execute()
@@ -79,6 +80,111 @@ func TestInstallCmd_Flags(t *testing.T) {
 
 	mintSourceDirFlag := cmd.Flags().Lookup("mint-source-dir")
 	require.NotNil(t, mintSourceDirFlag, "expected --mint-source-dir flag")
+
+	// Per-repo flags.
+	mintURLFlag := cmd.Flags().Lookup("mint-url")
+	require.NotNil(t, mintURLFlag, "expected --mint-url flag")
+
+	// --gcp-auth-mode removed (WIF is the only mode)
+	gcpAuthModeFlag := cmd.Flags().Lookup("gcp-auth-mode")
+	assert.Nil(t, gcpAuthModeFlag, "--gcp-auth-mode flag should have been removed")
+
+	scaffoldCustomizedFlag := cmd.Flags().Lookup("scaffold-customized")
+	require.NotNil(t, scaffoldCustomizedFlag, "expected --scaffold-customized flag")
+	assert.Equal(t, "false", scaffoldCustomizedFlag.DefValue)
+}
+
+func TestInstallCmd_PerRepoRequiresMintURL(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--gcp-region", "us-central1"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--mint-url is required for per-repo installation")
+}
+
+func TestInstallCmd_PerRepoRequiresGCPRegion(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--gcp-region is required for per-repo installation")
+}
+
+func TestInstallCmd_PerRepoRejectsInvalidFormat(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/", "--mint-url", "https://mint.example.com", "--gcp-region", "us-central1"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repo must be in owner/repo format")
+}
+
+func TestInstallCmd_PerRepoRejectsMultiSlash(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/team/repo", "--mint-url", "https://mint.example.com", "--gcp-region", "us-central1"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid repo name")
+}
+
+func TestInstallCmd_PerRepoRejectsNonHTTPSMintURL(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "http://mint.example.com", "--gcp-region", "us-central1"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--mint-url must be a valid HTTPS URL")
+}
+
+func TestInstallCmd_PerOrgRejectsPerRepoFlags(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme", "--mint-url", "https://mint.example.com"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--mint-url is only valid for per-repo installation")
+}
+
+func TestInstallCmd_PerRepoRejectsPerOrgFlags(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com", "--gcp-region", "us-central1", "--mint-project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--mint-project is only valid for per-org installation")
+}
+
+func TestInstallCmd_PerRepoRequiresGCPProject(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--mint-url", "https://mint.example.com",
+		"--gcp-region", "us-central1"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--gcp-project is required for per-repo installation")
+}
+
+func TestParseAgentRoles(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    []string
+		wantErr bool
+	}{
+		{"triage,review,coder", []string{"triage", "review", "coder"}, false},
+		{" triage , review ", []string{"triage", "review"}, false},
+		{"", nil, false},
+		{"single", []string{"single"}, false},
+		{"Invalid", nil, true},
+		{"ok,BAD-role", nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseAgentRoles(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid role name")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			}
+		})
+	}
 }
 
 func TestUninstallCmd_RequiresOrg(t *testing.T) {
@@ -889,4 +995,113 @@ func TestCheckInstallScopes_SyncWithLayers(t *testing.T) {
 
 	assert.ElementsMatch(t, installRequiredScopes, layerScopes,
 		"installRequiredScopes must match the union of RequiredScopes(OpInstall) from all layers; update the variable if a layer's scopes change")
+}
+
+func TestCheckPerRepoScopes_AllPresent(t *testing.T) {
+	client := &forge.FakeClient{
+		TokenScopes: []string{"repo", "workflow", "read:org"},
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := checkPerRepoScopes(context.Background(), client, printer)
+	require.NoError(t, err)
+}
+
+func TestCheckPerRepoScopes_Missing(t *testing.T) {
+	client := &forge.FakeClient{
+		TokenScopes: []string{"repo"},
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := checkPerRepoScopes(context.Background(), client, printer)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workflow")
+	assert.NotContains(t, err.Error(), "admin:org")
+}
+
+func TestCheckPerRepoScopes_FineGrainedToken(t *testing.T) {
+	client := &forge.FakeClient{
+		TokenScopes: nil,
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := checkPerRepoScopes(context.Background(), client, printer)
+	require.NoError(t, err)
+}
+
+func TestCheckPerRepoScopes_GetTokenScopesError(t *testing.T) {
+	client := &forge.FakeClient{
+		Errors: map[string]error{"GetTokenScopes": errors.New("network error")},
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := checkPerRepoScopes(context.Background(), client, printer)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "checking token scopes")
+	assert.Contains(t, err.Error(), "network error")
+}
+
+func TestCheckPerRepoScopes_DoesNotRequireAdminOrg(t *testing.T) {
+	client := &forge.FakeClient{
+		TokenScopes: []string{"repo", "workflow"},
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := checkPerRepoScopes(context.Background(), client, printer)
+	require.NoError(t, err, "per-repo should not require admin:org scope")
+}
+
+func TestPerRepoRequiredScopes_SubsetOfInstallScopes(t *testing.T) {
+	installSet := make(map[string]bool)
+	for _, s := range installRequiredScopes {
+		installSet[s] = true
+	}
+	for _, s := range perRepoRequiredScopes {
+		assert.True(t, installSet[s],
+			"perRepoRequiredScopes contains %q which is not in installRequiredScopes", s)
+	}
+}
+
+func TestInstallCmd_PerRepoRejectsInvalidRole(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--agents", "triage,INVALID",
+		"--mint-url", "https://mint.example.com",
+		"--gcp-region", "us-central1",
+		"--gcp-project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid role name")
+}
+
+func TestInstallCmd_PerRepoRejectsOwnerWithDots(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "my.org/widget",
+		"--mint-url", "https://mint.example.com",
+		"--gcp-region", "us-central1"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid owner name")
+}
+
+func TestInstallCmd_PerRepoRejectsURL(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"https URL", "https://github.com/acme/widget"},
+		{"http URL", "http://github.com/acme/widget"},
+		{"www prefix", "www.github.com/acme/widget"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs([]string{"admin", "install", tc.input,
+				"--mint-url", "https://mint.example.com",
+				"--gcp-region", "us-central1"})
+			err := cmd.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "expected owner/repo format, got a URL")
+		})
+	}
 }

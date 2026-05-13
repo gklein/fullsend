@@ -98,6 +98,31 @@ func WalkFullsendRepoAll(fn func(path string, content []byte) error) error {
 	return walkFullsendRepo(fn, false)
 }
 
+// PerRepoShimTemplate returns the content of the per-repo shim workflow template.
+func PerRepoShimTemplate() ([]byte, error) {
+	return content.ReadFile("fullsend-repo/templates/shim-per-repo.yaml")
+}
+
+// CustomizedDirs returns the set of customized/ subdirectories
+// that should be scaffolded in a per-org .fullsend config repo.
+func CustomizedDirs() []string {
+	dirs := make([]string, 0, len(layeredDirs))
+	for _, d := range layeredDirs {
+		dirs = append(dirs, "customized/"+strings.TrimSuffix(d, "/"))
+	}
+	return dirs
+}
+
+// PerRepoCustomizedDirs returns the set of customized/ subdirectories
+// that should be scaffolded in a per-repo .fullsend/ setup.
+func PerRepoCustomizedDirs() []string {
+	dirs := make([]string, 0, len(layeredDirs))
+	for _, d := range layeredDirs {
+		dirs = append(dirs, ".fullsend/customized/"+strings.TrimSuffix(d, "/"))
+	}
+	return dirs
+}
+
 func walkFullsendRepo(fn func(path string, content []byte) error, filter bool) error {
 	return fs.WalkDir(content, "fullsend-repo", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

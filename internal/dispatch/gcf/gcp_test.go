@@ -155,22 +155,28 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 		callCount := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callCount++
-			if callCount == 1 {
+			switch callCount {
+			case 1:
 				assert.Equal(t, http.MethodPost, r.Method)
 				w.WriteHeader(http.StatusConflict)
-				return
+			case 2:
+				// Undelete attempt — returns 400 (not actually deleted).
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Contains(t, r.URL.Path, ":undelete")
+				w.WriteHeader(http.StatusBadRequest)
+			case 3:
+				assert.Equal(t, http.MethodPatch, r.Method)
+				assert.Contains(t, r.URL.RawQuery, "attributeCondition")
+				assert.Contains(t, r.URL.RawQuery, "oidc.allowedAudiences")
+				var body map[string]interface{}
+				json.NewDecoder(r.Body).Decode(&body)
+				oidc, ok := body["oidc"].(map[string]interface{})
+				assert.True(t, ok, "oidc config should be in PATCH body")
+				audiences := oidc["allowedAudiences"].([]interface{})
+				assert.Equal(t, []interface{}{"fullsend-mint", "https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/gh-oidc"}, audiences)
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintln(w, `{}`)
 			}
-			assert.Equal(t, http.MethodPatch, r.Method)
-			assert.Contains(t, r.URL.RawQuery, "attributeCondition")
-			assert.Contains(t, r.URL.RawQuery, "oidc.allowedAudiences")
-			var body map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&body)
-			oidc, ok := body["oidc"].(map[string]interface{})
-			assert.True(t, ok, "oidc config should be in PATCH body")
-			audiences := oidc["allowedAudiences"].([]interface{})
-			assert.Equal(t, []interface{}{"fullsend-mint", "https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/gh-oidc"}, audiences)
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintln(w, `{}`)
 		}))
 		defer srv.Close()
 
@@ -179,7 +185,7 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 			AllowedAudiences:   []string{"fullsend-mint", "https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/gh-oidc"},
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 2, callCount)
+		assert.Equal(t, 3, callCount)
 	})
 }
 
