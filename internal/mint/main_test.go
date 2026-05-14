@@ -1166,7 +1166,10 @@ func TestHandler_MultiOrg_WrongOrg(t *testing.T) {
 }
 
 func TestResolveWIFProvider(t *testing.T) {
-	h := &Handler{defaultWIFProvider: "github-oidc"}
+	h := &Handler{
+		defaultWIFProvider: "github-oidc",
+		perRepoWIFRepos:    map[string]bool{"acme-corp/my-service": true},
+	}
 
 	t.Run("dotFullsend uses default provider", func(t *testing.T) {
 		got := h.resolveWIFProvider("acme-corp/.fullsend")
@@ -1175,7 +1178,7 @@ func TestResolveWIFProvider(t *testing.T) {
 		}
 	})
 
-	t.Run("per-repo uses dynamic provider", func(t *testing.T) {
+	t.Run("registered per-repo uses dynamic provider", func(t *testing.T) {
 		got := h.resolveWIFProvider("acme-corp/my-service")
 		want := buildRepoProviderID("acme-corp", "my-service")
 		if got != want {
@@ -1183,10 +1186,25 @@ func TestResolveWIFProvider(t *testing.T) {
 		}
 	})
 
+	t.Run("unregistered repo falls back to default", func(t *testing.T) {
+		got := h.resolveWIFProvider("acme-corp/other-repo")
+		if got != "github-oidc" {
+			t.Fatalf("expected github-oidc for unregistered repo, got %s", got)
+		}
+	})
+
 	t.Run("unparseable falls back to default", func(t *testing.T) {
 		got := h.resolveWIFProvider("no-slash")
 		if got != "github-oidc" {
 			t.Fatalf("expected github-oidc for unparseable repo, got %s", got)
+		}
+	})
+
+	t.Run("case-insensitive lookup", func(t *testing.T) {
+		got := h.resolveWIFProvider("Acme-Corp/My-Service")
+		want := buildRepoProviderID("Acme-Corp", "My-Service")
+		if got != want {
+			t.Fatalf("expected %s, got %s", want, got)
 		}
 	})
 }
@@ -1249,6 +1267,7 @@ func TestPrevalidateOIDCToken_MissingRepository(t *testing.T) {
 
 func TestServeHTTP_PerRepoProvider(t *testing.T) {
 	setMintEnv(t)
+	t.Setenv("PER_REPO_WIF_REPOS", "test-org/integration-service")
 	pemData, err := generateTestRSAKey()
 	if err != nil {
 		t.Fatal(err)

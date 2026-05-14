@@ -576,7 +576,14 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 		printer.StepDone("WIF infrastructure ready")
 		printer.StepInfo("IAM policy changes may take up to 7 minutes to propagate")
 		printer.StepInfo("Agent workflows that authenticate via WIF may fail until propagation completes")
+
 	}
+
+	if err := mintProvisioner.RegisterPerRepoWIF(ctx, owner+"/"+repo); err != nil {
+		printer.StepFail("Failed to register per-repo WIF in mint")
+		return fmt.Errorf("registering per-repo WIF: %w", err)
+	}
+	printer.StepDone("Registered per-repo WIF in mint")
 
 	repoSecrets := map[string]string{
 		"FULLSEND_GCP_PROJECT_ID":   inferenceProject,

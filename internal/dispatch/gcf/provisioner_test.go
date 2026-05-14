@@ -2066,3 +2066,112 @@ func TestEnsureOrgInMint_PreservesExistingAllowedWorkflowFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ".github/workflows/ci.yml", fake.lastUpdateFunctionEnvVars["ALLOWED_WORKFLOW_FILES"])
 }
+
+func TestRegisterPerRepoWIF_AddsNewRepo(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI:     "https://mint.example.com",
+		EnvVars: map[string]string{},
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RegisterPerRepoWIF(context.Background(), "acme-corp/my-service")
+	require.NoError(t, err)
+	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
+	assert.Equal(t, "acme-corp/my-service", fake.lastUpdateFunctionEnvVars["PER_REPO_WIF_REPOS"])
+}
+
+func TestRegisterPerRepoWIF_AppendsToExisting(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://mint.example.com",
+		EnvVars: map[string]string{
+			"PER_REPO_WIF_REPOS": "acme-corp/first-repo",
+		},
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RegisterPerRepoWIF(context.Background(), "acme-corp/second-repo")
+	require.NoError(t, err)
+	assert.Equal(t, "acme-corp/first-repo,acme-corp/second-repo", fake.lastUpdateFunctionEnvVars["PER_REPO_WIF_REPOS"])
+}
+
+func TestRegisterPerRepoWIF_Idempotent(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://mint.example.com",
+		EnvVars: map[string]string{
+			"PER_REPO_WIF_REPOS": "acme-corp/my-service",
+		},
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RegisterPerRepoWIF(context.Background(), "acme-corp/my-service")
+	require.NoError(t, err)
+	assert.NotContains(t, fake.calls, "UpdateFunctionEnvVars")
+}
+
+func TestRegisterPerRepoWIF_FunctionNotFound(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = nil
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RegisterPerRepoWIF(context.Background(), "acme-corp/my-service")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mint function not found")
+}
+
+func TestRegisterPerRepoWIF_LowercasesRepo(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI:     "https://mint.example.com",
+		EnvVars: map[string]string{},
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RegisterPerRepoWIF(context.Background(), "Acme-Corp/My-Service")
+	require.NoError(t, err)
+	assert.Equal(t, "acme-corp/my-service", fake.lastUpdateFunctionEnvVars["PER_REPO_WIF_REPOS"])
+}
+
+func TestRegisterPerRepoWIF_RejectsInvalidFormat(t *testing.T) {
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, newFakeGCFClient())
+
+	tests := []struct {
+		name, repo string
+	}{
+		{"no slash", "just-a-name"},
+		{"empty owner", "/repo"},
+		{"empty repo", "owner/"},
+		{"comma injection", "legit/repo,evil/repo"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := p.RegisterPerRepoWIF(context.Background(), tt.repo)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestRegisterPerRepoWIF_NilEnvVars(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI:     "https://mint.example.com",
+		EnvVars: nil,
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RegisterPerRepoWIF(context.Background(), "acme-corp/my-service")
+	require.NoError(t, err)
+	assert.Equal(t, "acme-corp/my-service", fake.lastUpdateFunctionEnvVars["PER_REPO_WIF_REPOS"])
+}
+
+func TestRegisterPerRepoWIF_GetFunctionError(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["GetFunction"] = fmt.Errorf("permission denied")
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RegisterPerRepoWIF(context.Background(), "acme-corp/my-service")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "getting mint function")
+}

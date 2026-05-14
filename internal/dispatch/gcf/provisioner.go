@@ -346,6 +346,56 @@ func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, o
 	return nil
 }
 
+// RegisterPerRepoWIF adds a repo to the mint's PER_REPO_WIF_REPOS env var
+// so the mint routes OIDC tokens from that repo to a dedicated WIF provider
+// instead of the org-level default. Idempotent — skips repos already listed.
+// Not safe for concurrent calls — run per-repo installs sequentially when
+// sharing a mint.
+func (p *Provisioner) RegisterPerRepoWIF(ctx context.Context, repo string) error {
+	parts := strings.SplitN(repo, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("repo must be in owner/repo format, got %q", repo)
+	}
+	if strings.Contains(repo, ",") {
+		return fmt.Errorf("repo name cannot contain commas, got %q", repo)
+	}
+
+	fn, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+	if err != nil {
+		return fmt.Errorf("getting mint function: %w", err)
+	}
+	if fn == nil {
+		return fmt.Errorf("mint function not found")
+	}
+	if fn.EnvVars == nil {
+		fn.EnvVars = make(map[string]string)
+	}
+
+	repo = strings.ToLower(repo)
+	existing := fn.EnvVars["PER_REPO_WIF_REPOS"]
+	for _, entry := range strings.Split(existing, ",") {
+		if strings.ToLower(strings.TrimSpace(entry)) == repo {
+			return nil
+		}
+	}
+
+	updated := make(map[string]string, len(fn.EnvVars))
+	for k, v := range fn.EnvVars {
+		updated[k] = v
+	}
+	if existing == "" {
+		updated["PER_REPO_WIF_REPOS"] = repo
+	} else {
+		updated["PER_REPO_WIF_REPOS"] = existing + "," + repo
+	}
+
+	opName, err := p.gcpAPI.UpdateFunctionEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
+	if err != nil {
+		return fmt.Errorf("updating PER_REPO_WIF_REPOS: %w", err)
+	}
+	return p.gcpAPI.WaitForOperation(ctx, opName)
+}
+
 // Provision creates the GCP infrastructure for the token mint.
 //
 // When MintURL is empty, deploys the full mint infrastructure:
@@ -595,6 +645,9 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		mergeRoleAppIDs(existing.EnvVars, envVars)
 		if v := existing.EnvVars["ALLOWED_WORKFLOW_FILES"]; v != "" {
 			envVars["ALLOWED_WORKFLOW_FILES"] = v
+		}
+		if v := existing.EnvVars["PER_REPO_WIF_REPOS"]; v != "" {
+			envVars["PER_REPO_WIF_REPOS"] = v
 		}
 	}
 
