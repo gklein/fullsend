@@ -746,6 +746,27 @@ func bootstrapSandbox(sandboxName, repoDir, fullsendBinary string, h *harness.Ha
 		}
 	}
 
+	// Scan plugin definitions for injection before copying into sandbox.
+	if scanPipeline != nil {
+		for _, pluginPath := range h.Plugins {
+			for _, name := range []string{"plugin.json", ".lsp.json"} {
+				content, err := os.ReadFile(filepath.Join(pluginPath, name))
+				if err != nil {
+					continue
+				}
+				result := scanPipeline.Scan(string(content))
+				if security.HasCriticalFindings(result.Findings) {
+					if h.FailModeClosed() {
+						return fmt.Errorf("plugin %q blocked: critical injection findings in %s", pluginPath, name)
+					}
+					fmt.Fprintf(os.Stderr, "WARNING: plugin %q has critical injection findings in %s (fail_mode: open)\n", pluginPath, name)
+				} else if len(result.Findings) > 0 {
+					fmt.Fprintf(os.Stderr, "WARNING: plugin %q has %d injection finding(s) in %s\n", pluginPath, len(result.Findings), name)
+				}
+			}
+		}
+	}
+
 	// Install plugins as marketplace-cached plugins so Claude Code registers
 	// the LSP tool.
 	if len(h.Plugins) > 0 {
@@ -787,7 +808,12 @@ func bootstrapEnv(sandboxName, repoDir string, h *harness.Harness) error {
 	var lines []string
 
 	// Infrastructure vars.
-	lines = append(lines, fmt.Sprintf("export PATH=%s/bin:/usr/local/go/bin:$PATH", sandbox.SandboxWorkspace))
+	pathExport := fmt.Sprintf("export PATH=%s/bin", sandbox.SandboxWorkspace)
+	if len(h.Plugins) > 0 {
+		pathExport += ":/usr/local/go/bin"
+	}
+	pathExport += ":$PATH"
+	lines = append(lines, pathExport)
 	lines = append(lines, fmt.Sprintf("export CLAUDE_CONFIG_DIR=%s", sandbox.SandboxClaudeConfig))
 	lines = append(lines, fmt.Sprintf("export FULLSEND_OUTPUT_DIR=%s", outputDir))
 	lines = append(lines, fmt.Sprintf("export FULLSEND_TARGET_REPO_DIR=%s", repoDir))
@@ -1444,7 +1470,48 @@ func bootstrapPlugins(sandboxName string, plugins []string) error {
 		return fmt.Errorf("creating marketplace dirs: %w", err)
 	}
 
-	// Build marketplace.json, installed_plugins.json, and settings.json.
+	// Upload plugin directories into sandbox.
+	for _, pluginPath := range plugins {
+		if err := sandbox.Upload(sandboxName, pluginPath,
+			fmt.Sprintf("%s/plugins/", sandbox.SandboxClaudeConfig)); err != nil {
+			return fmt.Errorf("copying plugin %q: %w", pluginPath, err)
+		}
+	}
+
+	// Build and upload marketplace config files.
+	configs, err := buildPluginConfigs(plugins, pluginsBase, mktBase, marketplace, version)
+	if err != nil {
+		return fmt.Errorf("building plugin configs: %w", err)
+	}
+	for _, entry := range configs {
+		tmp, err := os.CreateTemp("", "fullsend-plugin-*.json")
+		if err != nil {
+			return fmt.Errorf("creating temp file for %s: %w", filepath.Base(entry.path), err)
+		}
+		if _, err := tmp.Write(entry.data); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			return fmt.Errorf("writing %s: %w", filepath.Base(entry.path), err)
+		}
+		tmp.Close()
+		uploadErr := sandbox.Upload(sandboxName, tmp.Name(), entry.path)
+		os.Remove(tmp.Name())
+		if uploadErr != nil {
+			return fmt.Errorf("uploading %s: %w", filepath.Base(entry.path), uploadErr)
+		}
+	}
+	return nil
+}
+
+type pluginConfigEntry struct {
+	path string
+	data []byte
+}
+
+// buildPluginConfigs builds the marketplace JSON config files for the given plugins.
+// Returns entries for marketplace.json, known_marketplaces.json, installed_plugins.json,
+// and settings.json.
+func buildPluginConfigs(plugins []string, pluginsBase, mktBase, marketplace, version string) ([]pluginConfigEntry, error) {
 	var mktPlugins []any
 	installedPlugins := map[string]any{}
 	enabledPlugins := map[string]bool{}
@@ -1454,11 +1521,6 @@ func bootstrapPlugins(sandboxName string, plugins []string) error {
 		name := filepath.Base(pluginPath)
 		qualifiedName := name + "@" + marketplace
 		cacheDir := fmt.Sprintf("%s/cache/%s/%s/%s", pluginsBase, marketplace, name, version)
-
-		if err := sandbox.Upload(sandboxName, pluginPath,
-			fmt.Sprintf("%s/plugins/", sandbox.SandboxClaudeConfig)); err != nil {
-			return fmt.Errorf("copying plugin %q: %w", pluginPath, err)
-		}
 
 		mp := map[string]any{
 			"name": name, "version": version,
@@ -1478,8 +1540,7 @@ func bootstrapPlugins(sandboxName string, plugins []string) error {
 		enabledPlugins[qualifiedName] = true
 	}
 
-	// Upload all config files.
-	for _, entry := range []struct {
+	entries := []struct {
 		path string
 		data any
 	}{
@@ -1501,24 +1562,17 @@ func bootstrapPlugins(sandboxName string, plugins []string) error {
 		{sandbox.SandboxClaudeConfig + "/settings.json", map[string]any{
 			"enabledPlugins": enabledPlugins,
 		}},
-	} {
+	}
+
+	var result []pluginConfigEntry
+	for _, entry := range entries {
 		data, err := json.Marshal(entry.data)
 		if err != nil {
-			return fmt.Errorf("marshaling %s: %w", filepath.Base(entry.path), err)
+			return nil, fmt.Errorf("marshaling %s: %w", filepath.Base(entry.path), err)
 		}
-		tmp, err := os.CreateTemp("", "fullsend-plugin-*.json")
-		if err != nil {
-			return fmt.Errorf("creating temp file for %s: %w", filepath.Base(entry.path), err)
-		}
-		tmp.Write(data)
-		tmp.Close()
-		uploadErr := sandbox.Upload(sandboxName, tmp.Name(), entry.path)
-		os.Remove(tmp.Name())
-		if uploadErr != nil {
-			return fmt.Errorf("writing %s: %w", filepath.Base(entry.path), uploadErr)
-		}
+		result = append(result, pluginConfigEntry{path: entry.path, data: data})
 	}
-	return nil
+	return result, nil
 }
 
 // injectTraceID appends the FULLSEND_TRACE_ID to the sandbox .env file.
