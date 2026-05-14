@@ -622,7 +622,7 @@ func TestProvisioner_Provision_SkipDeployNoExistingFunction(t *testing.T) {
 
 	_, err := p.Provision(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found or has no URI")
+	assert.Contains(t, err.Error(), "skip-mint-deploy")
 }
 
 func TestProvisioner_Provision_CodeChanged_UpdatesFunction(t *testing.T) {

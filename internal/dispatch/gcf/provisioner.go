@@ -682,13 +682,21 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 			return nil, fmt.Errorf("function %s deployed but not found or has no URI", functionName)
 		}
 	} else if p.needsCodeDeploy(existing, sourceHash) {
-		// Code changed: UpdateFunction preserving existing env vars, only updating hash.
-		deployEnvVars := make(map[string]string, len(envVars)+len(existing.EnvVars))
-		for k, v := range envVars {
-			deployEnvVars[k] = v
-		}
+		// Code changed: start from existing env vars (preserves org data,
+		// PER_REPO_WIF_REPOS, etc.), then override infrastructure keys
+		// with current config values. EnsureOrgInMint handles org registration.
+		deployEnvVars := make(map[string]string, len(existing.EnvVars)+6)
 		for k, v := range existing.EnvVars {
 			deployEnvVars[k] = v
+		}
+		for _, k := range []string{"GCP_PROJECT_NUMBER", "WIF_POOL_NAME", "WIF_PROVIDER_NAME", "OIDC_AUDIENCE"} {
+			if v, ok := envVars[k]; ok {
+				deployEnvVars[k] = v
+			}
+		}
+		deployEnvVars["ALLOWED_ROLES"] = deriveAllowedRoles(deployEnvVars["ROLE_APP_IDS"])
+		if deployEnvVars["ALLOWED_WORKFLOW_FILES"] == "" {
+			deployEnvVars["ALLOWED_WORKFLOW_FILES"] = "*"
 		}
 		deployEnvVars["FULLSEND_SOURCE_HASH"] = sourceHash
 
@@ -724,6 +732,9 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	}
 
 	if existing == nil || existing.URI == "" {
+		if p.cfg.DeployMode == DeploySkip {
+			return nil, fmt.Errorf("function %s not found — cannot use --skip-mint-deploy without an existing deployment", functionName)
+		}
 		return nil, fmt.Errorf("function %s not found or has no URI", functionName)
 	}
 	mintURL := existing.URI
