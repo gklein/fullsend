@@ -238,6 +238,91 @@ func (p *Provisioner) GetExistingRoleAppIDs(ctx context.Context) (map[string]str
 	return m, nil
 }
 
+// EnsureOrgInMint validates that a mint function exists at expectedURL and
+// that the given org is registered in ALLOWED_ORGS and ROLE_APP_IDS. If the
+// org is missing, it updates the function's env vars to include it.
+// Not safe for concurrent calls — run per-repo installs sequentially when
+// sharing a mint.
+func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, org string, roleAppIDs map[string]string) error {
+	fn, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+	if err != nil {
+		return fmt.Errorf("getting mint function: %w", err)
+	}
+	if fn == nil {
+		return fmt.Errorf("mint function %q not found in project %s region %s", functionName, p.cfg.ProjectID, p.cfg.Region)
+	}
+
+	if fn.URI != expectedURL {
+		return fmt.Errorf("mint URL mismatch: expected %q but function has %q", expectedURL, fn.URI)
+	}
+
+	needsUpdate := false
+
+	// Check ALLOWED_ORGS.
+	allowedOrgs := fn.EnvVars["ALLOWED_ORGS"]
+	orgPresent := false
+	for _, o := range strings.Split(allowedOrgs, ",") {
+		if strings.TrimSpace(o) == org {
+			orgPresent = true
+			break
+		}
+	}
+	if !orgPresent {
+		needsUpdate = true
+	}
+
+	// Check ROLE_APP_IDS.
+	existingRoleAppIDs := make(map[string]string)
+	if raw := fn.EnvVars["ROLE_APP_IDS"]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &existingRoleAppIDs); err != nil {
+			return fmt.Errorf("parsing existing ROLE_APP_IDS: %w", err)
+		}
+	}
+	for key, val := range roleAppIDs {
+		if existing, ok := existingRoleAppIDs[key]; !ok || existing != val {
+			needsUpdate = true
+			break
+		}
+	}
+
+	if !needsUpdate {
+		return nil
+	}
+
+	// Build updated env vars from existing function state.
+	updated := make(map[string]string, len(fn.EnvVars))
+	for k, v := range fn.EnvVars {
+		updated[k] = v
+	}
+
+	// Build desired ALLOWED_ORGS including the new org.
+	desired := map[string]string{
+		"ALLOWED_ORGS": org,
+	}
+	mergeAllowedOrgs(updated, desired)
+	updated["ALLOWED_ORGS"] = desired["ALLOWED_ORGS"]
+
+	// Build desired ROLE_APP_IDS including the new entries.
+	newRoleAppIDs, _ := json.Marshal(roleAppIDs)
+	desired["ROLE_APP_IDS"] = string(newRoleAppIDs)
+	mergeRoleAppIDs(updated, desired)
+	updated["ROLE_APP_IDS"] = desired["ROLE_APP_IDS"]
+
+	// Recompute ALLOWED_ROLES from the merged ROLE_APP_IDS.
+	updated["ALLOWED_ROLES"] = deriveAllowedRoles(updated["ROLE_APP_IDS"])
+
+	opName, err := p.gcpAPI.UpdateFunctionEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
+	if err != nil {
+		return fmt.Errorf("updating mint env vars: %w", err)
+	}
+
+	if err := p.gcpAPI.WaitForOperation(ctx, opName); err != nil {
+		return fmt.Errorf("waiting for mint env vars update: %w", err)
+	}
+
+	return nil
+}
+
 // Provision creates the GCP infrastructure for the token mint.
 //
 // When MintURL is empty, deploys the full mint infrastructure:
