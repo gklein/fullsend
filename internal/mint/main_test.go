@@ -65,10 +65,12 @@ func (f *fakePEMAccessor) AccessPEM(_ context.Context, org, role string) ([]byte
 }
 
 type fakeTokenValidator struct {
-	err error
+	err          error
+	lastProvider string
 }
 
-func (f *fakeTokenValidator) Validate(_ context.Context, _ string) error {
+func (f *fakeTokenValidator) Validate(_ context.Context, _ string, providerName string) error {
+	f.lastProvider = providerName
 	return f.err
 }
 
@@ -1160,5 +1162,137 @@ func TestHandler_MultiOrg_WrongOrg(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 for org not in ALLOWED_ORGS, got %d", rec.Code)
+	}
+}
+
+func TestResolveWIFProvider(t *testing.T) {
+	h := &Handler{defaultWIFProvider: "github-oidc"}
+
+	t.Run("dotFullsend uses default provider", func(t *testing.T) {
+		got := h.resolveWIFProvider("acme-corp/.fullsend")
+		if got != "github-oidc" {
+			t.Fatalf("expected github-oidc, got %s", got)
+		}
+	})
+
+	t.Run("per-repo uses dynamic provider", func(t *testing.T) {
+		got := h.resolveWIFProvider("acme-corp/my-service")
+		want := buildRepoProviderID("acme-corp", "my-service")
+		if got != want {
+			t.Fatalf("expected %s, got %s", want, got)
+		}
+	})
+
+	t.Run("unparseable falls back to default", func(t *testing.T) {
+		got := h.resolveWIFProvider("no-slash")
+		if got != "github-oidc" {
+			t.Fatalf("expected github-oidc for unparseable repo, got %s", got)
+		}
+	})
+}
+
+func TestBuildRepoProviderID(t *testing.T) {
+	tests := []struct {
+		owner, repo string
+		want        string
+	}{
+		{"acme", "widget", "gh-acme-widget"},
+		{"Acme", "My.Repo_v2", "gh-acme-my-repo-v2"},
+		{"org", "very-long-repository-name-that-exceeds-limit", "gh-org-very-long-repository-name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.owner+"/"+tt.repo, func(t *testing.T) {
+			got := buildRepoProviderID(tt.owner, tt.repo)
+			if got != tt.want {
+				t.Fatalf("buildRepoProviderID(%q, %q) = %q, want %q", tt.owner, tt.repo, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrevalidateOIDCToken_MissingRepository(t *testing.T) {
+	setMintEnv(t)
+	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
+
+	// Build a token with empty repository field.
+	header := map[string]string{"alg": "RS256", "typ": "JWT"}
+	claims := map[string]interface{}{
+		"iss":              "https://token.actions.githubusercontent.com",
+		"aud":              "fullsend-mint",
+		"iat":              time.Now().Unix(),
+		"exp":              time.Now().Add(10 * time.Minute).Unix(),
+		"repository":       "",
+		"repository_owner": "test-org",
+		"job_workflow_ref": "test-org/.fullsend/.github/workflows/code.yml@refs/heads/main",
+	}
+	headerJSON, _ := json.Marshal(header)
+	claimsJSON, _ := json.Marshal(claims)
+	token := base64.RawURLEncoding.EncodeToString(headerJSON) + "." +
+		base64.RawURLEncoding.EncodeToString(claimsJSON) + ".fakesig"
+
+	_, err := h.prevalidateOIDCToken(token)
+	if err == nil || !strings.Contains(err.Error(), "missing repository claim") {
+		t.Fatalf("expected 'missing repository claim' error, got: %v", err)
+	}
+}
+
+func TestServeHTTP_PerRepoProvider(t *testing.T) {
+	setMintEnv(t)
+	pemData, err := generateTestRSAKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tv := &fakeTokenValidator{}
+	h := NewHandler(
+		&fakePEMAccessor{pems: map[string][]byte{"test-org/coder": pemData}},
+		tv,
+	)
+
+	// Token from a per-repo install (not .fullsend).
+	oidcToken := makeTestOIDCToken(
+		"https://token.actions.githubusercontent.com",
+		"fullsend-mint",
+		"test-org/integration-service",
+		"test-org",
+		"test-org/.fullsend/.github/workflows/code.yml@refs/heads/main",
+		time.Now().Add(10*time.Minute).Unix(),
+	)
+
+	body := `{"role":"coder","repos":["test-repo"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/token", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+oidcToken)
+	h.ServeHTTP(rec, req)
+
+	// The fake validator succeeds, so the request proceeds to minting.
+	// We verify the correct provider was resolved.
+	want := buildRepoProviderID("test-org", "integration-service")
+	if tv.lastProvider != want {
+		t.Fatalf("expected provider %q, got %q", want, tv.lastProvider)
+	}
+}
+
+func TestServeHTTP_DotFullsendProvider(t *testing.T) {
+	setMintEnv(t)
+	pemData, err := generateTestRSAKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tv := &fakeTokenValidator{}
+	h := NewHandler(
+		&fakePEMAccessor{pems: map[string][]byte{"test-org/coder": pemData}},
+		tv,
+	)
+
+	oidcToken := validOIDCToken()
+
+	body := `{"role":"coder","repos":["test-repo"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/token", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+oidcToken)
+	h.ServeHTTP(rec, req)
+
+	if tv.lastProvider != "github-oidc" {
+		t.Fatalf("expected provider %q for .fullsend repo, got %q", "github-oidc", tv.lastProvider)
 	}
 }

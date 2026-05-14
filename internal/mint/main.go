@@ -60,11 +60,10 @@ func init() {
 	handler := NewHandler(
 		&smPEMAccessor{gcpProjectNum: os.Getenv("GCP_PROJECT_NUMBER")},
 		&stsTokenValidator{
-			httpClient:      httpClient,
-			stsBaseURL:      "https://sts.googleapis.com",
-			gcpProjectNum:   os.Getenv("GCP_PROJECT_NUMBER"),
-			wifPoolName:     os.Getenv("WIF_POOL_NAME"),
-			wifProviderName: os.Getenv("WIF_PROVIDER_NAME"),
+			httpClient:    httpClient,
+			stsBaseURL:    "https://sts.googleapis.com",
+			gcpProjectNum: os.Getenv("GCP_PROJECT_NUMBER"),
+			wifPoolName:   os.Getenv("WIF_POOL_NAME"),
 		},
 	)
 	functions.HTTP("ServeHTTP", handler.ServeHTTP)
@@ -76,16 +75,15 @@ var internalClient = &http.Client{Timeout: 10 * time.Second}
 // (Workload Identity Federation). The STS exchange verifies the token was
 // minted by a repo in the configured org via CEL attribute conditions.
 type stsTokenValidator struct {
-	httpClient      HTTPDoer
-	stsBaseURL      string
-	gcpProjectNum   string
-	wifPoolName     string
-	wifProviderName string
+	httpClient    HTTPDoer
+	stsBaseURL    string
+	gcpProjectNum string
+	wifPoolName   string
 }
 
-func (v *stsTokenValidator) Validate(ctx context.Context, oidcToken string) error {
+func (v *stsTokenValidator) Validate(ctx context.Context, oidcToken string, providerName string) error {
 	aud := fmt.Sprintf("//iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s",
-		v.gcpProjectNum, v.wifPoolName, v.wifProviderName)
+		v.gcpProjectNum, v.wifPoolName, providerName)
 
 	formValues := url.Values{
 		"grant_type":           {"urn:ietf:params:oauth:grant-type:token-exchange"},
@@ -283,6 +281,7 @@ type oidcClaims struct {
 	Audience        audience `json:"aud"`
 	IssuedAt        int64    `json:"iat"`
 	Expiry          int64    `json:"exp"`
+	Repository      string   `json:"repository"`
 	RepositoryOwner string   `json:"repository_owner"`
 	JobWorkflowRef  string   `json:"job_workflow_ref"`
 }
@@ -307,10 +306,10 @@ type PEMAccessor interface {
 	AccessPEM(ctx context.Context, org, role string) ([]byte, error)
 }
 
-// TokenValidator validates an OIDC token and returns an error if invalid.
+// TokenValidator validates an OIDC token against the named WIF provider.
 // Implementations encapsulate the validation backend (GCP STS, etc.).
 type TokenValidator interface {
-	Validate(ctx context.Context, oidcToken string) error
+	Validate(ctx context.Context, oidcToken string, providerName string) error
 }
 
 // HTTPDoer abstracts http.Client for testability.
@@ -326,22 +325,24 @@ type Handler struct {
 
 	githubBaseURL string
 
-	roleAppIDs       map[string]string
-	allowedOrgs      []string
-	allowedRoles     []string
-	allowedWorkflows []string
-	oidcAudience     string
+	roleAppIDs         map[string]string
+	allowedOrgs        []string
+	allowedRoles       []string
+	allowedWorkflows   []string
+	oidcAudience       string
+	defaultWIFProvider string
 }
 
 // NewHandler creates a Handler with production defaults.
 // All environment variables are read once at construction time.
 func NewHandler(pemAccessor PEMAccessor, tokenValidator TokenValidator) *Handler {
 	h := &Handler{
-		httpClient:     &http.Client{Timeout: 30 * time.Second},
-		pemAccessor:    pemAccessor,
-		tokenValidator: tokenValidator,
-		githubBaseURL:  "https://api.github.com",
-		oidcAudience:   os.Getenv("OIDC_AUDIENCE"),
+		httpClient:         &http.Client{Timeout: 30 * time.Second},
+		pemAccessor:        pemAccessor,
+		tokenValidator:     tokenValidator,
+		githubBaseURL:      "https://api.github.com",
+		oidcAudience:       os.Getenv("OIDC_AUDIENCE"),
+		defaultWIFProvider: os.Getenv("WIF_PROVIDER_NAME"),
 	}
 
 	if raw := os.Getenv("ROLE_APP_IDS"); raw != "" {
@@ -483,7 +484,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.tokenValidator.Validate(ctx, oidcToken); err != nil {
+	providerName := h.resolveWIFProvider(claims.Repository)
+	if err := h.tokenValidator.Validate(ctx, oidcToken, providerName); err != nil {
 		log.Printf("OIDC validation failed: %v", err)
 		writeError(w, http.StatusForbidden, "authentication failed")
 		return
@@ -561,6 +563,10 @@ func (h *Handler) prevalidateOIDCToken(token string) (*oidcClaims, error) {
 		return nil, fmt.Errorf("token issued in the future")
 	}
 
+	if claims.Repository == "" {
+		return nil, fmt.Errorf("missing repository claim")
+	}
+
 	if !h.checkAllowedOrg(claims.RepositoryOwner) {
 		return nil, fmt.Errorf("repository_owner not in allowed orgs")
 	}
@@ -610,6 +616,40 @@ func (h *Handler) prevalidateOIDCToken(token string) (*oidcClaims, error) {
 	}
 
 	return &claims, nil
+}
+
+// resolveWIFProvider returns the WIF provider name to use for STS validation
+// based on the repository claim. Org-level .fullsend repos use the default
+// provider; per-repo repos use a dynamically constructed provider ID.
+func (h *Handler) resolveWIFProvider(repository string) string {
+	parts := strings.SplitN(repository, "/", 2)
+	if len(parts) == 2 && parts[1] == ".fullsend" {
+		return h.defaultWIFProvider
+	}
+	if len(parts) == 2 {
+		return buildRepoProviderID(parts[0], parts[1])
+	}
+	return h.defaultWIFProvider
+}
+
+// buildRepoProviderID generates a GCP WIF provider ID scoped to a single repo.
+// GCP requires 4-32 chars, [a-z][a-z0-9-]*, no trailing hyphen.
+// Duplicated from internal/dispatch/gcf/provisioner.go to avoid importing
+// the provisioner package into the Cloud Function.
+func buildRepoProviderID(owner, repo string) string {
+	raw := fmt.Sprintf("gh-%s-%s", owner, repo)
+	raw = strings.ToLower(raw)
+	raw = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			return r
+		}
+		return '-'
+	}, raw)
+	if len(raw) > 32 {
+		raw = raw[:32]
+	}
+	raw = strings.TrimRight(raw, "-")
+	return raw
 }
 
 // mintToken looks up the PEM for (org, role), generates a GitHub App JWT,
