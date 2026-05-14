@@ -156,10 +156,10 @@ func TestInstallCmd_PerOrgRejectsPerRepoFlags(t *testing.T) {
 
 func TestInstallCmd_PerRepoRejectsPerOrgFlags(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com", "--inference-project", "my-project", "--mint-project", "my-project"})
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com", "--inference-project", "my-project", "--mint-provider", "gcf"})
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--mint-project is only valid for per-org installation")
+	assert.Contains(t, err.Error(), "--mint-provider is only valid for per-org installation")
 }
 
 func TestInstallCmd_PerRepoAcceptsMintRegion(t *testing.T) {

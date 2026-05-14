@@ -103,7 +103,7 @@ var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 // perOrgOnlyFlags are flags that only apply to per-org mode.
 var perOrgOnlyFlags = []string{
 	"skip-app-setup", "vendor-fullsend-binary", "enroll-all", "enroll-none",
-	"mint-provider", "mint-project", "mint-source-dir",
+	"mint-provider", "mint-source-dir",
 	"skip-mint-deploy", "force-mint-deploy", "public",
 }
 
@@ -168,8 +168,16 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 						return fmt.Errorf("--%s is only valid for per-org installation (fullsend admin install <org>)", name)
 					}
 				}
-				return runPerRepoInstall(cmd.Context(), arg, agents, mintURL, inferenceRegion,
-					inferenceProject, inferenceWIFProvider, mintRegion,
+				perRepoAgents := agents
+				if !cmd.Flags().Changed("agents") {
+					perRepoAgents = strings.Join(config.PerRepoDefaultRoles(), ",")
+				}
+				perRepoMintProject := mintProject
+				if perRepoMintProject == "" {
+					perRepoMintProject = inferenceProject
+				}
+				return runPerRepoInstall(cmd.Context(), arg, perRepoAgents, mintURL, inferenceRegion,
+					inferenceProject, inferenceWIFProvider, perRepoMintProject, mintRegion,
 					scaffoldCustomized, dryRun)
 			}
 
@@ -361,7 +369,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 }
 
 func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, inferenceRegion,
-	inferenceProject, inferenceWIFProvider, mintRegion string,
+	inferenceProject, inferenceWIFProvider, mintProject, mintRegion string,
 	scaffoldCustomized, dryRun bool) error {
 	if strings.Contains(repoFullName, "://") || strings.HasPrefix(repoFullName, "www.") {
 		return fmt.Errorf("expected owner/repo format, got a URL — use just the owner/repo portion (e.g. acme/widget)")
@@ -459,7 +467,7 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 		printer.Blank()
 		printer.StepInfo("Would validate mint infrastructure:")
 		printer.StepInfo(fmt.Sprintf("  Mint URL: %s", mintURL))
-		printer.StepInfo(fmt.Sprintf("  GCP project: %s, region: %s", inferenceProject, mintRegion))
+		printer.StepInfo(fmt.Sprintf("  Mint project: %s, region: %s", mintProject, mintRegion))
 		printer.StepInfo(fmt.Sprintf("  Check: function exists, URL matches, %s in ALLOWED_ORGS", owner))
 		printer.StepInfo(fmt.Sprintf("  Check: ROLE_APP_IDS has entries for %s/{%s}", owner, strings.Join(roles, ",")))
 		printer.Blank()
@@ -494,7 +502,7 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 	// Validate that the mint function exists and register this org if needed.
 	printer.StepStart("Validating mint infrastructure")
 	mintProvisioner := gcf.NewProvisioner(gcf.Config{
-		ProjectID:  inferenceProject,
+		ProjectID:  mintProject,
 		Region:     mintRegion,
 		GitHubOrgs: []string{owner},
 	}, gcf.NewLiveGCFClient())
