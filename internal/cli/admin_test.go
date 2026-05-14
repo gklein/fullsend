@@ -56,8 +56,20 @@ func TestInstallCmd_Flags(t *testing.T) {
 	require.NotNil(t, vendorBinaryFlag, "expected --vendor-fullsend-binary flag")
 	assert.Equal(t, "false", vendorBinaryFlag.DefValue)
 
-	wifProviderFlag := cmd.Flags().Lookup("gcp-wif-provider")
-	require.NotNil(t, wifProviderFlag, "expected --gcp-wif-provider flag")
+	inferenceProjectFlag := cmd.Flags().Lookup("inference-project")
+	require.NotNil(t, inferenceProjectFlag, "expected --inference-project flag")
+
+	inferenceRegionFlag := cmd.Flags().Lookup("inference-region")
+	require.NotNil(t, inferenceRegionFlag, "expected --inference-region flag")
+	assert.Equal(t, "global", inferenceRegionFlag.DefValue)
+
+	inferenceWIFProviderFlag := cmd.Flags().Lookup("inference-wif-provider")
+	require.NotNil(t, inferenceWIFProviderFlag, "expected --inference-wif-provider flag")
+
+	// Old GCP flags should have been removed.
+	assert.Nil(t, cmd.Flags().Lookup("gcp-project"), "--gcp-project flag should have been renamed to --inference-project")
+	assert.Nil(t, cmd.Flags().Lookup("gcp-region"), "--gcp-region flag should have been renamed to --inference-region")
+	assert.Nil(t, cmd.Flags().Lookup("gcp-wif-provider"), "--gcp-wif-provider flag should have been renamed to --inference-wif-provider")
 
 	// --gcp-wif-sa-email removed (direct WIF, no intermediate SA)
 	wifSAEmailFlag := cmd.Flags().Lookup("gcp-wif-sa-email")
@@ -96,23 +108,23 @@ func TestInstallCmd_Flags(t *testing.T) {
 
 func TestInstallCmd_PerRepoRequiresMintURL(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--gcp-region", "us-central1"})
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--inference-region", "us-central1"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--mint-url is required for per-repo installation")
 }
 
-func TestInstallCmd_PerRepoRequiresGCPRegion(t *testing.T) {
+func TestInstallCmd_PerRepoRequiresInferenceProject(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com"})
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--gcp-region is required for per-repo installation")
+	assert.Contains(t, err.Error(), "--inference-project is required for per-repo installation")
 }
 
 func TestInstallCmd_PerRepoRejectsInvalidFormat(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/", "--mint-url", "https://mint.example.com", "--gcp-region", "us-central1"})
+	cmd.SetArgs([]string{"admin", "install", "acme/", "--mint-url", "https://mint.example.com", "--inference-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "repo must be in owner/repo format")
@@ -120,7 +132,7 @@ func TestInstallCmd_PerRepoRejectsInvalidFormat(t *testing.T) {
 
 func TestInstallCmd_PerRepoRejectsMultiSlash(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/team/repo", "--mint-url", "https://mint.example.com", "--gcp-region", "us-central1"})
+	cmd.SetArgs([]string{"admin", "install", "acme/team/repo", "--mint-url", "https://mint.example.com", "--inference-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid repo name")
@@ -128,7 +140,7 @@ func TestInstallCmd_PerRepoRejectsMultiSlash(t *testing.T) {
 
 func TestInstallCmd_PerRepoRejectsNonHTTPSMintURL(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "http://mint.example.com", "--gcp-region", "us-central1"})
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "http://mint.example.com", "--inference-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--mint-url must be a valid HTTPS URL")
@@ -144,20 +156,19 @@ func TestInstallCmd_PerOrgRejectsPerRepoFlags(t *testing.T) {
 
 func TestInstallCmd_PerRepoRejectsPerOrgFlags(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com", "--gcp-region", "us-central1", "--mint-project", "my-project"})
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com", "--inference-project", "my-project", "--mint-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--mint-project is only valid for per-org installation")
 }
 
-func TestInstallCmd_PerRepoRequiresGCPProject(t *testing.T) {
+func TestInstallCmd_PerRepoRequiresInferenceProjectExplicit(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "acme/widget",
-		"--mint-url", "https://mint.example.com",
-		"--gcp-region", "us-central1"})
+		"--mint-url", "https://mint.example.com"})
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--gcp-project is required for per-repo installation")
+	assert.Contains(t, err.Error(), "--inference-project is required for per-repo installation")
 }
 
 func TestParseAgentRoles(t *testing.T) {
@@ -1067,8 +1078,7 @@ func TestInstallCmd_PerRepoRejectsInvalidRole(t *testing.T) {
 	cmd.SetArgs([]string{"admin", "install", "acme/widget",
 		"--agents", "triage,INVALID",
 		"--mint-url", "https://mint.example.com",
-		"--gcp-region", "us-central1",
-		"--gcp-project", "my-project"})
+		"--inference-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid role name")
@@ -1078,7 +1088,7 @@ func TestInstallCmd_PerRepoRejectsOwnerWithDots(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "my.org/widget",
 		"--mint-url", "https://mint.example.com",
-		"--gcp-region", "us-central1"})
+		"--inference-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid owner name")
@@ -1098,7 +1108,7 @@ func TestInstallCmd_PerRepoRejectsURL(t *testing.T) {
 			cmd := newRootCmd()
 			cmd.SetArgs([]string{"admin", "install", tc.input,
 				"--mint-url", "https://mint.example.com",
-				"--gcp-region", "us-central1"})
+				"--inference-project", "my-project"})
 			err := cmd.Execute()
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "expected owner/repo format, got a URL")
