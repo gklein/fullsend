@@ -108,7 +108,7 @@ func TestInstallCmd_Flags(t *testing.T) {
 
 func TestInstallCmd_PerRepoRequiresMintURL(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--inference-region", "us-central1"})
+	cmd.SetArgs([]string{"admin", "install", "acme/widget"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--mint-url is required for per-repo installation")
@@ -160,15 +160,6 @@ func TestInstallCmd_PerRepoRejectsPerOrgFlags(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--mint-project is only valid for per-org installation")
-}
-
-func TestInstallCmd_PerRepoRequiresInferenceProjectExplicit(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget",
-		"--mint-url", "https://mint.example.com"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--inference-project is required for per-repo installation")
 }
 
 func TestParseAgentRoles(t *testing.T) {

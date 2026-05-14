@@ -222,25 +222,13 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 				return fmt.Errorf("--inference-wif-provider and --inference-region require --inference-project to be set")
 			}
 
-			// Auto-discover or create WIF provider when not explicitly given.
+			// Auto-provision WIF when not explicitly given (idempotent: safe to re-run).
 			if inferenceProject != "" && inferenceWIFProvider == "" {
-				printer.StepStart("Discovering WIF provider for inference")
-				gcpClient := gcf.NewLiveGCFClient()
-				projectNumber, err := gcpClient.GetProjectNumber(ctx, inferenceProject)
-				if err != nil {
-					printer.StepFail("Failed to look up project number")
-					return fmt.Errorf("looking up project number for %s: %w", inferenceProject, err)
-				}
-				info, err := gcpClient.GetWIFProvider(ctx, projectNumber, "fullsend-pool", "github-oidc")
-				if err != nil {
-					printer.StepFail("Failed to check existing WIF provider")
-					return fmt.Errorf("checking existing WIF provider: %w", err)
-				}
-				if info != nil {
-					inferenceWIFProvider = fmt.Sprintf("projects/%s/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc", projectNumber)
-					printer.StepDone("Found existing WIF provider")
+				if dryRun {
+					printer.StepInfo("Would auto-provision WIF provider in project " + inferenceProject)
 				} else {
-					printer.StepStart("Provisioning WIF infrastructure")
+					printer.StepStart("Provisioning WIF infrastructure for inference")
+					gcpClient := gcf.NewLiveGCFClient()
 					provisioner := gcf.NewProvisioner(gcf.Config{
 						ProjectID:  inferenceProject,
 						GitHubOrgs: []string{org},

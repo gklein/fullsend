@@ -32,7 +32,7 @@ The table below lists every scope the installer may request and why. You are nev
 | `admin:org` | install, uninstall, analyze | Manage organization-level Actions variables (the mint URL) |
 | `delete_repo` | uninstall | Delete the `.fullsend` config repository |
 
-The `--gcp-region` flag is required when `--gcp-project` is set. Use `global` for the broadest model availability. For a list of all available regions, see the [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions).
+The `--inference-region` flag defaults to `global` for the broadest model availability. For a list of all available regions, see the [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions). The `--inference-wif-provider` flag is optional — when omitted, the installer auto-provisions WIF infrastructure.
 
 ## 1. Set up inference authentication with GCP Agent Platform
 
@@ -94,13 +94,13 @@ If the installer fails partway through, run `fullsend admin uninstall "$ORG_NAME
 
 ```bash
 fullsend admin install "$ORG_NAME" \
-  --gcp-project "$GCP_PROJECT" \
-  --gcp-region global \
-  --gcp-wif-provider "$WIF_PROVIDER" \
+  --inference-project "$GCP_PROJECT" \
   --mint-project "$GCP_PROJECT"
 ```
 
-`--mint-project` specifies the GCP project where the OIDC token mint Cloud Function is deployed. It can be the same project as `--gcp-project` or a separate project. The installer automatically provisions a Cloud Function, WIF pool (`fullsend-pool`), WIF provider (`github-oidc`), and Secret Manager secrets in the mint project. A service account (`fullsend-mint`) is also created as the Cloud Function's runtime identity to access Secret Manager — this is internal infrastructure and does not require any admin setup.
+When `--inference-wif-provider` is omitted, the installer auto-discovers or creates WIF infrastructure (pool `fullsend-pool`, provider `github-oidc`) in the inference project. Pass `--inference-wif-provider "$WIF_PROVIDER"` to use a pre-existing provider instead.
+
+`--mint-project` specifies the GCP project where the OIDC token mint Cloud Function is deployed. It can be the same project as `--inference-project` or a separate project. The installer automatically provisions a Cloud Function, WIF pool (`fullsend-pool`), WIF provider (`github-oidc`), and Secret Manager secrets in the mint project. A service account (`fullsend-mint`) is also created as the Cloud Function's runtime identity to access Secret Manager — this is internal infrastructure and does not require any admin setup.
 
 Additional mint flags:
 
@@ -122,9 +122,7 @@ A single token mint can serve multiple GitHub organizations. The first org deplo
 
 ```bash
 fullsend admin install "$FIRST_ORG" \
-  --gcp-project "$GCP_PROJECT" \
-  --gcp-region global \
-  --gcp-wif-provider "$WIF_PROVIDER" \
+  --inference-project "$GCP_PROJECT" \
   --mint-project "$GCP_PROJECT" \
   --public
 ```
@@ -135,9 +133,7 @@ The `--public` flag creates GitHub Apps as public unlisted — they won't appear
 
 ```bash
 fullsend admin install "$ADDITIONAL_ORG" \
-  --gcp-project "$GCP_PROJECT" \
-  --gcp-region global \
-  --gcp-wif-provider "$WIF_PROVIDER" \
+  --inference-project "$GCP_PROJECT" \
   --mint-url "$MINT_URL"
 ```
 

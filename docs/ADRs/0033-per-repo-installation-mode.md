@@ -260,7 +260,7 @@ Per-org-only flags (`--mint-project`, `--mint-region`, `--public`, etc.) are rej
 4. Commits all scaffold files to the target repo via the GitHub API.
 5. Sets repository variables (`FULLSEND_MINT_URL`, `FULLSEND_GCP_REGION`, `FULLSEND_GCP_AUTH_MODE`).
 6. Sets repository secrets (`FULLSEND_GCP_PROJECT_ID`, and either WIF credentials or SA key JSON depending on `--gcp-auth-mode`).
-7. In WIF mode, auto-provisions WIF pool/provider/service account if `--gcp-wif-provider` is omitted.
+7. Auto-provisions WIF pool/provider if `--inference-wif-provider` is omitted.
 
 Per-repo install requires only `repo` and `workflow` OAuth scopes (no `admin:org`).
 
