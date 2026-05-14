@@ -336,8 +336,11 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 					return fmt.Errorf("all %d repos were skipped due to guard-check errors — verify your token has actions:read scope", eligibleCount)
 				}
 				msg := fmt.Sprintf("Enrolling %d repositories (excluding %s)", len(repos), forge.ConfigRepoName)
-				if skippedPerRepo > 0 {
-					msg += fmt.Sprintf(", skipped %d per-repo installed", skippedPerRepo)
+				if skippedPerRepo-skippedErrors > 0 {
+					msg += fmt.Sprintf(", %d per-repo installed", skippedPerRepo-skippedErrors)
+				}
+				if skippedErrors > 0 {
+					msg += fmt.Sprintf(", %d guard-check errors", skippedErrors)
 				}
 				printer.StepInfo(msg)
 			} else {

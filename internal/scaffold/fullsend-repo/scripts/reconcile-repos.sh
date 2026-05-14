@@ -71,7 +71,7 @@ check_per_repo_guard() {
   local repo="$1"
   local action="$2"
   local resp rc var
-  resp=$(gh api "repos/$ORG/$repo/actions/variables/$PER_REPO_GUARD_VAR" 2>&1) && rc=0 || rc=$?
+  resp=$(gh api "repos/$ORG/$repo/actions/variables/$PER_REPO_GUARD_VAR" 2>/dev/null) && rc=0 || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     var=$(printf '%s' "$resp" | jq -r '.value // empty')
     if [[ "$var" == "true" ]]; then
@@ -79,7 +79,9 @@ check_per_repo_guard() {
       return 0
     fi
     if [[ -n "$var" ]]; then
-      echo "::notice::$repo has $PER_REPO_GUARD_VAR=$var (not \"true\") — proceeding with $action"
+      local safe_var
+      safe_var=$(printf '%s' "$var" | tr -d '\n\r')
+      echo "::notice::$repo has $PER_REPO_GUARD_VAR=$safe_var (not \"true\") — proceeding with $action"
     fi
     return 1
   fi
@@ -88,7 +90,7 @@ check_per_repo_guard() {
     return 1
   fi
   # Non-404 error (permissions, network) — skip to be safe.
-  echo "::warning::Skipping $action of $repo — could not check per-repo guard variable: $resp"
+  echo "::warning::Skipping $action of $repo — could not check per-repo guard variable (exit code $rc)"
   return 0
 }
 
