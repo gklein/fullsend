@@ -68,6 +68,8 @@ Additional mint flags:
 
 `--skip-mint-deploy` and `--force-mint-deploy` are mutually exclusive.
 
+> **Mint URL stability:** The mint URL is stable across redeploys within the same project and region — updating the Cloud Function does not change its URL. Adding a new org or per-repo enrollment triggers a redeploy (to update env vars like `ROLE_APP_IDS` and `ALLOWED_ORGS`), but this is an in-place update that preserves the URL. Existing enrolled repos continue working with no changes. However, deploying to a **different region** (e.g., changing `--mint-region` from `us-central1` to `us-east5`) creates a new Cloud Run service with a different URL. All enrolled repos store the mint URL in a repo variable (`FULLSEND_MINT_URL`) or org variable, so changing the region requires updating every enrolled repo's variable to the new URL. Avoid changing `--mint-region` after initial deployment unless you plan to update all consumers.
+
 ### Multi-org setup
 
 A single token mint can serve multiple GitHub organizations. The first org deploys the mint infrastructure and creates **public unlisted** GitHub Apps; additional orgs reuse the existing mint and install the same apps.
