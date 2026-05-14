@@ -62,6 +62,35 @@ shim_content_b64() {
   sed "s|__ORG__|${ORG}|g" "$SHIM_TEMPLATE" | base64 -w0
 }
 COMMIT_SHA="${GITHUB_SHA:-unknown}"
+PER_REPO_GUARD_VAR="FULLSEND_PER_REPO_INSTALL"
+
+# check_per_repo_guard checks whether a repo has an active per-repo installation.
+# Returns 0 (should skip) if per-repo guard is active or API error (fail closed).
+# Returns 1 (proceed) if guard is not set or not "true".
+check_per_repo_guard() {
+  local repo="$1"
+  local action="$2"
+  local resp rc var
+  resp=$(gh api "repos/$ORG/$repo/actions/variables/$PER_REPO_GUARD_VAR" 2>&1) && rc=0 || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    var=$(printf '%s' "$resp" | jq -r '.value // empty')
+    if [[ "$var" == "true" ]]; then
+      echo "::warning::Skipping $action of $repo — per-repo installation active ($PER_REPO_GUARD_VAR=true)"
+      return 0
+    fi
+    if [[ -n "$var" ]]; then
+      echo "::notice::$repo has $PER_REPO_GUARD_VAR=$var (not \"true\") — proceeding with $action"
+    fi
+    return 1
+  fi
+  # Check if the error is a 404 (variable not found) via JSON status field.
+  if printf '%s' "$resp" | jq -e '.status == "404"' >/dev/null 2>&1; then
+    return 1
+  fi
+  # Non-404 error (permissions, network) — skip to be safe.
+  echo "::warning::Skipping $action of $repo — could not check per-repo guard variable: $resp"
+  return 0
+}
 
 ENROLLED=0
 UPDATED=0
@@ -257,20 +286,7 @@ if [ -n "$ENABLED_REPOS" ]; then
     close_pr_on_branch "$REPO" "$UNENROLL_BRANCH" "Repo re-enabled in config.yaml"
 
     # Skip repos with per-repo installation — they manage their own WIF and shim.
-    # Skips both new enrollment and shim updates (per-repo uses a different shim template).
-    # Fail closed: if the API call fails (permissions, network), skip the repo rather than
-    # proceeding with enrollment that could overwrite a per-repo installation.
-    PER_REPO_RESP=$(gh api "repos/$ORG/$REPO/actions/variables/FULLSEND_PER_REPO_INSTALL" 2>&1) && PER_REPO_RC=0 || PER_REPO_RC=$?
-    if [[ "$PER_REPO_RC" -eq 0 ]]; then
-      PER_REPO_VAR=$(printf '%s' "$PER_REPO_RESP" | jq -r '.value // empty')
-      if [[ "$PER_REPO_VAR" == "true" ]]; then
-        echo "::warning::Skipping $REPO — per-repo installation active (FULLSEND_PER_REPO_INSTALL=true)"
-        SKIPPED=$((SKIPPED + 1))
-        continue
-      fi
-    elif ! printf '%s' "$PER_REPO_RESP" | grep -q "404"; then
-      # Non-404 error (permissions, network) — skip to be safe.
-      echo "::warning::Skipping $REPO — could not check per-repo guard variable: $PER_REPO_RESP"
+    if check_per_repo_guard "$REPO" "enrollment"; then
       SKIPPED=$((SKIPPED + 1))
       continue
     fi
@@ -388,17 +404,7 @@ if [ -n "$DISABLED_REPOS" ]; then
     close_pr_on_branch "$REPO" "$ENROLL_BRANCH" "Repo disabled in config.yaml"
 
     # Skip repos with per-repo installation — unenrollment would break their shim.
-    # Fail closed: if the API call fails, skip rather than removing a per-repo shim.
-    PER_REPO_RESP=$(gh api "repos/$ORG/$REPO/actions/variables/FULLSEND_PER_REPO_INSTALL" 2>&1) && PER_REPO_RC=0 || PER_REPO_RC=$?
-    if [[ "$PER_REPO_RC" -eq 0 ]]; then
-      PER_REPO_VAR=$(printf '%s' "$PER_REPO_RESP" | jq -r '.value // empty')
-      if [[ "$PER_REPO_VAR" == "true" ]]; then
-        echo "::warning::Skipping unenrollment of $REPO — per-repo installation active (FULLSEND_PER_REPO_INSTALL=true)"
-        SKIPPED=$((SKIPPED + 1))
-        continue
-      fi
-    elif ! printf '%s' "$PER_REPO_RESP" | grep -q "404"; then
-      echo "::warning::Skipping unenrollment of $REPO — could not check per-repo guard variable: $PER_REPO_RESP"
+    if check_per_repo_guard "$REPO" "unenrollment"; then
       SKIPPED=$((SKIPPED + 1))
       continue
     fi

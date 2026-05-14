@@ -187,11 +187,12 @@ func (l *EnrollmentLayer) Uninstall(_ context.Context) error {
 func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	report := &LayerReport{Name: l.Name()}
 
-	var enrolled, notEnrolled, perRepo []string
+	var enrolled, notEnrolled, perRepo, guardFailed []string
 	for _, repo := range l.enabledRepos {
 		guardVal, guardExists, err := l.client.GetRepoVariable(ctx, l.org, repo, forge.PerRepoGuardVar)
 		if err != nil {
-			return nil, fmt.Errorf("checking per-repo guard for %s: %w", repo, err)
+			guardFailed = append(guardFailed, repo)
+			continue
 		}
 		if guardExists && guardVal == "true" {
 			perRepo = append(perRepo, repo)
@@ -213,7 +214,8 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	for _, repo := range l.disabledRepos {
 		guardVal, guardExists, err := l.client.GetRepoVariable(ctx, l.org, repo, forge.PerRepoGuardVar)
 		if err != nil {
-			return nil, fmt.Errorf("checking per-repo guard for %s: %w", repo, err)
+			guardFailed = append(guardFailed, repo)
+			continue
 		}
 		if guardExists && guardVal == "true" {
 			perRepo = append(perRepo, repo)
@@ -230,10 +232,13 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 		}
 	}
 
-	hasDrift := len(notEnrolled) > 0 || len(staleShim) > 0
+	hasDrift := len(notEnrolled) > 0 || len(staleShim) > 0 || len(guardFailed) > 0
 
 	for _, r := range perRepo {
 		report.Details = append(report.Details, r+" (per-repo install, skipped)")
+	}
+	for _, r := range guardFailed {
+		report.Details = append(report.Details, r+" (guard check failed, skipped)")
 	}
 
 	switch {
@@ -241,7 +246,7 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 		report.Status = StatusInstalled
 		report.Details = append(report.Details, "no repositories configured")
 	case hasDrift:
-		if len(enrolled) == 0 && len(staleShim) == 0 && len(perRepo) == 0 {
+		if len(enrolled) == 0 && len(staleShim) == 0 && len(perRepo) == 0 && len(guardFailed) == 0 {
 			report.Status = StatusNotInstalled
 		} else {
 			report.Status = StatusDegraded

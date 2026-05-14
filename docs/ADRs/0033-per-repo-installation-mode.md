@@ -261,7 +261,7 @@ Per-org-only flags (`--mint-region`, `--public`, `--enroll-all`, `--enroll-none`
 3. Optionally creates `.fullsend/customized/` directory structure (`--scaffold-customized`).
 4. Commits all scaffold files to the target repo via the GitHub API.
 5. Sets repository variables (`FULLSEND_MINT_URL`, `FULLSEND_GCP_REGION`, `FULLSEND_PER_REPO_INSTALL`).
-6. Sets repository secrets (`FULLSEND_GCP_PROJECT_ID`, and either WIF credentials or SA key JSON depending on `--gcp-auth-mode`).
+6. Sets repository secrets (`FULLSEND_GCP_PROJECT_ID`, WIF credentials).
 7. Auto-provisions WIF pool/provider if `--inference-wif-provider` is omitted.
 
 Per-repo install requires only `repo` and `workflow` OAuth scopes (no `admin:org`).

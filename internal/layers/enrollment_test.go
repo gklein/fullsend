@@ -369,7 +369,10 @@ func TestEnrollmentLayer_Analyze_PerRepoGuardCheckError(t *testing.T) {
 	client.Errors["GetRepoVariable"] = fmt.Errorf("permission denied")
 	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a"}, nil)
 
-	_, err := layer.Analyze(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "checking per-repo guard for repo-a")
+	report, err := layer.Analyze(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, StatusDegraded, report.Status)
+	require.Len(t, report.Details, 1)
+	assert.Contains(t, report.Details[0], "guard check failed, skipped")
 }

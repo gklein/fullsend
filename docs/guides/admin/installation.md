@@ -197,6 +197,8 @@ gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --condition=None
 ```
 
+> **Security note:** The `attribute.repository_owner` condition grants WIF access to _all_ repositories in the organization, not just `.fullsend`. For tighter scoping, use a `attribute.repository` condition targeting specific repos. See [Google Cloud WIF documentation](https://cloud.google.com/iam/docs/workload-identity-federation) for condition syntax.
+
 **Pass the provider to the installer:**
 
 ```bash

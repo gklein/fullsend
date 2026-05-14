@@ -298,10 +298,12 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 				var reader *bufio.Reader
 				var skippedPerRepo int
 				var skippedErrors int
+				var eligibleCount int
 				for _, r := range allRepos {
 					if r.Name == forge.ConfigRepoName {
 						continue
 					}
+					eligibleCount++
 					guardVal, guardExists, guardErr := client.GetRepoVariable(ctx, org, r.Name, forge.PerRepoGuardVar)
 					if guardErr != nil {
 						printer.StepWarn(fmt.Sprintf("Could not check per-repo guard for %s: %v — skipping to be safe", r.Name, guardErr))
@@ -330,7 +332,6 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 				}
 				// If every eligible repo was skipped due to guard-check errors,
 				// the token likely lacks the required scope — fail loudly.
-				eligibleCount := len(allRepos) - 1 // exclude .fullsend
 				if eligibleCount > 0 && skippedErrors == eligibleCount {
 					return fmt.Errorf("all %d repos were skipped due to guard-check errors — verify your token has actions:read scope", eligibleCount)
 				}
