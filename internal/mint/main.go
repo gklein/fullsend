@@ -331,6 +331,7 @@ type Handler struct {
 	allowedWorkflows   []string
 	oidcAudience       string
 	defaultWIFProvider string
+	perRepoWIFRepos    map[string]bool
 }
 
 // NewHandler creates a Handler with production defaults.
@@ -398,6 +399,15 @@ func NewHandler(pemAccessor PEMAccessor, tokenValidator TokenValidator) *Handler
 		for _, entry := range strings.Split(wf, ",") {
 			if trimmed := strings.TrimSpace(entry); trimmed != "" {
 				h.allowedWorkflows = append(h.allowedWorkflows, trimmed)
+			}
+		}
+	}
+
+	h.perRepoWIFRepos = make(map[string]bool)
+	if raw := os.Getenv("PER_REPO_WIF_REPOS"); raw != "" {
+		for _, entry := range strings.Split(raw, ",") {
+			if trimmed := strings.TrimSpace(entry); trimmed != "" {
+				h.perRepoWIFRepos[strings.ToLower(trimmed)] = true
 			}
 		}
 	}
@@ -619,14 +629,17 @@ func (h *Handler) prevalidateOIDCToken(token string) (*oidcClaims, error) {
 }
 
 // resolveWIFProvider returns the WIF provider name to use for STS validation
-// based on the repository claim. Org-level .fullsend repos use the default
-// provider; per-repo repos use a dynamically constructed provider ID.
+// based on the repository claim. Repos in the perRepoWIFRepos registry use a
+// dedicated per-repo provider; all others (including .fullsend) use the default.
 func (h *Handler) resolveWIFProvider(repository string) string {
 	parts := strings.SplitN(repository, "/", 2)
-	if len(parts) == 2 && parts[1] == ".fullsend" {
+	if len(parts) != 2 {
 		return h.defaultWIFProvider
 	}
-	if len(parts) == 2 {
+	if parts[1] == ".fullsend" {
+		return h.defaultWIFProvider
+	}
+	if h.perRepoWIFRepos[strings.ToLower(repository)] {
 		return buildRepoProviderID(parts[0], parts[1])
 	}
 	return h.defaultWIFProvider
