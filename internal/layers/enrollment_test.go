@@ -3,6 +3,7 @@ package layers
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -291,4 +292,57 @@ func TestEnrollmentLayer_Analyze_MixedEnabledAndDisabled(t *testing.T) {
 	assert.Contains(t, report.Details[0], "repo-a")
 	require.Len(t, report.WouldFix, 1)
 	assert.Contains(t, report.WouldFix[0], "removal PR for repo-x")
+}
+
+func TestEnrollmentLayer_Analyze_PerRepoGuardSkips(t *testing.T) {
+	client := &forge.FakeClient{
+		VariablesExist: map[string]bool{
+			"test-org/repo-a/FULLSEND_PER_REPO_INSTALL": true,
+		},
+	}
+	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a"}, nil)
+
+	report, err := layer.Analyze(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, StatusInstalled, report.Status)
+	require.Len(t, report.Details, 1)
+	assert.Contains(t, report.Details[0], "per-repo install, skipped")
+	assert.Empty(t, report.WouldInstall)
+}
+
+func TestEnrollmentLayer_Analyze_MixedPerRepoAndOrg(t *testing.T) {
+	client := &forge.FakeClient{
+		FileContents: map[string][]byte{
+			"test-org/repo-b/.github/workflows/fullsend.yaml": []byte("shim"),
+		},
+		VariablesExist: map[string]bool{
+			"test-org/repo-a/FULLSEND_PER_REPO_INSTALL": true,
+		},
+	}
+	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a", "repo-b", "repo-c"}, nil)
+
+	report, err := layer.Analyze(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, StatusDegraded, report.Status)
+	// repo-a is per-repo, repo-b is enrolled, repo-c is not enrolled
+	detailsJoined := strings.Join(report.Details, " | ")
+	assert.Contains(t, detailsJoined, "repo-a (per-repo install, skipped)")
+	assert.Contains(t, detailsJoined, "repo-b enrolled")
+	require.Len(t, report.WouldInstall, 1)
+	assert.Contains(t, report.WouldInstall[0], "repo-c")
+}
+
+func TestEnrollmentLayer_Analyze_PerRepoGuardCheckError(t *testing.T) {
+	client := &forge.FakeClient{
+		Errors: map[string]error{
+			"RepoVariableExists": fmt.Errorf("permission denied"),
+		},
+	}
+	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a"}, nil)
+
+	_, err := layer.Analyze(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "checking per-repo guard for repo-a")
 }

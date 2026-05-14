@@ -14,6 +14,10 @@ const (
 
 	// repoMaintenanceWorkflow is the workflow file that handles enrollment.
 	repoMaintenanceWorkflow = "repo-maintenance.yml"
+
+	// perRepoGuardVar is the repo variable set by per-repo install to prevent
+	// per-org enrollment from overriding a per-repo installation.
+	perRepoGuardVar = "FULLSEND_PER_REPO_INSTALL"
 )
 
 // EnrollmentLayer monitors workflow-driven enrollment of target repos.
@@ -187,9 +191,18 @@ func (l *EnrollmentLayer) Uninstall(_ context.Context) error {
 func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	report := &LayerReport{Name: l.Name()}
 
-	var enrolled, notEnrolled []string
+	var enrolled, notEnrolled, perRepo []string
 	for _, repo := range l.enabledRepos {
-		_, err := l.client.GetFileContent(ctx, l.org, repo, shimWorkflowPath)
+		hasGuard, err := l.client.RepoVariableExists(ctx, l.org, repo, perRepoGuardVar)
+		if err != nil {
+			return nil, fmt.Errorf("checking per-repo guard for %s: %w", repo, err)
+		}
+		if hasGuard {
+			perRepo = append(perRepo, repo)
+			continue
+		}
+
+		_, err = l.client.GetFileContent(ctx, l.org, repo, shimWorkflowPath)
 		if err == nil {
 			enrolled = append(enrolled, repo)
 		} else if forge.IsNotFound(err) {
@@ -214,12 +227,16 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 
 	hasDrift := len(notEnrolled) > 0 || len(staleShim) > 0
 
+	for _, r := range perRepo {
+		report.Details = append(report.Details, r+" (per-repo install, skipped)")
+	}
+
 	switch {
 	case len(l.enabledRepos) == 0 && len(l.disabledRepos) == 0:
 		report.Status = StatusInstalled
 		report.Details = append(report.Details, "no repositories configured")
 	case hasDrift:
-		if len(enrolled) == 0 && len(staleShim) == 0 {
+		if len(enrolled) == 0 && len(staleShim) == 0 && len(perRepo) == 0 {
 			report.Status = StatusNotInstalled
 		} else {
 			report.Status = StatusDegraded

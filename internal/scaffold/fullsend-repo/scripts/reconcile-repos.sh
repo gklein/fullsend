@@ -253,6 +253,15 @@ if [ -n "$ENABLED_REPOS" ]; then
       continue
     fi
 
+    # Skip repos with per-repo installation — they manage their own WIF and shim.
+    # Skips both new enrollment and shim updates (per-repo uses a different shim template).
+    PER_REPO_VAR=$(gh api "repos/$ORG/$REPO/actions/variables/FULLSEND_PER_REPO_INSTALL" --jq '.value' 2>/dev/null || true)
+    if [[ "$PER_REPO_VAR" == "true" ]]; then
+      echo "::warning::Skipping $REPO — per-repo installation active (FULLSEND_PER_REPO_INSTALL=true)"
+      SKIPPED=$((SKIPPED + 1))
+      continue
+    fi
+
     # Clean up any stale removal PR from a previous disable cycle.
     close_pr_on_branch "$REPO" "$UNENROLL_BRANCH" "Repo re-enabled in config.yaml"
 

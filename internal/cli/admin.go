@@ -294,13 +294,35 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 
 			var repos []string
 			if enrollAll {
-				// Filter out .fullsend from enrollment.
+				// Filter out .fullsend and per-repo installed repos from enrollment.
+				reader := bufio.NewReader(os.Stdin)
+				var skippedPerRepo int
 				for _, r := range allRepos {
-					if r.Name != forge.ConfigRepoName {
-						repos = append(repos, r.Name)
+					if r.Name == forge.ConfigRepoName {
+						continue
 					}
+					guardVal, guardExists, _ := client.GetRepoVariable(ctx, org, r.Name, "FULLSEND_PER_REPO_INSTALL")
+					if guardExists && guardVal == "true" {
+						printer.StepWarn(fmt.Sprintf("Skipping %s — per-repo installation active", r.Name))
+						skippedPerRepo++
+						continue
+					}
+					if guardExists {
+						printer.StepInfo(fmt.Sprintf("%s has per-repo install (guard=%s). Enroll with per-org? [y/n]: ", r.Name, guardVal))
+						choice, _ := reader.ReadString('\n')
+						if strings.TrimSpace(strings.ToLower(choice)) != "y" {
+							printer.StepInfo(fmt.Sprintf("Skipping %s", r.Name))
+							skippedPerRepo++
+							continue
+						}
+					}
+					repos = append(repos, r.Name)
 				}
-				printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
+				msg := fmt.Sprintf("Enrolling %d repositories (excluding %s)", len(repos), forge.ConfigRepoName)
+				if skippedPerRepo > 0 {
+					msg += fmt.Sprintf(", skipped %d per-repo installed", skippedPerRepo)
+				}
+				printer.StepInfo(msg)
 			} else {
 				printer.StepInfo("No repositories will be enrolled during install")
 				printer.StepInfo("To enroll repositories later, use:")
@@ -458,8 +480,19 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 	needsWIFProvision := inferenceWIFProvider == ""
 
 	repoVars := map[string]string{
-		"FULLSEND_MINT_URL":   mintURL,
-		"FULLSEND_GCP_REGION": inferenceRegion,
+		"FULLSEND_MINT_URL":         mintURL,
+		"FULLSEND_GCP_REGION":       inferenceRegion,
+		"FULLSEND_PER_REPO_INSTALL": "true",
+	}
+
+	guardVal, guardExists, _ := client.GetRepoVariable(ctx, owner, repo, "FULLSEND_PER_REPO_INSTALL")
+	switch {
+	case guardExists && guardVal == "true":
+		printer.StepInfo(fmt.Sprintf("%s/%s is per-repo mode, updating installation", owner, repo))
+	case guardExists:
+		printer.StepInfo(fmt.Sprintf("%s/%s was per-repo mode (guard=%s), re-enabling and updating", owner, repo, guardVal))
+	default:
+		printer.StepInfo(fmt.Sprintf("Setting up new per-repo installation for %s/%s", owner, repo))
 	}
 
 	if dryRun {

@@ -108,6 +108,7 @@ type FakeClient struct {
 	PullRequests      map[string][]ChangeProposal // key: "owner/repo"
 	TokenScopes       []string                    // scopes returned by GetTokenScopes
 	VariablesExist    map[string]bool             // key: "owner/repo/name"
+	VariableValues    map[string]string           // key: "owner/repo/name"
 
 	// App client IDs for GetAppClientID
 	AppClientIDs map[string]string // key: app slug → client ID
@@ -578,6 +579,22 @@ func (f *FakeClient) RepoVariableExists(_ context.Context, owner, repo, name str
 		return false, nil
 	}
 	return f.VariablesExist[owner+"/"+repo+"/"+name], nil
+}
+
+func (f *FakeClient) GetRepoVariable(_ context.Context, owner, repo, name string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("GetRepoVariable"); e != nil {
+		return "", false, e
+	}
+
+	if f.VariableValues != nil {
+		if val, ok := f.VariableValues[owner+"/"+repo+"/"+name]; ok {
+			return val, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func (f *FakeClient) GetLatestWorkflowRun(_ context.Context, owner, repo, workflowFile string) (*WorkflowRun, error) {

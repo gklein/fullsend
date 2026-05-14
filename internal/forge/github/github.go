@@ -1061,6 +1061,31 @@ func (c *LiveClient) RepoVariableExists(ctx context.Context, owner, repo, name s
 	return false, &APIError{StatusCode: resp.StatusCode, Message: "unexpected status checking variable"}
 }
 
+// GetRepoVariable returns the value of a repository Actions variable.
+// Returns ("", false, nil) if the variable does not exist.
+func (c *LiveClient) GetRepoVariable(ctx context.Context, owner, repo, name string) (string, bool, error) {
+	resp, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/actions/variables/%s", owner, repo, name), nil)
+	if err != nil {
+		return "", false, fmt.Errorf("get variable %s: %w", name, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return "", false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", false, &APIError{StatusCode: resp.StatusCode, Message: "unexpected status getting variable"}
+	}
+
+	var result struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", false, fmt.Errorf("decode variable %s: %w", name, err)
+	}
+	return result.Value, true, nil
+}
+
 // GetLatestWorkflowRun returns the most recent workflow run for a workflow file.
 func (c *LiveClient) GetLatestWorkflowRun(ctx context.Context, owner, repo, workflowFile string) (*forge.WorkflowRun, error) {
 	resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?per_page=1", owner, repo, workflowFile))
