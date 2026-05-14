@@ -75,6 +75,7 @@ type ReviewRecord struct {
 	Number      int
 	Event, Body string
 	CommitSHA   string
+	Comments    []ReviewComment
 }
 
 // DismissedReviewRecord records a review dismissal call.
@@ -777,7 +778,7 @@ func (f *FakeClient) GetPullRequestHeadSHA(_ context.Context, _, _ string, _ int
 	return f.PullRequestHeadSHA, nil
 }
 
-func (f *FakeClient) CreatePullRequestReview(_ context.Context, owner, repo string, number int, event, body, commitSHA string) error {
+func (f *FakeClient) CreatePullRequestReview(_ context.Context, owner, repo string, number int, event, body, commitSHA string, comments []ReviewComment) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if e := f.err("CreatePullRequestReview"); e != nil {
@@ -790,6 +791,7 @@ func (f *FakeClient) CreatePullRequestReview(_ context.Context, owner, repo stri
 		Event:     event,
 		Body:      body,
 		CommitSHA: commitSHA,
+		Comments:  comments,
 	})
 
 	review := PullRequestReview{

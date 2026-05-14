@@ -1419,20 +1419,41 @@ func (c *LiveClient) GetPullRequestHeadSHA(ctx context.Context, owner, repo stri
 // review to that commit. GitHub rejects the request if the commit is
 // not the PR's current HEAD, closing the TOCTOU gap between the
 // stale-head check and review submission.
-func (c *LiveClient) CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body, commitSHA string) error {
+// When comments is non-nil, inline diff comments are attached to the
+// review via the GitHub "comments" field.
+func (c *LiveClient) CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body, commitSHA string, comments []forge.ReviewComment) error {
 	switch event {
 	case "APPROVE", "REQUEST_CHANGES", "COMMENT":
 	default:
 		return fmt.Errorf("create review on #%d: invalid event %q", number, event)
 	}
 
-	payload := map[string]string{
-		"event": event,
-		"body":  body,
+	type reviewComment struct {
+		Path string `json:"path"`
+		Line int    `json:"line,omitempty"`
+		Body string `json:"body"`
 	}
-	if commitSHA != "" {
-		payload["commit_id"] = commitSHA
+
+	type reviewPayload struct {
+		Event    string          `json:"event"`
+		Body     string          `json:"body"`
+		CommitID string          `json:"commit_id,omitempty"`
+		Comments []reviewComment `json:"comments,omitempty"`
 	}
+
+	payload := reviewPayload{
+		Event:    event,
+		Body:     body,
+		CommitID: commitSHA,
+	}
+	for _, rc := range comments {
+		payload.Comments = append(payload.Comments, reviewComment{
+			Path: rc.Path,
+			Line: rc.Line,
+			Body: rc.Body,
+		})
+	}
+
 	resp, err := c.post(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo, number), payload)
 	if err != nil {
 		return fmt.Errorf("create pull request review on #%d: %w", number, err)
