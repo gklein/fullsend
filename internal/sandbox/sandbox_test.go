@@ -1,9 +1,11 @@
 package sandbox
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -104,28 +106,141 @@ func TestBuildProviderArgs_EmptyCredential(t *testing.T) {
 	assert.Empty(t, secrets)
 }
 
-func TestPathTraversalContainment(t *testing.T) {
-	// Simulate the containment check used in ExtractOutputFiles.
-	localDir := "/tmp/output"
-	cleanBase := filepath.Clean(localDir) + string(filepath.Separator)
+func TestCollectLogs_OpenshellNotInPath(t *testing.T) {
+	t.Setenv("PATH", "")
 
-	tests := []struct {
-		name    string
-		relPath string
-		safe    bool
-	}{
-		{"normal file", "report.md", true},
-		{"nested file", "subdir/report.md", true},
-		{"traversal", "../../../etc/passwd", false},
-		{"traversal with prefix", "../../home/runner/.bashrc", false},
-		{"dot segments in middle", "subdir/../../etc/shadow", false},
-	}
+	_, err := CollectLogs("nonexistent-sandbox", "sandbox")
+	assert.Error(t, err)
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			localPath := filepath.Join(localDir, tt.relPath)
-			contained := strings.HasPrefix(filepath.Clean(localPath), cleanBase)
-			assert.Equal(t, tt.safe, contained, "relPath=%q localPath=%q", tt.relPath, localPath)
-		})
-	}
+func TestCollectLogs_InvalidSource(t *testing.T) {
+	// When openshell is not in PATH, any source should fail.
+	t.Setenv("PATH", "")
+
+	_, err := CollectLogs("test-sandbox", "invalid-source")
+	assert.Error(t, err)
+}
+
+func TestExec_OpenshellNotInPath(t *testing.T) {
+	t.Setenv("PATH", "")
+
+	_, _, _, err := Exec("test-sandbox", "echo hello", 10*time.Second)
+	assert.Error(t, err)
+}
+
+func TestOsRootContainment(t *testing.T) {
+	dir := t.TempDir()
+
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	defer root.Close()
+
+	f, err := root.Create("safe.txt")
+	require.NoError(t, err)
+	f.Close()
+
+	_, err = root.Create("../../../etc/passwd")
+	assert.Error(t, err)
+
+	_, err = root.Create("../../home/runner/.bashrc")
+	assert.Error(t, err)
+
+	_, err = root.Create("subdir/../../etc/shadow")
+	assert.Error(t, err)
+}
+
+func TestSanitizeDownload_RemovesSymlinks(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a regular file.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.txt"), []byte("ok"), 0o644))
+
+	// Create a symlink (dangling is fine — we just need it to exist).
+	require.NoError(t, os.Symlink("/nonexistent/target", filepath.Join(dir, "danger")))
+
+	err := sanitizeDownload(dir)
+	require.NoError(t, err)
+
+	// Regular file should survive.
+	_, err = os.Stat(filepath.Join(dir, "real.txt"))
+	assert.NoError(t, err)
+
+	// Symlink should be removed.
+	_, err = os.Lstat(filepath.Join(dir, "danger"))
+	assert.True(t, os.IsNotExist(err), "symlink should have been removed")
+}
+
+func TestSanitizeDownload_RemovesGitHooks(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create .git/hooks/ with a script.
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte("#!/bin/sh\nmalicious"), 0o755))
+
+	// Create a safe file under .git/.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[core]"), 0o644))
+
+	err := sanitizeDownload(dir)
+	require.NoError(t, err)
+
+	// .git/hooks/ should be removed entirely.
+	_, err = os.Stat(hooksDir)
+	assert.True(t, os.IsNotExist(err), ".git/hooks/ should have been removed")
+
+	// .git/config should survive.
+	_, err = os.Stat(filepath.Join(dir, ".git", "config"))
+	assert.NoError(t, err)
+}
+
+func TestSanitizeDownload_NestedSymlinks(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create nested structure with symlinks at various depths.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a", "b", "real.txt"), []byte("ok"), 0o644))
+	require.NoError(t, os.Symlink("/etc/passwd", filepath.Join(dir, "a", "b", "link")))
+	require.NoError(t, os.Symlink("/etc/shadow", filepath.Join(dir, "a", "top-link")))
+
+	err := sanitizeDownload(dir)
+	require.NoError(t, err)
+
+	// Real file survives.
+	_, err = os.Stat(filepath.Join(dir, "a", "b", "real.txt"))
+	assert.NoError(t, err)
+
+	// Both symlinks removed.
+	_, err = os.Lstat(filepath.Join(dir, "a", "b", "link"))
+	assert.True(t, os.IsNotExist(err))
+	_, err = os.Lstat(filepath.Join(dir, "a", "top-link"))
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestSanitizeDownload_RemovesSubmoduleGitHooks(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create submodule .git/hooks/ with a script.
+	subHooks := filepath.Join(dir, "vendor", "dep", ".git", "hooks")
+	require.NoError(t, os.MkdirAll(subHooks, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(subHooks, "post-checkout"), []byte("#!/bin/sh\nmalicious"), 0o755))
+
+	// Create a safe file in the submodule .git/.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "vendor", "dep", ".git", "config"), []byte("[core]"), 0o644))
+
+	err := sanitizeDownload(dir)
+	require.NoError(t, err)
+
+	// Submodule .git/hooks/ should be removed.
+	_, err = os.Stat(subHooks)
+	assert.True(t, os.IsNotExist(err), "submodule .git/hooks/ should have been removed")
+
+	// Submodule .git/config should survive.
+	_, err = os.Stat(filepath.Join(dir, "vendor", "dep", ".git", "config"))
+	assert.NoError(t, err)
+}
+
+func TestSanitizeDownload_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	err := sanitizeDownload(dir)
+	assert.NoError(t, err)
 }

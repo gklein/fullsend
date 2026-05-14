@@ -129,7 +129,7 @@ func (l *EnrollmentLayer) awaitWorkflowRun(ctx context.Context, dispatchTime tim
 			if run.Status == "completed" {
 				return run, nil
 			}
-			l.ui.StepInfo(fmt.Sprintf("workflow run %d: %s", run.ID, run.Status))
+			l.ui.StepInfo(fmt.Sprintf("workflow run: %s (%s)", run.HTMLURL, run.Status))
 			break // found our run, keep waiting
 		}
 	}
@@ -156,10 +156,10 @@ func (l *EnrollmentLayer) reportReconciliationPRs(ctx context.Context) {
 	// Titles must match ENROLL_PR_TITLE and UNENROLL_PR_TITLE in
 	// scripts/reconcile-repos.sh.
 	for _, repo := range l.enabledRepos {
-		l.reportPRByTitle(ctx, repo, "Connect to fullsend agent pipeline")
+		l.reportPRByTitle(ctx, repo, "chore: connect to fullsend agent pipeline")
 	}
 	for _, repo := range l.disabledRepos {
-		l.reportPRByTitle(ctx, repo, "Disconnect from fullsend agent pipeline")
+		l.reportPRByTitle(ctx, repo, "chore: disconnect from fullsend agent pipeline")
 	}
 }
 

@@ -1,5 +1,5 @@
 ---
-title: "0019. Web source under web/ and Cloudflare project under cloudflare_site/"
+title: "19. Web source under web/ and Cloudflare project under cloudflare_site/"
 status: Accepted
 relates_to:
   - contributor-guidance
@@ -9,7 +9,7 @@ topics:
   - cloudflare
 ---
 
-# 0019. Web source under `web/` and Cloudflare project under `cloudflare_site/`
+# 19. Web source under `web/` and Cloudflare project under `cloudflare_site/`
 
 Date: 2026-04-15
 

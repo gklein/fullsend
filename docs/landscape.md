@@ -106,6 +106,68 @@ Launched November 2025. The closest thing in the industry to autonomous merging.
 
 While the tools above focus on code review, a separate category of systems addresses end-to-end agent orchestration — from task intake through coding and merge. These are closer to the fullsend vision than review-only tools.
 
+### Forge-sdlc/forge
+
+[GitHub](https://github.com/forge-sdlc/forge) | [README](https://github.com/forge-sdlc/forge/blob/main/README.md) | [Container sandbox](https://github.com/forge-sdlc/forge/blob/main/containers/README.md) | [Skills](https://github.com/forge-sdlc/forge/blob/main/skills/README.md) | [implement_review proposal](https://github.com/forge-sdlc/forge/blob/main/proposals/007-implement-review-node.md)
+
+Forge is an open-source SDLC orchestrator that connects Jira, GitHub, and Claude/Gemini-backed agents. It takes Jira features or bugs through planning artifacts, implementation, pull requests, CI repair, AI review, and human review.
+
+**Bottom line:** Forge is worth studying, not adopting wholesale.
+
+It validates several fullsend assumptions: issue-to-PR automation needs event-driven execution, sandboxed code agents, pre-PR review, CI repair loops, human-visible state, and layered agent instructions. Its strongest ideas are staged intent artifacts, Q&A at approval gates, resumable webhook workflows, project-specific skills, and audited manual overrides.
+
+The mismatch is the authority model. Forge centralizes workflow truth in a FastAPI/Redis/LangGraph worker and treats Jira labels/comments as approval signals. Fullsend is trying to keep authority in repository-visible mechanisms: CODEOWNERS, branch protection, required checks, per-role forge identity, and auditable PR/issue state.
+
+**Workflow:** Forge's feature path is:
+
+`Jira Feature -> PRD -> approval/Q&A -> spec -> approval/Q&A -> epics -> approval/Q&A -> tasks -> approval/Q&A -> implementation -> local review -> PR -> CI/fix loop -> AI review -> human review`
+
+The bug path is shorter:
+
+`Jira Bug -> RCA -> approval/Q&A -> implementation -> PR -> CI/fix loop -> review`
+
+**Architecture:** FastAPI receives Jira and GitHub webhooks, Redis Streams queue events for workers, and LangGraph checkpoints workflow state so later webhooks can resume the graph. A host orchestrator handles planning and Jira/GitHub interaction. Ephemeral Podman containers run implementation agents. Markdown skills resolve from `skills/default` plus per-Jira-project overrides. Prometheus and Langfuse provide metrics and tracing.
+
+**Comparison to fullsend:**
+
+| Area | Forge | Fullsend direction |
+|---|---|---|
+| Coordination | Central checkpointed workflow | Repository as coordinator |
+| Authority | Jira labels/comments, GitHub reviews | CODEOWNERS, branch protection, required checks |
+| Intent | Jira elaborated into PRD/spec/tasks | Tiered intent with stronger strategic authorization |
+| Review | Local review, AI review, human gate | Independent zero-trust review sub-agents |
+| Sandbox | Productive Podman runner | Stricter credential isolation and egress policy |
+| Portability | GitHub/Jira-centric | Forge-neutral `forge.Client` abstraction |
+
+**Feature delta:** Forge has several shipped or proposed product features fullsend does not yet have in comparable form:
+
+- PRD/spec/epic/task generation from a single feature ticket.
+- Q&A mode at planning approval gates.
+- LangGraph checkpointing for long-lived workflow state.
+- Per-Jira-project skill overrides.
+- A first-class `/forge skip-gate` command for audited CI bypasses.
+- An implemented `implement_review` node for addressing or contesting PR feedback.
+
+Fullsend has design commitments that Forge does not appear to cover:
+
+- Repo-as-coordinator semantics for agent interaction.
+- Zero-trust review decomposition across independent review sub-agents.
+- Per-role forge identity and permission boundaries.
+- Credential isolation and egress policy as first-class architecture concerns.
+- Harness-level output schema enforcement.
+- Multi-forge portability through `forge.Client`.
+
+**Ideas to borrow:**
+
+- *Staged intent artifacts.* Forge's PRD -> spec -> epics -> tasks sequence is a useful model for Tier 2+ work. Fullsend should borrow the artifact progression, not the Jira-label authority.
+- *Q&A without approval.* Humans can ask questions at a gate without approving or rejecting. This fits fullsend's ambiguous-intent and dual-interpretation escalation problems.
+- *Checkpointed pause/resume.* Forge waits for humans through durable workflow state, not idle implementation containers. Fullsend should keep this operational pattern while keeping authoritative state repo-visible.
+- *Skill override resolution.* `skills/default` plus `skills/{project}` is a simple precedent for fullsend's harness layering.
+- *Review feedback as a task type.* Forge's `implement_review` flow classifies review comments as actionable or contested before acting. That is relevant to fullsend's review loop and salvage/rewrite questions.
+- *Audited CI gate skips.* `/forge skip-gate` is dangerous unless governed, but the UX is useful: constrained command, named check, PR confirmation, audit comment, and re-evaluation.
+
+**Cautions:** Jira label approval is too weak for high-tier intent. A workflow engine can dispatch work, but should not become merge authority. Forge's Podman runner is a productivity sandbox, not a full zero-trust boundary. A single AI review stage is not enough for autonomous merge confidence. CI skip mechanisms need permission checks, policy, and auditability from day one.
+
 ### Stripe Minions
 
 [Architecture blog post](https://stripe.dev/blog/minions-stripes-one-shot-end-to-end-coding-agents) | [Part 2](https://stripe.dev/blog/minions-stripes-one-shot-end-to-end-coding-agents-part-2)
@@ -225,6 +287,28 @@ Open-source GitHub Actions template that deploys four Claude-powered agents — 
 
 **Relevance to fullsend:** The template is a concrete implementation of the happy path that fullsend's problem documents explore in depth. It independently converged on labels as the state machine primitive and CLAUDE.md as the context mechanism, validating those patterns. However, it illustrates the gap between "agents that help build features" and "agents trusted to merge autonomously" — the template assumes good-faith actors and benign inputs, with no defense against prompt injection via issue text or PR descriptions (fullsend's highest-ranked threat). The Scrum Master role is a coordinator agent in thin disguise, conflicting with fullsend's repo-as-coordinator position. The template is useful as a reference for what a minimal viable agent pipeline looks like and what problems surface first when you ship one.
 
+### GitHub Agentic Workflows (gh-aw)
+
+[Website](https://github.github.com/gh-aw/) | [Security architecture](https://github.github.com/gh-aw/introduction/architecture/) | [Blog post](https://github.blog/news-insights/product-news/automate-repository-tasks-with-github-agentic-workflows/)
+
+Repository automation from GitHub Next and Microsoft Research, running coding agents (Copilot, Claude, Codex) in GitHub Actions with strong guardrails. Workflows are defined in markdown files with YAML frontmatter specifying triggers (schedule, events), permissions, and safe-output constraints. A `gh aw` CLI extension compiles each markdown definition into a `.lock.yml` GitHub Actions workflow, performing schema validation, expression safety checks, action SHA pinning, and security scanning (actionlint, zizmor, poutine) at compile time. Early development; may change significantly.
+
+**Architecture:** The agent runs in an isolated container on an Actions runner with a read-only `GITHUB_TOKEN`. It produces a structured artifact (SafeOutputs) describing its intended actions. A separate job with scoped write permissions reads the artifact and applies only what the workflow explicitly permits — hard limits per operation, required title prefixes, label constraints. The agent requests; the gated job decides. An [orchestration pattern](https://github.github.com/gh-aw/patterns/orchestration/) supports multi-workflow fan-out via `dispatch-workflow` (async) and `call-workflow` (same run) safe outputs, and [cross-repository operations](https://github.github.com/gh-aw/reference/cross-repository/) allow reading from and writing to external repos via `target-repo` and `allowed-repos` parameters.
+
+**Security model (three trust layers):** gh-aw adopts a formal [defense-in-depth architecture](https://github.github.com/gh-aw/introduction/architecture/) with three trust layers, each constraining failures above it:
+
+1. **Substrate-level trust** — the Actions runner VM, kernel, container runtime, and three privileged containers: the Agent Workflow Firewall (AWF) that uses iptables to redirect HTTP/HTTPS through a Squid proxy enforcing a domain allowlist, an API proxy that routes model traffic while keeping credentials isolated, and an MCP Gateway that spawns isolated containers for each MCP server with per-server domain allowlists and tool allowlisting.
+2. **Configuration-level trust** — declarative artifacts (workflow frontmatter, network policies, MCP configs) that constrain what components are loaded, how they connect, and what credentials they receive. Includes [content sanitization](https://github.github.com/gh-aw/introduction/architecture/#content-sanitization) of untrusted input (@mention neutralization, URI filtering to trusted domains, XML/HTML tag conversion, unicode normalization, 0.5MB/65k-line limits) and [integrity filtering (DIFC)](https://github.github.com/gh-aw/reference/integrity/) — a trust-based system that filters GitHub content by author association level (`merged > approved > unapproved > none > blocked`), with support for `trusted-users`, `blocked-users`, and `approval-labels` overrides.
+3. **Plan-level trust** — the compiler decomposes workflows into stages. The SafeOutputs subsystem buffers all external writes as artifacts, runs a threat detection job (AI-powered scan plus optional custom scanners like Semgrep, TruffleHog, LlamaGuard), and only externalizes writes after the scan passes. [Supply chain protection](https://github.github.com/gh-aw/reference/threat-detection/#supply-chain-protection-protected-files) blocks agent modifications to dependency manifests, CI/CD config, agent instruction files, and CODEOWNERS by default, with `blocked/allowed/fallback-to-issue` policies.
+
+**Relevance to fullsend:** gh-aw is the most mature implementation of "GitHub Actions as agent runtime" (pattern #5 below) and substantially more sophisticated than its homepage summary suggests. Its native position within GitHub eliminates entire categories of problems that fullsend must solve externally: cross-repo dispatch wiring ([ADR 0008](ADRs/0008-workflow-dispatch-for-cross-repo-dispatch.md)), GitHub App manifest creation ([ADR 0007](ADRs/0007-per-role-github-apps.md)), enrollment shim security ([ADR 0009](ADRs/0009-pull-request-target-in-shim-workflows.md)), and the install/uninstall layer stack ([ADR 0006](ADRs/0006-ordered-layer-model.md)). Its credential isolation via the substrate layer achieves the same security goal as fullsend's host-side L7 REST proxy design ([ADR 0017](ADRs/0017-credential-isolation-for-sandboxed-agents.md)) with substantially less complexity.
+
+Its integrity filtering system is particularly interesting — it implements a form of input trust tiering (`merged > approved > unapproved > none`) that addresses a subset of what fullsend explores in [autonomy-spectrum.md](problems/autonomy-spectrum.md), though applied to content visibility rather than merge authority. The content sanitization pipeline is a concrete implementation of pre-LLM injection defense, complementing the post-LLM threat detection scan. The orchestration pattern (`dispatch-workflow` / `call-workflow`) provides native multi-workflow coordination that fullsend builds custom infrastructure for.
+
+However, gh-aw explicitly stops at human-in-the-loop automation. It does not address autonomous merge judgment, intent verification, inter-agent trust, or agent governance. Its orchestration is workflow fan-out, not the specialized sub-agent composition with zero-trust review that fullsend envisions. And it inherits GitHub's product constraints — including the position that [developers will always own the merge button](https://github.blog/ai-and-ml/generative-ai/code-review-in-the-age-of-ai-why-developers-will-always-own-the-merge-button/).
+
+The comparison raises a structural question for fullsend: which problems in our implementation are inherent to the goal of autonomous development, and which are artifacts of building externally to the platform we're automating? See [platform-nativeness.md](problems/platform-nativeness.md) for the full analysis.
+
 ## Architectural patterns in the field
 
 Five distinct approaches:
@@ -245,9 +329,9 @@ Make the problem easier by making PRs smaller. Stacked PRs with clear scope are 
 
 Structure the workflow as a pipeline where deterministic steps (context prefetching, linting, pushing) alternate with agentic steps (implementation, CI fix attempts). The agent operates within a bounded, instrumented pipeline rather than with open-ended autonomy. Bounded retry limits prevent runaway loops.
 
-### 5. GitHub Actions as agent runtime (Collo.dev)
+### 5. GitHub Actions as agent runtime (Collo.dev, gh-aw)
 
-Use GitHub's native workflow engine as both the orchestration layer and the compute runtime. Agents are invoked by workflow triggers (label changes, issue comments), run in ephemeral Actions runners, and coordinate through issues and labels. Zero infrastructure beyond a GitHub repo and an API key. The trade-off: tightly coupled to GitHub's event model, limited to what Actions runners can do, and no isolation between agent invocations beyond what Actions provides.
+Use GitHub's native workflow engine as both the orchestration layer and the compute runtime. Agents are invoked by workflow triggers (label changes, issue comments, schedules), run in ephemeral Actions runners, and coordinate through issues and labels. Zero infrastructure beyond a GitHub repo and an API key. gh-aw adds significant depth to this pattern with containerized execution, network firewalling, artifact-based safe outputs, and AI-powered threat detection — demonstrating that Actions-native agents can have strong guardrails without external infrastructure. The trade-off: tightly coupled to GitHub's event model, limited to Actions runner capabilities and timeouts, and (in the case of gh-aw) constrained by GitHub's product position against autonomous merging.
 
 These are complementary, not competing. A system could use stacked PRs (Graphite's insight) reviewed by specialized sub-agents (CodeRabbit's insight) with deep codebase context where needed (Greptile's insight), all orchestrated through a deterministic pipeline with agentic steps (Stripe's insight), running on GitHub Actions (Collo.dev's insight for teams that want zero infrastructure overhead).
 
@@ -269,6 +353,8 @@ None of these tools address:
 - **Contribution volume management** — how maintainers handle the flood of AI-generated external contributions. See [contribution-volume.md](problems/contribution-volume.md).
 
 These gaps define the novel problem space for fullsend.
+
+gh-aw addresses the *containment* side of agent security more comprehensively than any external system can — its three-layer trust model (substrate isolation, configuration-level policies, plan-level staged execution) achieves strong containment natively. Its integrity filtering system implements a form of trust-based input tiering, and its supply chain protection blocks agent modifications to sensitive files by default. But these mechanisms control *what the agent can see and touch*, not *whether the agent's output should be merged without human review*. The gaps above are all about the judgment layer that sits beyond containment: deciding what should happen, verifying intent, and governing who controls the agents. See [platform-nativeness.md](problems/platform-nativeness.md) for a deeper analysis of which fullsend problems are inherent to the goal versus artifacts of building externally.
 
 ## Industry data points
 

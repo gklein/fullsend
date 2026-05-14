@@ -145,9 +145,9 @@ func TestAdminInstallUninstall(t *testing.T) {
 	require.NoError(t, err)
 	hasPrivate := hasPrivateRepos(allRepos)
 
-	// Second install should reuse existing dispatch token (empty string).
+	// Second install should be idempotent — OIDC dispatch infra already provisioned.
 	// Inference provider is nil for idempotent re-install (already provisioned).
-	stack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, enabledRepos, agentCreds, "", enrolledRepoIDs, nil)
+	stack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, enabledRepos, agentCreds, enrolledRepoIDs, nil)
 	err = stack.InstallAll(ctx)
 	require.NoError(t, err, "second InstallAll should succeed")
 	verifyInstalled(t, env, orgCfg, enabledRepos, agentCreds)
@@ -163,7 +163,7 @@ func TestAdminInstallUninstall(t *testing.T) {
 	// =========================================
 	// Phase 2.5: Triage dispatch smoke test
 	// =========================================
-	if os.Getenv("E2E_HALFSEND_VERTEX_KEY") != "" {
+	if os.Getenv("E2E_HALFSEND_WIF_PROVIDER") != "" {
 		t.Log("=== Phase 2.5: Triage Dispatch Smoke Test ===")
 		vendorBinaryForE2E(t, env)
 		runTriageDispatchSmokeTest(t, env)
@@ -213,12 +213,37 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 	var agentCreds []layers.AgentCredentials
 	for _, role := range defaultRoles {
 		t.Logf("Setting up app for role: %s", role)
-		// Use a per-role timeout so a failed manifest flow doesn't hang
-		// until the Go test timeout (which produces an unhelpful panic).
-		roleCtx, roleCancel := context.WithTimeout(ctx, 2*time.Minute)
-		appCreds, err := setup.Run(roleCtx, testOrg, role)
-		roleCancel()
-		require.NoError(t, err, "setting up app for role %s", role)
+
+		var appCreds *appsetup.AppCredentials
+		// Retry the manifest flow to handle transient callback timeouts
+		// (see #287). On failure, delete any partially-created app and
+		// wait before retrying so the next attempt starts clean.
+		const maxAttempts = 3
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			// Per-attempt timeout: generous to handle slow manifest flows
+			// (90s callback wait + page navigation overhead).
+			roleCtx, roleCancel := context.WithTimeout(ctx, 6*time.Minute)
+			var runErr error
+			appCreds, runErr = setup.Run(roleCtx, testOrg, role)
+			roleCancel()
+
+			if runErr == nil {
+				break
+			}
+
+			t.Logf("Attempt %d/%d for role %s failed: %v", attempt, maxAttempts, role, runErr)
+			if attempt < maxAttempts {
+				slug := appsetup.AppSlug(role)
+				t.Logf("Cleaning up potentially stale app %s before retry", slug)
+				if delErr := deleteAppViaPlaywright(env.page, slug, t.Logf, env.screenshotDir); delErr != nil {
+					t.Logf("Warning: cleanup of %s failed (may not exist): %v", slug, delErr)
+				}
+				t.Logf("Waiting 10s before retry to let GitHub settle...")
+				time.Sleep(10 * time.Second)
+				continue
+			}
+			require.NoError(t, runErr, "setting up app for role %s", role)
+		}
 
 		agentCreds = append(agentCreds, layers.AgentCredentials{
 			AgentEntry: config.AgentEntry{
@@ -246,29 +271,27 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 		agents[i] = ac.AgentEntry
 	}
 
-	// Build inference provider if vertex key is available (mode 3).
+	// Build inference provider if WIF provider is available.
 	var inferenceProvider inference.Provider
 	var inferenceProviderName string
-	if vertexKey := os.Getenv("E2E_HALFSEND_VERTEX_KEY"); vertexKey != "" {
+	if wifProvider := os.Getenv("E2E_HALFSEND_WIF_PROVIDER"); wifProvider != "" {
 		gcpProjectID := os.Getenv("E2E_GCP_PROJECT_ID")
 		if gcpProjectID == "" {
-			// Try to extract project_id from the key JSON.
-			gcpProjectID = extractProjectID(t, vertexKey)
+			t.Fatal("E2E_GCP_PROJECT_ID is required when E2E_HALFSEND_WIF_PROVIDER is set")
 		}
 		gcpRegion := os.Getenv("E2E_GCP_REGION")
 		if gcpRegion == "" {
 			gcpRegion = "global"
 		}
 		inferenceProvider = vertex.New(vertex.Config{
-			ProjectID:      gcpProjectID,
-			Region:         gcpRegion,
-			CredentialJSON: []byte(vertexKey),
-		}, nil)
-		// Region is stored as a variable, not a secret.
+			ProjectID:   gcpProjectID,
+			Region:      gcpRegion,
+			WIFProvider: wifProvider,
+		})
 		inferenceProviderName = "vertex"
 		t.Logf("Inference provider: vertex (project: %s)", gcpProjectID)
 	} else {
-		t.Log("E2E_HALFSEND_VERTEX_KEY not set, skipping inference layer")
+		t.Log("E2E_HALFSEND_WIF_PROVIDER not set, skipping inference layer")
 	}
 
 	orgCfg := config.NewOrgConfig(repoNames, enabledRepos, defaultRoles, agents, inferenceProviderName)
@@ -285,8 +308,7 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 	}
 
 	// Install config-repo and workflows layers first so .fullsend repo exists.
-	// This mirrors the real CLI which creates the repo before prompting for
-	// the dispatch token (so the user can scope the fine-grained PAT to it).
+	// Config-repo and workflows are idempotent, so re-running them is harmless.
 	configLayer := layers.NewConfigRepoLayer(testOrg, env.client, orgCfg, env.printer, hasPrivate)
 	err = configLayer.Install(ctx)
 	require.NoError(t, err, "pre-installing config-repo layer")
@@ -296,22 +318,9 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 	err = workflowsLayer.Install(ctx)
 	require.NoError(t, err, "pre-installing workflows layer")
 
-	// Create a fine-grained PAT for dispatch via Playwright.
-	// This mirrors the real CLI flow: the user creates a fine-grained PAT
-	// scoped to .fullsend with actions:write, then pastes it back.
-	t.Log("Creating fine-grained dispatch PAT via Playwright...")
-	dispatchToken, err := createDispatchPAT(env.page, testOrg, env.cfg.password, env.screenshotDir, t.Logf)
-	require.NoError(t, err, "creating dispatch PAT")
-	t.Cleanup(func() {
-		t.Log("Deleting dispatch PAT...")
-		if delErr := deleteDispatchPAT(env.page, testOrg, env.screenshotDir, t.Logf); delErr != nil {
-			t.Logf("warning: could not delete dispatch PAT: %v", delErr)
-		}
-	})
-
-	// Build full layer stack with the dispatch token and install all layers.
+	// Build full layer stack and install all layers.
 	// Config-repo and workflows are idempotent, so re-running them is harmless.
-	stack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, enabledRepos, agentCreds, dispatchToken, enrolledRepoIDs, inferenceProvider)
+	stack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider)
 
 	err = stack.InstallAll(ctx)
 	require.NoError(t, err, "installing layers")
@@ -327,7 +336,7 @@ func runUninstall(t *testing.T, env *e2eEnv) {
 		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
-		layers.NewDispatchTokenLayer(testOrg, env.client, "", nil, env.printer, nil),
+		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
 		layers.NewEnrollmentLayer(testOrg, env.client, nil, nil, env.printer),
 	)
 	errs := stack.UninstallAll(context.Background())
@@ -344,7 +353,7 @@ func runUninstallAllowNotFound(t *testing.T, env *e2eEnv) {
 		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
-		layers.NewDispatchTokenLayer(testOrg, env.client, "", nil, env.printer, nil),
+		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
 		layers.NewEnrollmentLayer(testOrg, env.client, nil, nil, env.printer),
 	)
 	errs := stack.UninstallAll(context.Background())
@@ -376,29 +385,27 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 	assert.Len(t, parsedCfg.Agents, len(defaultRoles))
 
 	// Agent runtime files exist (from scaffold).
+	// ADR 35: only non-layered, non-upstream-only files are installed.
+	// Layered dirs (agents/, skills/, schemas/, harness/, policies/, scripts/,
+	// env/) and upstream-only dirs (.github/actions/, .github/scripts/) are
+	// provided at runtime via sparse checkout in reusable workflows.
 	for _, path := range []string{
 		".github/workflows/triage.yml",
 		".github/workflows/code.yml",
 		".github/workflows/review.yml",
+		".github/workflows/fix.yml",
+		".github/workflows/dispatch.yml",
 		".github/workflows/repo-maintenance.yml",
-		".github/actions/fullsend/action.yml",
-		".github/scripts/setup-agent-env.sh",
-		"agents/triage.md",
-		"agents/code.md",
-		"harness/triage.yaml",
-		"harness/code.yaml",
-		"policies/triage.yaml",
-		"policies/code.yaml",
-		"env/triage.env",
-		"env/code-agent.env",
-		"env/gcp-vertex.env",
-		"scripts/scan-secrets",
-		"scripts/pre-code.sh",
-		"scripts/post-code.sh",
-		"scripts/post-triage.sh",
-		"scripts/reconcile-repos.sh",
-		"skills/code-implementation/SKILL.md",
-		"templates/shim-workflow.yaml",
+		".github/workflows/prioritize.yml",
+		".github/workflows/prioritize-scheduler.yml",
+		"customized/agents/.gitkeep",
+		"customized/skills/.gitkeep",
+		"customized/schemas/.gitkeep",
+		"customized/harness/.gitkeep",
+		"customized/policies/.gitkeep",
+		"customized/scripts/.gitkeep",
+		"customized/env/.gitkeep",
+		"templates/shim-workflow-call.yaml",
 		"CODEOWNERS",
 	} {
 		_, err := env.client.GetFileContent(ctx, testOrg, forge.ConfigRepoName, path)
@@ -418,19 +425,22 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 		assert.True(t, exists, "variable %s should exist", varName)
 	}
 
-	// Inference secrets exist if vertex key was provided.
-	if os.Getenv("E2E_HALFSEND_VERTEX_KEY") != "" {
-		for _, secretName := range []string{"FULLSEND_GCP_SA_KEY_JSON", "FULLSEND_GCP_PROJECT_ID"} {
+	// Inference secrets exist if WIF provider was configured.
+	if os.Getenv("E2E_HALFSEND_WIF_PROVIDER") != "" {
+		for _, secretName := range []string{"FULLSEND_GCP_WIF_PROVIDER", "FULLSEND_GCP_PROJECT_ID"} {
 			exists, secErr := env.client.RepoSecretExists(ctx, testOrg, forge.ConfigRepoName, secretName)
 			assert.NoError(t, secErr, "checking inference secret %s", secretName)
 			assert.True(t, exists, "inference secret %s should exist", secretName)
 		}
 	}
 
-	// Dispatch token org secret exists.
+	// OIDC dispatch variable exists; stale PAT secret should not.
+	mintURLExists, err := env.client.OrgVariableExists(ctx, testOrg, "FULLSEND_MINT_URL")
+	assert.NoError(t, err, "checking FULLSEND_MINT_URL org variable")
+	assert.True(t, mintURLExists, "FULLSEND_MINT_URL org variable should exist")
 	dispatchExists, err := env.client.OrgSecretExists(ctx, testOrg, "FULLSEND_DISPATCH_TOKEN")
-	assert.NoError(t, err, "checking dispatch token org secret")
-	assert.True(t, dispatchExists, "FULLSEND_DISPATCH_TOKEN org secret should exist")
+	assert.NoError(t, err, "checking stale dispatch token")
+	assert.False(t, dispatchExists, "FULLSEND_DISPATCH_TOKEN org secret should not exist in OIDC mode")
 
 	// Enrollment PR exists for test-repo.
 	prs, err := env.client.ListRepoPullRequests(ctx, testOrg, testRepo)
@@ -452,7 +462,7 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 	require.NoError(t, err)
 	hasPrivate := hasPrivateRepos(allRepos)
 
-	analyzeStack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, enabledRepos, agentCreds, "", nil, nil)
+	analyzeStack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, enabledRepos, agentCreds, nil, nil)
 	reports, err := analyzeStack.AnalyzeAll(ctx)
 	require.NoError(t, err, "analyzing layers")
 	for _, report := range reports {
@@ -484,20 +494,25 @@ func verifyNotInstalled(t *testing.T, env *e2eEnv) {
 	assert.NoError(t, err, "checking dispatch token after uninstall")
 	assert.False(t, dispatchExists, "FULLSEND_DISPATCH_TOKEN org secret should be deleted")
 
+	// OIDC mint URL org variable should be deleted.
+	mintURLExists, err := env.client.OrgVariableExists(ctx, testOrg, "FULLSEND_MINT_URL")
+	assert.NoError(t, err, "checking mint URL variable after uninstall")
+	assert.False(t, mintURLExists, "FULLSEND_MINT_URL org variable should be deleted")
+
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
 		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
-		layers.NewDispatchTokenLayer(testOrg, env.client, "", nil, env.printer, nil),
+		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
 		layers.NewEnrollmentLayer(testOrg, env.client, nil, nil, env.printer),
 	)
 	reports, err := stack.AnalyzeAll(ctx)
 	require.NoError(t, err, "analyzing layers after uninstall")
 	for _, report := range reports {
 		switch report.Name {
-		case "config-repo", "workflows", "dispatch-token":
+		case "config-repo", "workflows", "dispatch":
 			assert.Equal(t, layers.StatusNotInstalled, report.Status,
 				"layer %s should be not-installed, got %s",
 				report.Name, report.Status)
@@ -718,13 +733,13 @@ Files over 64KB save fine if they contain only ASCII characters.`
 
 	hasTriageLabel := false
 	for _, name := range labelNames {
-		if name == "needs-info" || name == "ready-to-code" || name == "duplicate" {
+		if name == "needs-info" || name == "ready-to-code" || name == "duplicate" || name == "blocked" {
 			hasTriageLabel = true
 			break
 		}
 	}
 	assert.True(t, hasTriageLabel,
-		"issue should have a triage label (needs-info, ready-to-code, or duplicate), got: %v", labelNames)
+		"issue should have a triage label (needs-info, ready-to-code, duplicate, or blocked), got: %v", labelNames)
 }
 
 // runUnenrollmentTest disables test-repo in config.yaml, runs install to
@@ -753,7 +768,7 @@ func runUnenrollmentTest(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, ag
 	require.NoError(t, err)
 	hasPrivate := hasPrivateRepos(allRepos)
 
-	stack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, nil, agentCreds, "", enrolledRepoIDs, nil)
+	stack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, nil, agentCreds, enrolledRepoIDs, nil)
 	err = stack.InstallAll(ctx)
 	require.NoError(t, err, "install with disabled repo should succeed")
 
@@ -763,7 +778,7 @@ func runUnenrollmentTest(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, ag
 
 	var removalPR *forge.ChangeProposal
 	for _, pr := range prs {
-		if pr.Title == "Disconnect from fullsend agent pipeline" {
+		if pr.Title == "chore: disconnect from fullsend agent pipeline" {
 			cp := pr
 			removalPR = &cp
 			break
@@ -800,16 +815,15 @@ func buildTestLayerStack(
 	hasPrivate bool,
 	enabledRepos []string,
 	agentCreds []layers.AgentCredentials,
-	dispatchToken string,
 	enrolledRepoIDs []int64,
 	inferenceProvider inference.Provider,
 ) *layers.Stack {
 	return layers.NewStack(
 		layers.NewConfigRepoLayer(org, client, cfg, printer, hasPrivate),
 		layers.NewWorkflowsLayer(org, client, printer, user),
-		layers.NewSecretsLayer(org, client, agentCreds, printer),
+		layers.NewSecretsLayer(org, client, agentCreds, printer).WithOIDCMode(),
 		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
-		layers.NewDispatchTokenLayer(org, client, dispatchToken, enrolledRepoIDs, printer, nil),
+		layers.NewOIDCDispatchLayer(org, client, enrolledRepoIDs, &e2eDispatcher{}, printer),
 		layers.NewEnrollmentLayer(org, client, enabledRepos, cfg.DisabledRepos(), printer),
 	)
 }
@@ -829,22 +843,4 @@ func hasPrivateRepos(repos []forge.Repository) bool {
 		}
 	}
 	return false
-}
-
-// extractProjectID attempts to extract project_id from a GCP service account
-// key JSON string. Falls back to "unknown" if parsing fails.
-func extractProjectID(t *testing.T, keyJSON string) string {
-	t.Helper()
-	var key struct {
-		ProjectID string `json:"project_id"`
-	}
-	if err := json.Unmarshal([]byte(keyJSON), &key); err != nil {
-		t.Logf("warning: could not parse project_id from vertex key: %v", err)
-		return "unknown"
-	}
-	if key.ProjectID == "" {
-		t.Log("warning: vertex key has empty project_id")
-		return "unknown"
-	}
-	return key.ProjectID
 }

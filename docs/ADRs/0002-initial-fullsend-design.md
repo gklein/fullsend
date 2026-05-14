@@ -1,5 +1,5 @@
 ---
-title: "Initial Fullsend Design"
+title: "2. Initial Fullsend Design"
 status: Proposed
 relates_to:
   - agent-architecture
@@ -15,7 +15,7 @@ topics:
   - agents
 ---
 
-# Initial Fullsend Design
+# 2. Initial Fullsend Design
 
 Date: 2026-03-23
 
@@ -142,17 +142,17 @@ It **does not** read the **issue comment thread** for intake decisions—no scan
 3. **Testing loop (iterative)** — Run the **existing test suite** in the **PR sandbox**. Incorporate **triage-provided tests** if present; if none, **author tests** consistent with the framework. Repeat **implement → test** until **local/CI-equivalent tests pass** in the sandbox used for iteration.
 4. **Open or update PR** — Link issue; describe changes.
 5. **GitHub checks loop** — After push, **required checks** run on GitHub. On failure, the **implementation agent** **fetches logs**, fixes, pushes; repeat until **all required checks pass** (or until policy caps retries — implementation detail).
-6. **Handoff to Review** — When checks are green: add **`ready-for-review`**. (**`ready-to-implement`** was already removed when this run **started**.) The **implementation agent** then **waits** until **Review** outcome.
+6. **Handoff to Review** — When checks are green, the PR creation or push triggers review dispatch automatically via `pull_request_target` events. The **implementation agent** does not apply labels for handoff. (**`ready-to-implement`** was already removed when this run **started**.) The **implementation agent** then **waits** until **Review** outcome.
 
 ### Review
 
-**Entry:** The **`ready-for-review`** label was **applied** (or **`/review`** or **PR synchronize** per re-review policy)—**before** the run strips **`ready-for-review`**.
+**Entry:** A `pull_request_target` event fired (PR opened, pushed, or marked ready for review), the **`ready-for-review`** label was **applied** manually, or **`/review`** was invoked—**before** the run strips **`ready-for-review`**.
 
 **Triggers (Review — **review agent** + coordinator):**
 
-1. **`ready-for-review`** label **added** to the issue (or linked PR—policy per repo).
-2. **`/review`** in a comment.
-3. **PR synchronize** (push to the PR branch)—**re-review** per policy below.
+1. **`pull_request_target`** event — PR **opened**, **synchronize** (push to the PR branch), or **ready_for_review** (draft → ready). This is the primary trigger.
+2. **`ready-for-review`** label **added** to the issue (or linked PR—policy per repo). Available for manual dispatch.
+3. **`/review`** in a comment.
 
 **When a review run starts** (initial review, **`/review`**, or **push-triggered re-review**): **remove** **`ready-for-review`** **and** **`ready-for-merge`**. A new round **supersedes** any prior merge verdict until the coordinator finishes this round—otherwise **`ready-for-merge`** could describe an **old** head after the author **pushed** new commits, which is **unsafe** for bots and humans. Reviewers evaluate the **current** PR head; the coordinator applies outcomes using the algorithm below. (**`requires-manual-review`** is **not** removed here by default—humans may still need to resolve an earlier split verdict unless **repo policy** clears it when enqueueing a new round.)
 
@@ -218,7 +218,7 @@ Emits framework-native test snippets and attachment bundles. ([Architecture](../
 
 ### 8. implementation agent runtime
 
-Git operations (token-scoped), patch application, local test runner integration. ([Architecture](../architecture.md#8-implementation-agent-runtime))
+Git operations (token-scoped), patch application, local test runner integration. ([Architecture](../architecture.md#8-code-agent-runtime))
 
 ### 9. PR sandbox / CI mirror
 

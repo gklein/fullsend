@@ -1,9 +1,5 @@
 // Package vertex implements the inference.Provider interface for Google Cloud
-// Vertex AI. It supports three modes of credential provisioning:
-//
-//  1. GCP project ID only → create service account + key
-//  2. GCP project ID + SA name → verify SA exists, create key
-//  3. GCP project ID + credential JSON → use key directly
+// Vertex AI using Workload Identity Federation with GitHub OIDC.
 package vertex
 
 import (
@@ -12,51 +8,31 @@ import (
 )
 
 const (
-	// SecretCredentials is the repo secret name for the GCP service account key JSON.
-	// Uses the FULLSEND_ prefix to avoid confusion with the GCP SDK env var
-	// GOOGLE_APPLICATION_CREDENTIALS, which expects a file path, not JSON content.
-	SecretCredentials = "FULLSEND_GCP_SA_KEY_JSON"
-
 	// SecretProjectID is the repo secret name for the GCP project ID.
-	// Uses the FULLSEND_ prefix for consistency with other secrets.
 	SecretProjectID = "FULLSEND_GCP_PROJECT_ID"
 
 	// VariableRegion is the repo variable name for the GCP region.
 	VariableRegion = "FULLSEND_GCP_REGION"
 
-	// defaultSAName is the service account name created in mode 1.
-	defaultSAName = "fullsend-agent"
+	// SecretWIFProvider is the repo secret for the full WIF provider resource name.
+	SecretWIFProvider = "FULLSEND_GCP_WIF_PROVIDER"
 )
-
-// GCPClient abstracts GCP IAM operations for testability.
-type GCPClient interface {
-	// GetServiceAccount checks that a service account exists.
-	GetServiceAccount(ctx context.Context, projectID, saName string) error
-
-	// CreateServiceAccount creates a new service account.
-	CreateServiceAccount(ctx context.Context, projectID, saName, displayName string) error
-
-	// CreateServiceAccountKey generates a new JSON key for a service account.
-	CreateServiceAccountKey(ctx context.Context, projectID, saEmail string) ([]byte, error)
-}
 
 // Config holds the inputs for Vertex credential provisioning.
 type Config struct {
-	ProjectID          string // required
-	Region             string // required: GCP region (e.g. global)
-	ServiceAccountName string // optional: existing SA name (mode 2)
-	CredentialJSON     []byte // optional: pre-made key JSON (mode 3)
+	ProjectID   string // required
+	Region      string // required: GCP region (e.g. global)
+	WIFProvider string // full WIF provider resource name
 }
 
 // Provider implements inference.Provider for Vertex AI.
 type Provider struct {
-	cfg    Config
-	gcpAPI GCPClient
+	cfg Config
 }
 
-// New creates a Vertex Provider with the given config and GCP client.
-func New(cfg Config, gcpAPI GCPClient) *Provider {
-	return &Provider{cfg: cfg, gcpAPI: gcpAPI}
+// New creates a Vertex Provider with the given config.
+func New(cfg Config) *Provider {
+	return &Provider{cfg: cfg}
 }
 
 // NewAnalyzeOnly creates a Provider that only supports SecretNames() and Name().
@@ -72,15 +48,16 @@ func (p *Provider) Name() string {
 
 // SecretNames returns the secret names this provider manages.
 func (p *Provider) SecretNames() []string {
-	return []string{SecretCredentials, SecretProjectID}
+	return []string{SecretWIFProvider, SecretProjectID}
 }
 
 // Variables returns non-secret name/value pairs to store as repo variables.
 func (p *Provider) Variables() map[string]string {
-	if p.cfg.Region == "" {
-		return nil
+	vars := map[string]string{}
+	if p.cfg.Region != "" {
+		vars[VariableRegion] = p.cfg.Region
 	}
-	return map[string]string{VariableRegion: p.cfg.Region}
+	return vars
 }
 
 // Provision acquires GCP credentials and returns them as secrets.
@@ -88,42 +65,11 @@ func (p *Provider) Provision(ctx context.Context) (map[string]string, error) {
 	if p.cfg.ProjectID == "" {
 		return nil, fmt.Errorf("GCP project ID is required")
 	}
-
-	// Mode 3: credential JSON provided directly.
-	if len(p.cfg.CredentialJSON) > 0 {
-		return map[string]string{
-			SecretCredentials: string(p.cfg.CredentialJSON),
-			SecretProjectID:   p.cfg.ProjectID,
-		}, nil
+	if p.cfg.WIFProvider == "" {
+		return nil, fmt.Errorf("WIF provider resource name is required")
 	}
-
-	if p.gcpAPI == nil {
-		return nil, fmt.Errorf("GCP client is required for provisioning")
-	}
-
-	saName := p.cfg.ServiceAccountName
-	if saName == "" {
-		// Mode 1: create a new service account.
-		saName = defaultSAName
-		if err := p.gcpAPI.CreateServiceAccount(ctx, p.cfg.ProjectID, saName, "Fullsend agent inference"); err != nil {
-			return nil, fmt.Errorf("creating service account %s: %w", saName, err)
-		}
-	} else {
-		// Mode 2: verify existing service account.
-		if err := p.gcpAPI.GetServiceAccount(ctx, p.cfg.ProjectID, saName); err != nil {
-			return nil, fmt.Errorf("verifying service account %s: %w", saName, err)
-		}
-	}
-
-	// Create key for the service account (modes 1 and 2).
-	saEmail := saName + "@" + p.cfg.ProjectID + ".iam.gserviceaccount.com"
-	keyJSON, err := p.gcpAPI.CreateServiceAccountKey(ctx, p.cfg.ProjectID, saEmail)
-	if err != nil {
-		return nil, fmt.Errorf("creating key for %s: %w", saEmail, err)
-	}
-
 	return map[string]string{
-		SecretCredentials: string(keyJSON),
+		SecretWIFProvider: p.cfg.WIFProvider,
 		SecretProjectID:   p.cfg.ProjectID,
 	}, nil
 }

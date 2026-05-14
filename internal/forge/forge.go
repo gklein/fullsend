@@ -52,15 +52,29 @@ type WorkflowRun struct {
 type Issue struct {
 	Number int
 	Title  string
+	Body   string
 	URL    string
+	Labels []string
 }
 
 // IssueComment represents a comment on an issue.
 type IssueComment struct {
 	ID        int
+	NodeID    string
+	HTMLURL   string
 	Body      string
 	Author    string
 	CreatedAt string
+}
+
+// PullRequestReview represents a formal review on a pull request.
+type PullRequestReview struct {
+	ID          int
+	NodeID      string
+	User        string
+	State       string // "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"
+	Body        string
+	SubmittedAt string
 }
 
 // Installation represents an app installation on an org.
@@ -71,10 +85,35 @@ type Installation struct {
 	Permissions map[string]string
 }
 
+// TreeFile represents a file to be committed via the Git Trees API.
+// Mode controls file permissions: "100644" for regular files,
+// "100755" for executable files (e.g., shell scripts).
+type TreeFile struct {
+	Path    string
+	Content []byte
+	Mode    string // "100644" or "100755"
+}
+
 // Client abstracts all git forge operations.
 // Implementations exist for GitHub (and eventually GitLab, Forgejo).
 type Client interface {
 	// Repository operations
+	// ListOrgRepos returns repositories eligible for fullsend enrollment.
+	// It excludes archived repos (no active development), forks, and
+	// private repos.
+	//
+	// Private repos are excluded because the default .fullsend config repo
+	// is public, and agent workflows dispatched to it run with public logs.
+	// Enrolling a private repo would expose its code in those logs when
+	// agents check out and process the repo content. Private repo support
+	// requires per-repo .fullsend mode where agents run on the target repo.
+	//
+	// Forks are excluded because fullsend's trust model is org-centric:
+	// trust derives from org repository permissions and CODEOWNERS
+	// governance. Forks may live outside the org's permission boundary
+	// or lack the same CODEOWNERS configuration, which could bypass
+	// human-approval gates. Installing on both a fork and its upstream
+	// also risks duplicate agent PRs and conflicting changes.
 	ListOrgRepos(ctx context.Context, org string) ([]Repository, error)
 	GetRepo(ctx context.Context, owner, repo string) (*Repository, error)
 	CreateRepo(ctx context.Context, org, name, description string, private bool) (*Repository, error)
@@ -93,6 +132,12 @@ type Client interface {
 	GetFileContent(ctx context.Context, owner, repo, path string) ([]byte, error)
 	DeleteFile(ctx context.Context, owner, repo, path, message string) error
 
+	// CommitFiles atomically commits multiple files to the repository's
+	// default branch in a single commit. It is idempotent: if all files
+	// already have the expected content and mode, no commit is created
+	// and it returns (false, nil).
+	CommitFiles(ctx context.Context, owner, repo, message string, files []TreeFile) (committed bool, err error)
+
 	// Branch operations
 	CreateBranch(ctx context.Context, owner, repo, branchName string) error
 	CreateFileOnBranch(ctx context.Context, owner, repo, branch, path, message string, content []byte) error
@@ -103,6 +148,10 @@ type Client interface {
 	// Change proposals (PRs/MRs)
 	CreateChangeProposal(ctx context.Context, owner, repo, title, body, head, base string) (*ChangeProposal, error)
 	ListRepoPullRequests(ctx context.Context, owner, repo string) ([]ChangeProposal, error)
+
+	// Organization metadata
+	// GetOrgPlan returns the billing plan name for the org (e.g. "free", "team", "enterprise").
+	GetOrgPlan(ctx context.Context, org string) (string, error)
 
 	// Authentication
 	GetAuthenticatedUser(ctx context.Context) (string, error)
@@ -123,6 +172,14 @@ type Client interface {
 	OrgSecretExists(ctx context.Context, org, name string) (bool, error)
 	DeleteOrgSecret(ctx context.Context, org, name string) error
 	SetOrgSecretRepos(ctx context.Context, org, name string, repoIDs []int64) error
+	// GetOrgSecretRepos returns the list of repository IDs that have access
+	// to the given org-level secret.
+	GetOrgSecretRepos(ctx context.Context, org, name string) ([]int64, error)
+
+	// Org-level variables (for dispatch function URL)
+	CreateOrUpdateOrgVariable(ctx context.Context, org, name, value string, selectedRepoIDs []int64) error
+	OrgVariableExists(ctx context.Context, org, name string) (bool, error)
+	DeleteOrgVariable(ctx context.Context, org, name string) error
 
 	// CI/Workflow operations
 	GetLatestWorkflowRun(ctx context.Context, owner, repo, workflowFile string) (*WorkflowRun, error)
@@ -130,9 +187,23 @@ type Client interface {
 	DispatchWorkflow(ctx context.Context, owner, repo, workflowFile, ref string, inputs map[string]string) error
 
 	// Issue operations
-	CreateIssue(ctx context.Context, owner, repo, title, body string) (*Issue, error)
+	CreateIssue(ctx context.Context, owner, repo, title, body string, labels ...string) (*Issue, error)
 	CloseIssue(ctx context.Context, owner, repo string, number int) error
+	ListOpenIssues(ctx context.Context, owner, repo string, labels ...string) ([]Issue, error)
 	ListIssueComments(ctx context.Context, owner, repo string, number int) ([]IssueComment, error)
+	CreateIssueComment(ctx context.Context, owner, repo string, number int, body string) (*IssueComment, error)
+	UpdateIssueComment(ctx context.Context, owner, repo string, commentID int, body string) error
+	MinimizeComment(ctx context.Context, nodeID, reason string) error
+
+	// Pull request operations
+	GetPullRequestHeadSHA(ctx context.Context, owner, repo string, number int) (string, error)
+
+	// Pull request review operations.
+	// commitSHA, when non-empty, pins the review to a specific commit.
+	// GitHub rejects the request if the commit is not the PR's current HEAD.
+	CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body, commitSHA string) error
+	ListPullRequestReviews(ctx context.Context, owner, repo string, number int) ([]PullRequestReview, error)
+	DismissPullRequestReview(ctx context.Context, owner, repo string, number, reviewID int, message string) error
 
 	// Change proposal merge
 	MergeChangeProposal(ctx context.Context, owner, repo string, number int) error

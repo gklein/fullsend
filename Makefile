@@ -1,8 +1,13 @@
 .DEFAULT_GOAL := help
 .PHONY: help bootstrap lint lint-all check fmt \
        mindmap go-build go-test go-lint go-fmt go-vet go-tidy \
-       script-test test \
+       lint-md-links script-test test \
        e2e-test e2e-playwright e2e-export-session e2e-upload-session
+
+# Let Go automatically download the toolchain version required by go.mod.
+# This ensures local builds use the right version without manual intervention.
+# goreleaser is unaffected because it does not invoke Makefile targets.
+export GOTOOLCHAIN := auto
 
 help:
 	@echo "Available targets:"
@@ -19,7 +24,8 @@ help:
 	@echo "  go-fmt               - Format Go code"
 	@echo "  go-vet               - Run go vet"
 	@echo "  go-tidy              - Run go mod tidy"
-	@echo "  script-test          - Run shell script tests (post-triage, validate-output-schema)"
+	@echo "  lint-md-links        - Check markdown files for broken in-repo links and anchors"
+	@echo "  script-test          - Run shell script tests (post-triage, post-code, post-review, reconcile-repos, validate-output-schema)"
 	@echo "  test                 - Run all checks: lint, go-vet, go-test, script-test"
 	@echo "  e2e-test             - Run admin e2e tests (requires E2E_GITHUB_SESSION_FILE or E2E_GITHUB_USERNAME + E2E_GITHUB_PASSWORD)"
 	@echo "  e2e-export-session   - Login to GitHub and export a Playwright session file"
@@ -50,6 +56,10 @@ bootstrap:
 	GOBIN="$(BOOTSTRAP_BIN_DIR)" go install github.com/rhysd/actionlint/cmd/actionlint@latest
 	@echo "==> Installing gitleaks (secret scanner)..."
 	GOBIN="$(BOOTSTRAP_BIN_DIR)" go install github.com/zricethezav/gitleaks/v8@latest
+	@echo "==> Installing lychee (markdown link checker)..."
+	curl -sSfL "https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/lychee.tar.gz
+	echo "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a  /tmp/lychee.tar.gz" | sha256sum -c
+	tar xzf /tmp/lychee.tar.gz -C "$(BOOTSTRAP_BIN_DIR)" --strip-components=1 lychee-x86_64-unknown-linux-gnu/lychee
 	@echo "==> Installing pre-commit hooks..."
 	PATH="$(BOOTSTRAP_BIN_DIR):$(PATH)" pre-commit install
 	@echo ""
@@ -92,9 +102,16 @@ go-vet:
 go-tidy:
 	go mod tidy
 
+lint-md-links:
+	lychee --offline --no-progress --include-fragments --exclude-path node_modules --exclude-path experiments '**/*.md'
+
 script-test:
 	bash internal/scaffold/fullsend-repo/scripts/post-triage-test.sh
+	bash internal/scaffold/fullsend-repo/scripts/post-code-test.sh
+	bash internal/scaffold/fullsend-repo/scripts/post-review-test.sh
+	bash internal/scaffold/fullsend-repo/scripts/reconcile-repos-test.sh
 	bash internal/scaffold/fullsend-repo/scripts/validate-output-schema-test.sh
+	python3 internal/scaffold/fullsend-repo/scripts/process-fix-result-test.py
 
 test: lint go-vet go-test script-test
 
@@ -109,7 +126,7 @@ e2e-test: e2e-playwright
 		$(MAKE) e2e-export-session; \
 		export E2E_GITHUB_SESSION_FILE="$(E2E_SESSION_FILE)"; \
 	fi; \
-	go test -tags e2e -v -count=1 -timeout 10m ./e2e/admin/
+	go test -tags e2e -v -count=1 -timeout 30m ./e2e/admin/
 
 e2e-export-session: e2e-playwright
 	@if [ -n "$$E2E_GITHUB_PASSWORD_FILE" ] && [ -z "$$E2E_GITHUB_PASSWORD" ]; then \

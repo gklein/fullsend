@@ -2,11 +2,13 @@
 
 ## Overview
 
-This repository publishes a static documentation site whose root page is built from [`web/public/index.html`](../web/public/index.html). **Build Site** packs **`public/`** (static files) and **`worker/`** (TypeScript Worker from the same checkout—PR head on PR builds) under **`_bundle/`** in one artifact. **Deploy Site** checks out **only the default branch** (trusted [`cloudflare_site/wrangler.toml`](../cloudflare_site/wrangler.toml); never PR-controlled config on the secret-bearing runner), downloads the artifact to **`_bundle/`**, then **copies only** **`_bundle/public/`** and **`_bundle/worker/`** into **`cloudflare_site/`** (so a malicious artifact cannot overwrite `wrangler.toml` or other repo files), then runs Wrangler. Deployment uses **Cloudflare Workers with [static assets](https://developers.cloudflare.com/workers/static-assets/)** (not the legacy **Pages direct-upload** / `wrangler pages deploy` flow).
+This repository publishes a static documentation site whose root page is built from [`web/public/index.html`](../web/public/index.html). **Vite** is rooted at **`web/`**; **`npm run build`** writes **`web/dist/`** with shared chunks in **`web/dist/assets/`**, the **admin** SPA under **`web/dist/admin/`** (see [`web/admin/README.md`](../web/admin/README.md)), and the **docs browser** under **`web/dist/docs/`** (see [`web/docs/README.md`](../web/docs/README.md)). CI copies **`assets/`**, **`admin/`**, and **`docs/`** into **`_bundle/public/`** so the Worker serves **`/admin/`** and **`/docs/`** from the same static asset tree. OAuth/CORS hardening for that Worker is summarized in [`docs/admin-oauth-worker.md`](admin-oauth-worker.md) (path-specific CORS for `/api/github/user`, no separate “OAuth enabled” env flag).
+
+**Build Site** runs **`npm ci`** and **`npm run build`** at the repository root, then packs **`public/`** (static files, including those three trees from `web/dist/`) and **`worker/`** (TypeScript Worker from the same checkout—PR head on PR builds) under **`_bundle/`** in one artifact. **Deploy Site** checks out **only the default branch** (trusted [`cloudflare_site/wrangler.toml`](../cloudflare_site/wrangler.toml); never PR-controlled config on the secret-bearing runner), downloads the artifact to **`_bundle/`**, then **copies only** **`_bundle/public/`** and **`_bundle/worker/`** into **`cloudflare_site/`** (so a malicious artifact cannot overwrite `wrangler.toml` or other repo files), then runs Wrangler. Deployment uses **Cloudflare Workers with [static assets](https://developers.cloudflare.com/workers/static-assets/)** (not the legacy **Pages direct-upload** / `wrangler pages deploy` flow).
 
 Two GitHub Actions workflows:
 
-- **Build Site** — on `pull_request` and `push` to `main`, checks out the PR head when relevant, assembles **`_bundle/public/`** and **`_bundle/worker/`**, uploads artifact **`site`** (`_bundle/` contents).
+- **Build Site** — on `pull_request` and `push` to `main`, checks out the PR head when relevant, installs Node dependencies, builds the site (admin and docs SPAs plus shared assets), assembles **`_bundle/public/`** and **`_bundle/worker/`**, uploads artifact **`site`** (`_bundle/` contents).
 - **Deploy Site** — on successful **Build Site** via `workflow_run`, checks out the repo default ref (trusted Wrangler project files), downloads artifact **`site`** into **`_bundle/`**, copies **`public/`** and **`worker/`** into **`cloudflare_site/`**, then:
   - **push to `main`:** `wrangler deploy` → production Worker traffic.
   - **pull_request:** `wrangler versions upload --preview-alias pr-<pr-number>` → preview URL on `*.workers.dev` without changing production (alias falls back to `pr-<workflow_run.id>` only when the same fork branch matches more than one open PR).
@@ -61,10 +63,20 @@ Disable **GitHub Pages** under **Settings → Pages** if it was only used for th
 
 ## Local preview (optional)
 
-From the repository root:
+**Full stack (recommended for admin OAuth):** from the repository root, run **`npm run dev`** so Vite serves the SPA and Wrangler runs the site Worker with shared process env — see [`web/admin/README.md`](../web/admin/README.md).
+
+**Static tree + Worker (closer to production asset layout):** install dependencies, run the root build, copy the same layout CI uses under `cloudflare_site/public/`, then run Wrangler:
 
 ```bash
-mkdir -p cloudflare_site/public && cp web/public/index.html cloudflare_site/public/index.html
+npm ci
+npm run build
+mkdir -p cloudflare_site/public/assets
+mkdir -p cloudflare_site/public/admin
+mkdir -p cloudflare_site/public/docs
+cp web/public/index.html cloudflare_site/public/index.html
+cp -a web/dist/assets/. cloudflare_site/public/assets/
+cp -a web/dist/admin/. cloudflare_site/public/admin/
+cp -a web/dist/docs/. cloudflare_site/public/docs/
 cd cloudflare_site && npx wrangler@4 dev
 ```
 
@@ -76,8 +88,12 @@ Requires a Cloudflare login or API token in the environment per [Wrangler docs](
 
 **`Could not determine Workers deployment URL`.** The workflow reads `deployment-url` from `cloudflare/wrangler-action`, then falls back to parsing Wrangler stdout/stderr for a `workers.dev` URL. Upgrade **`wranglerVersion`** in the workflow if Wrangler output format changed.
 
-**Preview upload fails (PR builds).** Requires Wrangler **≥ 4.21.0** for `--preview-alias`. The workflow pins **4.30.0**.
+**Preview upload fails (PR builds).** Requires Wrangler **≥ 4.21.0** for `--preview-alias`. The deploy workflow pins **4.36.0**.
 
 **Artifact download 404.** **Build Site** must upload artifact **`site`**; **Deploy Site** needs `actions: read`.
 
 **No PR comment.** Same as before: ambiguous `head` when resolving the PR number; see the design spec.
+
+**Secrets missing on the deployed Worker / `missing_turnstile_keys` after deploy.** `cloudflare/wrangler-action` runs `wrangler secret bulk` using the **`name` in `wrangler.toml`**, not the `--name` flag on `wrangler deploy`. The deploy workflow patches `name` to match **`CLOUDFLARE_PROJECT_NAME`** before Wrangler runs so secrets and deploy target the same Worker. If you deploy manually with only `--name=…`, run `wrangler secret bulk` (or `wrangler secret put`) with the same **`--name`**.
+
+**Dashboard:** Worker **Variables and Secrets** lists plain **vars** and encrypted **secrets**. Secret values are never shown after save; only names appear.

@@ -6,6 +6,11 @@ import (
 
 var version = "dev"
 
+// Version returns the CLI version string set at build time.
+func Version() string {
+	return version
+}
+
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "fullsend",
@@ -18,6 +23,8 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newAdminCmd())
 	cmd.AddCommand(newRunCmd())
 	cmd.AddCommand(newScanCmd())
+	cmd.AddCommand(newPostReviewCmd())
+	cmd.AddCommand(newPostCommentCmd())
 	return cmd
 }
 

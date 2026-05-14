@@ -13,7 +13,7 @@ description: >-
 User docs are task-oriented guides for two audiences: **administrators** who
 install and manage fullsend, and **developers** who work in enrolled repos.
 Structure and rules are decided in
-[ADR 0023](docs/ADRs/0023-user-documentation-structure.md).
+[ADR 0023](../../docs/ADRs/0023-user-documentation-structure.md).
 
 ## Directory Layout
 

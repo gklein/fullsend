@@ -65,6 +65,11 @@ add_label() {
   fi
 }
 
+# remove_label silently removes a label (no error if absent).
+remove_label() {
+  gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/labels/$1" -X DELETE --silent 2>/dev/null || true
+}
+
 case "${ACTION}" in
   insufficient)
     if [[ -z "${COMMENT}" ]]; then
@@ -72,9 +77,10 @@ case "${ACTION}" in
       exit 1
     fi
     echo "Posting clarifying question..."
-    printf '%s' "${COMMENT}" | gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" --body-file -
+    printf '%s' "${COMMENT}" | fullsend post-comment --repo "${REPO}" --number "${ISSUE_NUMBER}" --marker "<!-- fullsend:triage-agent -->" --token "${GH_TOKEN}" --result -
 
     echo "Applying label..."
+    remove_label "blocked"
     add_label "needs-info"
     ;;
 
@@ -89,11 +95,37 @@ case "${ACTION}" in
       exit 1
     fi
     echo "Posting duplicate notice..."
-    printf '%s' "${COMMENT}" | gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" --body-file -
+    printf '%s' "${COMMENT}" | fullsend post-comment --repo "${REPO}" --number "${ISSUE_NUMBER}" --marker "<!-- fullsend:triage-agent -->" --token "${GH_TOKEN}" --result -
 
     echo "Applying label and closing..."
+    remove_label "blocked"
     add_label "duplicate"
-    gh issue close "${ISSUE_NUMBER}" --repo "${REPO}" --reason "not planned"
+    gh issue close "${ISSUE_NUMBER}" --repo "${REPO}" --reason "duplicate"
+    ;;
+
+  blocked)
+    # NOTE: There is no automatic mechanism to remove the "blocked" label when
+    # the blocking issue is resolved. Currently, editing the issue re-triggers
+    # triage, and the agent checks whether existing blockers are still open
+    # (Step 2c in triage.md). A scheduled workflow to check blocked issues
+    # periodically would be a more complete solution. (See review notes.)
+    if [[ -z "${COMMENT}" ]]; then
+      echo "ERROR: action is 'blocked' but no comment provided"
+      exit 1
+    fi
+    BLOCKED_BY=$(jq -r '.blocked_by // empty' "${RESULT_FILE}")
+    if [[ -z "${BLOCKED_BY}" ]]; then
+      echo "ERROR: action is 'blocked' but no blocked_by URL provided"
+      exit 1
+    fi
+    echo "Blocked by: ${BLOCKED_BY}"
+    echo "Posting blocked notice..."
+    printf '%s' "${COMMENT}" | gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" --body-file -
+
+    echo "Applying label..."
+    remove_label "ready-to-code"
+    remove_label "needs-info"
+    add_label "blocked"
     ;;
 
   sufficient)
@@ -101,11 +133,38 @@ case "${ACTION}" in
       echo "ERROR: action is 'sufficient' but no comment provided"
       exit 1
     fi
-    echo "Posting triage summary..."
-    printf '%s' "${COMMENT}" | gh issue comment "${ISSUE_NUMBER}" --repo "${REPO}" --body-file -
 
-    echo "Applying label..."
-    add_label "ready-to-code"
+    # Guard: reject sufficient results that contain information_gaps.
+    # If the agent identified open questions, it should have used "insufficient".
+    GAP_COUNT=$(jq '.triage_summary.information_gaps // [] | length' "${RESULT_FILE}")
+    if [[ "${GAP_COUNT}" -gt 0 ]]; then
+      echo "ERROR: action is 'sufficient' but triage_summary contains ${GAP_COUNT} information_gaps — open questions must block triage"
+      exit 1
+    fi
+
+    echo "Posting triage summary..."
+    printf '%s' "${COMMENT}" | fullsend post-comment --repo "${REPO}" --number "${ISSUE_NUMBER}" --marker "<!-- fullsend:triage-agent -->" --token "${GH_TOKEN}" --result -
+
+    echo "Removing stale labels..."
+    remove_label "blocked"
+    remove_label "needs-info"
+
+    # Low-risk categories (bug, documentation, performance) auto-promote to
+    # ready-to-code, which triggers the code agent. Feature work and anything
+    # else receives the triaged label and waits for human prioritization
+    # (per #561, only feature issues should require human review before coding).
+    CATEGORY=$(jq -r '.triage_summary.category // "unknown"' "${RESULT_FILE}")
+    echo "Category: ${CATEGORY}"
+    case "${CATEGORY}" in
+      bug|documentation|performance)
+        echo "Applying ready-to-code label (${CATEGORY})..."
+        add_label "ready-to-code"
+        ;;
+      *)
+        echo "Applying triaged label (${CATEGORY})..."
+        add_label "triaged"
+        ;;
+    esac
     ;;
 
   *)

@@ -20,15 +20,29 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Build web SPAs
+        run: npm run build
+
       - name: Prepare deploy bundle
         run: |
           set -euo pipefail
           mkdir -p _bundle/public
-          # Static tree → artifact public/ (Deploy copies only _bundle/public and _bundle/worker into cloudflare_site/).
-          # Root page: interactive graph (source of truth: web/public/index.html).
-          # When a Vite app exists under web/, extend this step (e.g. _bundle/public/admin/).
           cp web/public/index.html _bundle/public/index.html
-          # Worker source from this checkout (PR head on PR builds) — deploy never clones PR for Wrangler; only this tree is untrusted.
+          mkdir -p _bundle/public/assets
+          cp -a web/dist/assets/. _bundle/public/assets/
+          mkdir -p _bundle/public/admin
+          cp -a web/dist/admin/. _bundle/public/admin/
+          mkdir -p _bundle/public/docs
+          cp -a web/dist/docs/. _bundle/public/docs/
           mkdir -p _bundle/worker
           cp -a cloudflare_site/worker/. _bundle/worker/
 

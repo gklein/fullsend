@@ -9,7 +9,7 @@
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["insufficient", "duplicate", "sufficient"]
+      "enum": ["insufficient", "duplicate", "sufficient", "blocked"]
     },
     "reasoning": {
       "type": "string",
@@ -29,6 +29,11 @@
     },
     "triage_summary": {
       "$ref": "#/$defs/triage_summary"
+    },
+    "blocked_by": {
+      "type": "string",
+      "pattern": "^https://github\\.com/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/(issues|pull)/[0-9]+$",
+      "description": "HTML URL of the blocking issue or PR (e.g., https://github.com/org/repo/issues/99 or https://github.com/org/repo/pull/55)"
     }
   },
   "allOf": [
@@ -43,6 +48,10 @@
     {
       "if": { "properties": { "action": { "const": "sufficient" } }, "required": ["action"] },
       "then": { "required": ["clarity_scores", "triage_summary"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "blocked" } }, "required": ["action"] },
+      "then": { "required": ["blocked_by"] }
     }
   ],
   "$defs": {
@@ -65,15 +74,14 @@
       "properties": {
         "title": { "type": "string", "minLength": 1 },
         "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
-        "category": { "type": "string", "enum": ["bug", "performance", "security", "documentation", "enhancement", "other"] },
+        "category": { "type": "string", "enum": ["bug", "performance", "security", "documentation", "feature", "other"] },
         "problem": { "type": "string", "minLength": 1 },
         "root_cause_hypothesis": { "type": "string", "minLength": 1 },
         "reproduction_steps": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
         "environment": { "type": "string" },
         "impact": { "type": "string", "minLength": 1 },
         "recommended_fix": { "type": "string", "minLength": 1 },
-        "proposed_test_case": { "type": "string", "minLength": 1 },
-        "information_gaps": { "type": "array", "items": { "type": "string" } }
+        "proposed_test_case": { "type": "string", "minLength": 1 }
       },
       "additionalProperties": false
     }
