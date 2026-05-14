@@ -142,7 +142,7 @@ With the hybrid approach (URL support for declarative resources, local files for
 
 ### What changes
 
-- **Harness schema:** Every path field (`agent`, `policy`, `skills[]`, `host_files[].src`, `pre_script`, `post_script`, etc.) accepts URLs.
+- **Harness schema:** Declarative resource path fields (`agent`, `policy`, `skills[]`) accept URLs. Executable resource fields (`pre_script`, `post_script`) and configuration files (`host_files[].src`) must be local paths (see "Security implications" section for rationale).
 - **Resolution logic:** The runner resolves URLs by fetching, caching (content-addressed), and validating before use.
 - **Transitive closure (Phase 2 feature):** URL-referenced resources can themselves reference other resources via URL, creating a dependency tree. Phase 1 implementation limits URL references to single-level only (harness can reference URL-based resources, but those resources cannot reference additional URLs). Phase 2 adds full transitive resolution with:
   - **Visited node tracking:** The resolver maintains a set of already-visited URLs. If a URL is encountered twice in the same dependency chain, the resolver returns an error indicating a circular dependency.
@@ -152,7 +152,7 @@ With the hybrid approach (URL support for declarative resources, local files for
 
 ### Security implications (CRITICAL)
 
-1. **TOCTOU (Time-of-Check-Time-of-Use):** A remote resource could change between fetch and use. **Mitigation:** **Mandatory hash pinning for all remote resources.** All URLs must include a SHA256 integrity hash: `https://example.com/skill.md#sha256=abc123...`. The runner verifies the fetched content matches the declared hash before use. Content-addressed caching ensures that once fetched and validated, the cached version is immutable. The cache key is `SHA256(URL + hash)`. **Cache integrity re-verification:** On cache hits, the implementation must re-hash the cached content and verify it matches the expected hash before use. This prevents cache tampering attacks where an attacker modifies the local cache directory. See implementation plan lines 980-985 for the required re-verification code.
+1. **TOCTOU (Time-of-Check-Time-of-Use):** A remote resource could change between fetch and use. **Mitigation:** **Mandatory hash pinning for all remote resources.** All URLs must include a SHA256 integrity hash: `https://example.com/skill.md#sha256=abc123...`. The runner verifies the fetched content matches the declared hash before use. Content-addressed caching ensures that once fetched and validated, the cached version is immutable. The cache key is the `SHA256(content)` of the fetched resource. **Cache integrity re-verification:** On cache hits, the implementation must re-hash the cached content and verify it matches the expected hash before use. This prevents cache tampering attacks where an attacker modifies the local cache directory. See implementation plan lines 1007-1014 for the required re-verification code.
 
 2. **Content injection via compromised URLs:** An attacker who controls a URL referenced by a harness can inject malicious agent instructions, skills, or policies. **Mitigations:**
    - **Mandatory hash pinning** (see above): Even if an attacker compromises the source server, they cannot change the content without breaking the hash verification. This applies equally to fullsend-ai repositories and external URLs.

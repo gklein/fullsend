@@ -194,7 +194,7 @@ Fetched resources are cached in the repository's workspace using content address
 **Version control:** The `.fullsend-cache/` directory should be added to `.gitignore` to prevent cache artifacts from being committed. The cache is ephemeral and rebuilt as needed; committing it would bloat the repository and serve no purpose.
 
 Cache key: `SHA256(content)`
-Lookup: `SHA256(URL + hash) → cache_manifest.db → SHA256(content) → cached file`
+Lookup: Cache is content-addressed by `SHA256(content)` — two URLs serving identical content share a cache entry.
 
 **Why content-addressed?** If two different URLs serve identical content, they share a cache entry. This deduplicates storage and makes integrity verification uniform.
 
@@ -642,6 +642,7 @@ type FetchPolicy struct {
     Timeout        time.Duration
     MaxDepth       int // Maximum depth for transitive dependencies
     MaxResources   int // Maximum total resources to fetch
+    Offline        bool // If true, disable network fetches (use cache only)
 }
 
 var DefaultPolicy = FetchPolicy{
@@ -874,7 +875,10 @@ func CachePut(workspaceRoot, url string, content []byte) error {
     hash := ComputeSHA256(content)
     dir := CachePath(workspaceRoot, hash)
 
-    if err := os.MkdirAll(dir, 0755); err != nil {
+    // Use restrictive permissions (0700/0600) to prevent other users from reading
+    // cached resources on shared runners. Cached resources may contain organizational
+    // configuration that should not be world-readable.
+    if err := os.MkdirAll(dir, 0700); err != nil {
         return err
     }
 
@@ -887,10 +891,10 @@ func CachePut(workspaceRoot, url string, content []byte) error {
     if err != nil {
         return fmt.Errorf("marshaling cache metadata: %w", err)
     }
-    if err := os.WriteFile(filepath.Join(dir, "metadata.json"), metaData, 0644); err != nil {
+    if err := os.WriteFile(filepath.Join(dir, "metadata.json"), metaData, 0600); err != nil {
         return err
     }
-    if err := os.WriteFile(filepath.Join(dir, "content"), content, 0644); err != nil {
+    if err := os.WriteFile(filepath.Join(dir, "content"), content, 0600); err != nil {
         return err
     }
 
@@ -939,14 +943,14 @@ func ResolveHarness(ctx context.Context, workspaceRoot string, h *harness.Harnes
 
     // Resolve agent
     var err error
-    resolved.AgentPath, err = resolveResourceWithLimits(ctx, workspaceRoot, h.Agent, h.AllowedRemoteResources, policy, 0, &resourceCount)
+    resolved.AgentPath, err = resolveResourceWithLimits(ctx, workspaceRoot, h.Agent, h.AllowedRemoteResources, policy, 0, &resourceCount, "")
     if err != nil {
         return nil, fmt.Errorf("resolving agent: %w", err)
     }
 
     // Resolve policy
     if h.Policy != "" {
-        resolved.PolicyPath, err = resolveResourceWithLimits(ctx, workspaceRoot, h.Policy, h.AllowedRemoteResources, policy, 0, &resourceCount)
+        resolved.PolicyPath, err = resolveResourceWithLimits(ctx, workspaceRoot, h.Policy, h.AllowedRemoteResources, policy, 0, &resourceCount, "")
         if err != nil {
             return nil, fmt.Errorf("resolving policy: %w", err)
         }
@@ -956,7 +960,7 @@ func ResolveHarness(ctx context.Context, workspaceRoot string, h *harness.Harnes
     // Phase 1: Single-level only (skills themselves cannot reference URLs)
     // Phase 2+: Each skill may have transitive dependencies (code below)
     for _, skill := range h.Skills {
-        skillPath, err := resolveResourceWithLimits(ctx, workspaceRoot, skill, h.AllowedRemoteResources, policy, 0, &resourceCount)
+        skillPath, err := resolveResourceWithLimits(ctx, workspaceRoot, skill, h.AllowedRemoteResources, policy, 0, &resourceCount, "")
         if err != nil {
             return nil, fmt.Errorf("resolving skill %s: %w", skill, err)
         }
@@ -971,9 +975,9 @@ func ResolveHarness(ctx context.Context, workspaceRoot string, h *harness.Harnes
 }
 
 // resolveResourceWithLimits resolves a single resource with depth and count limits.
-// Phase 1: depth is always 0 (no transitive resolution)
-// Phase 2+: depth tracking prevents cycles and runaway recursion
-func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, allowedPrefixes []string, policy fetch.FetchPolicy, depth int, resourceCount *int) (string, error) {
+// Phase 1: depth is always 0 (no transitive resolution), parentRef is unused
+// Phase 2+: depth tracking prevents cycles and runaway recursion, parentRef enables relative path resolution
+func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, allowedPrefixes []string, policy fetch.FetchPolicy, depth int, resourceCount *int, parentRef string) (string, error) {
     // Phase 2+: Check depth limit (Phase 1 always passes since depth=0)
     if depth > policy.MaxDepth {
         return "", fmt.Errorf("exceeded maximum dependency depth of %d", policy.MaxDepth)
@@ -1012,6 +1016,11 @@ func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, a
                 return "", fmt.Errorf("cache integrity check failed for %s: expected %s, got %s (cache may be corrupted or tampered)", cleanURL, expectedHash, actualHash)
             }
             return filepath.Join(fetch.CachePath(workspaceRoot, expectedHash), "content"), nil
+        }
+
+        // If offline mode is enabled, fail on cache miss
+        if policy.Offline {
+            return "", fmt.Errorf("resource %s not in cache and --offline mode is enabled", cleanURL)
         }
 
         // Fetch from URL
@@ -1202,12 +1211,16 @@ Add a CLI flag to disable all network fetches:
 
 ```go
 // internal/cli/run.go
-cmd.Flags().Bool("offline", false, "disable network fetches (fail if harness references URLs)")
+cmd.Flags().Bool("offline", false, "disable network fetches (use cached resources, fail on cache miss)")
 
 // In runAgent():
-if offline && hasRemoteReferences(h) {
-    return fmt.Errorf("harness references remote resources but --offline is set")
+// offline flag is passed to the resolver, which attempts cache lookups
+// and only errors on cache misses (see resolve.go implementation)
+fetchPolicy := fetch.DefaultPolicy
+if offline {
+    fetchPolicy.Offline = true
 }
+resolved, err := resolve.ResolveHarness(ctx, workspaceRoot, h, fetchPolicy)
 ```
 
 ## Migration Path
