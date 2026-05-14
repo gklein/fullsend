@@ -30,7 +30,7 @@ import (
 type DeployMode int
 
 const (
-	// DeployAuto compares source hash and env vars; skips deploy if unchanged.
+	// DeployAuto compares source hash; skips deploy if unchanged.
 	DeployAuto DeployMode = iota
 	// DeploySkip never redeploys; reuses the existing function URL.
 	DeploySkip
@@ -612,7 +612,7 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 
 	// Step 6: Build org-scoped env vars and deploy Cloud Function.
 	// Only create entries for installing orgs; existing orgs' entries are
-	// preserved by mergeRoleAppIDs below.
+	// preserved by EnsureOrgInMint's merge logic.
 	orgScopedAppIDs := make(map[string]string)
 	for _, org := range installingOrgs {
 		for role, appID := range p.cfg.AgentAppIDs {
@@ -683,7 +683,10 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		}
 	} else if p.needsCodeDeploy(existing, sourceHash) {
 		// Code changed: UpdateFunction preserving existing env vars, only updating hash.
-		deployEnvVars := make(map[string]string, len(existing.EnvVars))
+		deployEnvVars := make(map[string]string, len(envVars)+len(existing.EnvVars))
+		for k, v := range envVars {
+			deployEnvVars[k] = v
+		}
 		for k, v := range existing.EnvVars {
 			deployEnvVars[k] = v
 		}
@@ -721,13 +724,17 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	}
 
 	if existing == nil || existing.URI == "" {
-		return nil, fmt.Errorf("function %s not found — cannot use --skip-mint-deploy without an existing deployment", functionName)
+		return nil, fmt.Errorf("function %s not found or has no URI", functionName)
 	}
 	mintURL := existing.URI
 
 	// Register org env vars via EnsureOrgInMint (additive, no-op if already present).
 	for _, org := range installingOrgs {
-		if err := p.EnsureOrgInMint(ctx, mintURL, org, orgScopedAppIDs); err != nil {
+		perOrgAppIDs := make(map[string]string, len(p.cfg.AgentAppIDs))
+		for role, appID := range p.cfg.AgentAppIDs {
+			perOrgAppIDs[org+"/"+role] = appID
+		}
+		if err := p.EnsureOrgInMint(ctx, mintURL, org, perOrgAppIDs); err != nil {
 			return nil, fmt.Errorf("registering org %s in mint: %w", org, err)
 		}
 	}
