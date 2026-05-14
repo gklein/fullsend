@@ -188,18 +188,28 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	report := &LayerReport{Name: l.Name()}
 
 	var enrolled, notEnrolled, perRepo, guardFailed []string
-	for _, repo := range l.enabledRepos {
-		guardVal, guardExists, err := l.client.GetRepoVariable(ctx, l.org, repo, forge.PerRepoGuardVar)
-		if err != nil {
+
+	// checkGuard returns true if the repo is per-repo managed and should be
+	// skipped by the per-org enrollment analysis.
+	checkGuard := func(repo string) (skip bool, err error) {
+		guardVal, guardExists, guardErr := l.client.GetRepoVariable(ctx, l.org, repo, forge.PerRepoGuardVar)
+		if guardErr != nil {
 			guardFailed = append(guardFailed, repo)
-			continue
+			return true, nil
 		}
 		if guardExists && guardVal == "true" {
 			perRepo = append(perRepo, repo)
+			return true, nil
+		}
+		return false, nil
+	}
+
+	for _, repo := range l.enabledRepos {
+		if skip, _ := checkGuard(repo); skip {
 			continue
 		}
 
-		_, err = l.client.GetFileContent(ctx, l.org, repo, shimWorkflowPath)
+		_, err := l.client.GetFileContent(ctx, l.org, repo, shimWorkflowPath)
 		if err == nil {
 			enrolled = append(enrolled, repo)
 		} else if forge.IsNotFound(err) {
@@ -212,17 +222,11 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	// Check disabled repos for stale shims (skip per-repo managed repos).
 	var staleShim []string
 	for _, repo := range l.disabledRepos {
-		guardVal, guardExists, err := l.client.GetRepoVariable(ctx, l.org, repo, forge.PerRepoGuardVar)
-		if err != nil {
-			guardFailed = append(guardFailed, repo)
-			continue
-		}
-		if guardExists && guardVal == "true" {
-			perRepo = append(perRepo, repo)
+		if skip, _ := checkGuard(repo); skip {
 			continue
 		}
 
-		_, err = l.client.GetFileContent(ctx, l.org, repo, shimWorkflowPath)
+		_, err := l.client.GetFileContent(ctx, l.org, repo, shimWorkflowPath)
 		if err == nil {
 			staleShim = append(staleShim, repo)
 		} else if forge.IsNotFound(err) {
@@ -233,6 +237,14 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	}
 
 	hasDrift := len(notEnrolled) > 0 || len(staleShim) > 0 || len(guardFailed) > 0
+
+	// If every repo failed the guard check, the token likely lacks the required
+	// scope — surface a prominent warning so the operator can investigate.
+	totalRepos := len(l.enabledRepos) + len(l.disabledRepos)
+	if totalRepos > 0 && len(guardFailed) == totalRepos {
+		report.Details = append(report.Details,
+			fmt.Sprintf("all %d repos failed guard check — verify your token has actions:read scope", totalRepos))
+	}
 
 	for _, r := range perRepo {
 		report.Details = append(report.Details, r+" (per-repo install, skipped)")

@@ -85,7 +85,7 @@ check_per_repo_guard() {
     fi
     return 1
   fi
-  # Check if the error is a 404 (variable not found) via JSON status field.
+  # Check if the error is a 404 (variable not found) via numeric status field.
   if printf '%s' "$resp" | jq -e '.status == "404"' >/dev/null 2>&1; then
     return 1
   fi

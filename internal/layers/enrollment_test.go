@@ -322,14 +322,9 @@ func TestEnrollmentLayer_Analyze_PerRepoGuardFalse(t *testing.T) {
 }
 
 func TestEnrollmentLayer_Analyze_MixedPerRepoAndOrg(t *testing.T) {
-	client := &forge.FakeClient{
-		FileContents: map[string][]byte{
-			"test-org/repo-b/.github/workflows/fullsend.yaml": []byte("shim"),
-		},
-		VariableValues: map[string]string{
-			"test-org/repo-a/FULLSEND_PER_REPO_INSTALL": "true",
-		},
-	}
+	client := forge.NewFakeClient()
+	client.FileContents["test-org/repo-b/.github/workflows/fullsend.yaml"] = []byte("shim")
+	client.VariableValues["test-org/repo-a/FULLSEND_PER_REPO_INSTALL"] = "true"
 	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a", "repo-b", "repo-c"}, nil)
 
 	report, err := layer.Analyze(context.Background())
@@ -345,14 +340,9 @@ func TestEnrollmentLayer_Analyze_MixedPerRepoAndOrg(t *testing.T) {
 }
 
 func TestEnrollmentLayer_Analyze_DisabledWithPerRepoGuard(t *testing.T) {
-	client := &forge.FakeClient{
-		FileContents: map[string][]byte{
-			"test-org/repo-x/.github/workflows/fullsend.yaml": []byte("shim"),
-		},
-		VariableValues: map[string]string{
-			"test-org/repo-x/FULLSEND_PER_REPO_INSTALL": "true",
-		},
-	}
+	client := forge.NewFakeClient()
+	client.FileContents["test-org/repo-x/.github/workflows/fullsend.yaml"] = []byte("shim")
+	client.VariableValues["test-org/repo-x/FULLSEND_PER_REPO_INSTALL"] = "true"
 	layer, _ := newEnrollmentLayer(t, client, nil, []string{"repo-x"})
 
 	report, err := layer.Analyze(context.Background())
@@ -373,6 +363,8 @@ func TestEnrollmentLayer_Analyze_PerRepoGuardCheckError(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, StatusDegraded, report.Status)
-	require.Len(t, report.Details, 1)
-	assert.Contains(t, report.Details[0], "guard check failed, skipped")
+	// First detail is the all-failed warning, second is the per-repo detail.
+	require.Len(t, report.Details, 2)
+	assert.Contains(t, report.Details[0], "all 1 repos failed guard check")
+	assert.Contains(t, report.Details[1], "guard check failed, skipped")
 }
