@@ -208,7 +208,11 @@ func (p *Provisioner) CopyAgentPEM(ctx context.Context, srcOrg, dstOrg, role str
 
 	dstID := secretID(dstOrg, role)
 	if err := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, dstID); err == nil {
-		return nil
+		// Secret exists — still ensure the mint SA has access,
+		// since older installs may have granted a different SA.
+		return p.ensureSecretIAM(ctx, dstID)
+	} else if !errors.Is(err, ErrSecretNotFound) {
+		return fmt.Errorf("checking destination secret %s: %w", dstID, err)
 	}
 
 	srcID := secretID(srcOrg, role)
@@ -218,6 +222,16 @@ func (p *Provisioner) CopyAgentPEM(ctx context.Context, srcOrg, dstOrg, role str
 	}
 
 	return p.StoreAgentPEM(ctx, dstOrg, role, pemData)
+}
+
+func (p *Provisioner) ensureSecretIAM(ctx context.Context, secretName string) error {
+	saEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, p.cfg.ProjectID)
+	secretResource := fmt.Sprintf("projects/%s/secrets/%s", p.cfg.ProjectID, secretName)
+	if err := p.gcpAPI.SetSecretIAMBinding(ctx, secretResource,
+		"serviceAccount:"+saEmail, "roles/secretmanager.secretAccessor"); err != nil {
+		return fmt.Errorf("granting secret access for %s: %w", secretName, err)
+	}
+	return nil
 }
 
 // GetExistingRoleAppIDs reads ROLE_APP_IDS from the deployed mint function.
@@ -236,6 +250,100 @@ func (p *Provisioner) GetExistingRoleAppIDs(ctx context.Context) (map[string]str
 		return nil, nil
 	}
 	return m, nil
+}
+
+// EnsureOrgInMint validates that a mint function exists at expectedURL and
+// that the given org is registered in ALLOWED_ORGS and ROLE_APP_IDS. If the
+// org is missing, it updates the function's env vars to include it.
+// Not safe for concurrent calls — run per-repo installs sequentially when
+// sharing a mint.
+func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, org string, roleAppIDs map[string]string) error {
+	org = strings.ToLower(org)
+
+	fn, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+	if err != nil {
+		return fmt.Errorf("getting mint function: %w", err)
+	}
+	if fn == nil {
+		return fmt.Errorf("mint function %q not found in project %s region %s", functionName, p.cfg.ProjectID, p.cfg.Region)
+	}
+
+	if fn.URI != expectedURL {
+		return fmt.Errorf("mint URL mismatch: expected %q but function has %q", expectedURL, fn.URI)
+	}
+
+	needsUpdate := false
+
+	// Check ALLOWED_ORGS.
+	allowedOrgs := fn.EnvVars["ALLOWED_ORGS"]
+	orgPresent := false
+	for _, o := range strings.Split(allowedOrgs, ",") {
+		if strings.EqualFold(strings.TrimSpace(o), org) {
+			orgPresent = true
+			break
+		}
+	}
+	if !orgPresent {
+		needsUpdate = true
+	}
+
+	// Check ROLE_APP_IDS.
+	existingRoleAppIDs := make(map[string]string)
+	if raw := fn.EnvVars["ROLE_APP_IDS"]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &existingRoleAppIDs); err != nil {
+			return fmt.Errorf("parsing existing ROLE_APP_IDS: %w", err)
+		}
+	}
+	for key, val := range roleAppIDs {
+		if existing, ok := existingRoleAppIDs[key]; !ok || existing != val {
+			needsUpdate = true
+			break
+		}
+	}
+
+	if !needsUpdate {
+		return nil
+	}
+
+	// Build updated env vars from existing function state.
+	updated := make(map[string]string, len(fn.EnvVars))
+	for k, v := range fn.EnvVars {
+		updated[k] = v
+	}
+
+	// Build desired ALLOWED_ORGS including the new org.
+	desired := map[string]string{
+		"ALLOWED_ORGS": org,
+	}
+	mergeAllowedOrgs(updated, desired)
+	updated["ALLOWED_ORGS"] = desired["ALLOWED_ORGS"]
+
+	// Build desired ROLE_APP_IDS including the new entries.
+	newRoleAppIDs, err := json.Marshal(roleAppIDs)
+	if err != nil {
+		return fmt.Errorf("marshaling role app IDs: %w", err)
+	}
+	desired["ROLE_APP_IDS"] = string(newRoleAppIDs)
+	mergeRoleAppIDs(updated, desired)
+	updated["ROLE_APP_IDS"] = desired["ROLE_APP_IDS"]
+
+	// Recompute ALLOWED_ROLES from the merged ROLE_APP_IDS.
+	updated["ALLOWED_ROLES"] = deriveAllowedRoles(updated["ROLE_APP_IDS"])
+
+	if updated["ALLOWED_WORKFLOW_FILES"] == "" {
+		updated["ALLOWED_WORKFLOW_FILES"] = "*"
+	}
+
+	opName, err := p.gcpAPI.UpdateFunctionEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
+	if err != nil {
+		return fmt.Errorf("updating mint env vars: %w", err)
+	}
+
+	if err := p.gcpAPI.WaitForOperation(ctx, opName); err != nil {
+		return fmt.Errorf("waiting for mint env vars update: %w", err)
+	}
+
+	return nil
 }
 
 // Provision creates the GCP infrastructure for the token mint.
@@ -485,9 +593,16 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	if existing != nil && existing.EnvVars != nil {
 		mergeAllowedOrgs(existing.EnvVars, envVars)
 		mergeRoleAppIDs(existing.EnvVars, envVars)
+		if v := existing.EnvVars["ALLOWED_WORKFLOW_FILES"]; v != "" {
+			envVars["ALLOWED_WORKFLOW_FILES"] = v
+		}
 	}
 
 	envVars["ALLOWED_ROLES"] = deriveAllowedRoles(envVars["ROLE_APP_IDS"])
+
+	if envVars["ALLOWED_WORKFLOW_FILES"] == "" {
+		envVars["ALLOWED_WORKFLOW_FILES"] = "*"
+	}
 
 	if p.cfg.DeployMode == DeploySkip {
 		if existing == nil || existing.URI == "" {

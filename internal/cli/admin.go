@@ -103,7 +103,7 @@ var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 // perOrgOnlyFlags are flags that only apply to per-org mode.
 var perOrgOnlyFlags = []string{
 	"skip-app-setup", "vendor-fullsend-binary", "enroll-all", "enroll-none",
-	"mint-provider", "mint-project", "mint-region", "mint-source-dir",
+	"mint-provider", "mint-source-dir",
 	"skip-mint-deploy", "force-mint-deploy", "public",
 }
 
@@ -168,8 +168,16 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 						return fmt.Errorf("--%s is only valid for per-org installation (fullsend admin install <org>)", name)
 					}
 				}
-				return runPerRepoInstall(cmd.Context(), arg, agents, mintURL, inferenceRegion,
-					inferenceProject, inferenceWIFProvider,
+				perRepoAgents := agents
+				if !cmd.Flags().Changed("agents") {
+					perRepoAgents = strings.Join(config.PerRepoDefaultRoles(), ",")
+				}
+				perRepoMintProject := mintProject
+				if perRepoMintProject == "" {
+					perRepoMintProject = inferenceProject
+				}
+				return runPerRepoInstall(cmd.Context(), arg, perRepoAgents, mintURL, inferenceRegion,
+					inferenceProject, inferenceWIFProvider, perRepoMintProject, mintRegion,
 					scaffoldCustomized, dryRun)
 			}
 
@@ -361,7 +369,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 }
 
 func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, inferenceRegion,
-	inferenceProject, inferenceWIFProvider string,
+	inferenceProject, inferenceWIFProvider, mintProject, mintRegion string,
 	scaffoldCustomized, dryRun bool) error {
 	if strings.Contains(repoFullName, "://") || strings.HasPrefix(repoFullName, "www.") {
 		return fmt.Errorf("expected owner/repo format, got a URL — use just the owner/repo portion (e.g. acme/widget)")
@@ -457,6 +465,12 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 	if dryRun {
 		printer.StepInfo("Dry run — no changes will be made")
 		printer.Blank()
+		printer.StepInfo("Would validate mint infrastructure:")
+		printer.StepInfo(fmt.Sprintf("  Mint URL: %s", mintURL))
+		printer.StepInfo(fmt.Sprintf("  Mint project: %s, region: %s", mintProject, mintRegion))
+		printer.StepInfo(fmt.Sprintf("  Check: function exists, URL matches, %s in ALLOWED_ORGS", owner))
+		printer.StepInfo(fmt.Sprintf("  Check: ROLE_APP_IDS has entries for %s/{%s}", owner, strings.Join(roles, ",")))
+		printer.Blank()
 		if needsWIFProvision {
 			printer.StepInfo("Would provision WIF infrastructure in GCP project " + inferenceProject)
 			printer.StepInfo(fmt.Sprintf("  Service account: fullsend-mint@%s.iam.gserviceaccount.com", inferenceProject))
@@ -483,6 +497,67 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 
 	if err := checkPerRepoScopes(ctx, client, printer); err != nil {
 		return err
+	}
+
+	// Validate that the mint function exists and register this org if needed.
+	printer.StepStart("Validating mint infrastructure")
+	mintProvisioner := gcf.NewProvisioner(gcf.Config{
+		ProjectID:  mintProject,
+		Region:     mintRegion,
+		GitHubOrgs: []string{owner},
+	}, gcf.NewLiveGCFClient())
+
+	existingIDs, err := mintProvisioner.GetExistingRoleAppIDs(ctx)
+	if err != nil {
+		printer.StepFail("Failed to read mint state")
+		return fmt.Errorf("reading existing role app IDs: %w", err)
+	}
+
+	roleAppIDs, err := resolveSharedRoleAppIDs(ctx, client, existingIDs, owner, roles)
+	if err != nil {
+		printer.StepFail("Failed to resolve shared app IDs")
+		return fmt.Errorf("resolving shared role app IDs: %w", err)
+	}
+
+	if err := mintProvisioner.EnsureOrgInMint(ctx, mintURL, owner, roleAppIDs); err != nil {
+		printer.StepFail("Mint validation failed")
+		return fmt.Errorf("validating mint: %w", err)
+	}
+	printer.StepDone("Mint validated")
+
+	// Copy PEM secrets for shared apps if needed.
+	sortedKeys := make([]string, 0, len(existingIDs))
+	for k := range existingIDs {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
+
+	for _, role := range roles {
+		exists, err := mintProvisioner.SecretExists(ctx, owner, role)
+		if err != nil {
+			return fmt.Errorf("checking PEM secret for %s/%s: %w", owner, role, err)
+		}
+		if exists {
+			continue
+		}
+		copied := false
+		for _, key := range sortedKeys {
+			parts := strings.SplitN(key, "/", 2)
+			if len(parts) != 2 || parts[1] != role || parts[0] == owner {
+				continue
+			}
+			printer.StepStart(fmt.Sprintf("Copying shared PEM for %s from %s", role, parts[0]))
+			if err := mintProvisioner.CopyAgentPEM(ctx, parts[0], owner, role); err != nil {
+				printer.StepFail(fmt.Sprintf("Failed to copy PEM for %s", role))
+				return fmt.Errorf("copying shared PEM for %s: %w", role, err)
+			}
+			printer.StepDone(fmt.Sprintf("Copied shared %s PEM", role))
+			copied = true
+			break
+		}
+		if !copied {
+			printer.StepWarn(fmt.Sprintf("No shared PEM source found for %s — manual PEM setup required", role))
+		}
 	}
 
 	if needsWIFProvision {
@@ -733,6 +808,56 @@ func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, or
 	printer.Blank()
 
 	return printAnalysis(ctx, stack, printer)
+}
+
+// resolveSharedRoleAppIDs discovers app IDs for the given org by matching
+// installed apps against existing ROLE_APP_IDS entries from other orgs.
+func resolveSharedRoleAppIDs(ctx context.Context, client forge.Client, existingIDs map[string]string, owner string, roles []string) (map[string]string, error) {
+	if len(existingIDs) == 0 {
+		return nil, fmt.Errorf("mint has no existing ROLE_APP_IDS — cannot determine app IDs for %s", owner)
+	}
+
+	installations, err := client.ListOrgInstallations(ctx, owner)
+	if err != nil {
+		return nil, fmt.Errorf("listing installations for %s: %w", owner, err)
+	}
+
+	installedAppIDs := make(map[string]bool, len(installations))
+	for _, inst := range installations {
+		installedAppIDs[strconv.Itoa(inst.AppID)] = true
+	}
+
+	result := make(map[string]string, len(roles))
+	for _, role := range roles {
+		// If the owner already has an entry, use it directly.
+		if appID, ok := existingIDs[owner+"/"+role]; ok && installedAppIDs[appID] {
+			result[owner+"/"+role] = appID
+			continue
+		}
+		// Otherwise, find a shared app from another org.
+		// Sort keys for deterministic selection when multiple orgs share the role.
+		sortedExisting := make([]string, 0, len(existingIDs))
+		for k := range existingIDs {
+			sortedExisting = append(sortedExisting, k)
+		}
+		sort.Strings(sortedExisting)
+		for _, key := range sortedExisting {
+			appID := existingIDs[key]
+			parts := strings.SplitN(key, "/", 2)
+			if len(parts) != 2 || parts[1] != role || parts[0] == owner {
+				continue
+			}
+			if installedAppIDs[appID] {
+				result[owner+"/"+role] = appID
+				break
+			}
+		}
+		if _, ok := result[owner+"/"+role]; !ok {
+			return nil, fmt.Errorf("no shared app for role %q is installed in %s — install the app first", role, owner)
+		}
+	}
+
+	return result, nil
 }
 
 // copySharedAppPEMs detects public GitHub Apps shared across orgs and copies

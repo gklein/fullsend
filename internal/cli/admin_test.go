@@ -156,10 +156,22 @@ func TestInstallCmd_PerOrgRejectsPerRepoFlags(t *testing.T) {
 
 func TestInstallCmd_PerRepoRejectsPerOrgFlags(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com", "--inference-project", "my-project", "--mint-project", "my-project"})
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com", "--inference-project", "my-project", "--mint-provider", "gcf"})
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--mint-project is only valid for per-org installation")
+	assert.Contains(t, err.Error(), "--mint-provider is only valid for per-org installation")
+}
+
+func TestInstallCmd_PerRepoAcceptsMintRegion(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--mint-url", "https://mint.example.com",
+		"--inference-region", "us-central1",
+		"--inference-project", "my-project",
+		"--mint-region", "europe-west1",
+		"--dry-run"})
+	err := cmd.Execute()
+	require.NoError(t, err)
 }
 
 func TestParseAgentRoles(t *testing.T) {
@@ -1105,4 +1117,79 @@ func TestInstallCmd_PerRepoRejectsURL(t *testing.T) {
 			assert.Contains(t, err.Error(), "expected owner/repo format, got a URL")
 		})
 	}
+}
+
+// --- resolveSharedRoleAppIDs tests ---
+
+func TestResolveSharedRoleAppIDs_MatchesInstalledApps(t *testing.T) {
+	fake := forge.NewFakeClient()
+	fake.Installations = []forge.Installation{
+		{AppID: 100, AppSlug: "acme-coder"},
+		{AppID: 200, AppSlug: "acme-reviewer"},
+	}
+
+	existingIDs := map[string]string{
+		"other-org/coder":    "100",
+		"other-org/reviewer": "200",
+	}
+
+	result, err := resolveSharedRoleAppIDs(context.Background(), fake, existingIDs, "new-org", []string{"coder", "reviewer"})
+	require.NoError(t, err)
+	assert.Equal(t, "100", result["new-org/coder"])
+	assert.Equal(t, "200", result["new-org/reviewer"])
+}
+
+func TestResolveSharedRoleAppIDs_ErrorWhenAppNotInstalled(t *testing.T) {
+	fake := forge.NewFakeClient()
+	fake.Installations = []forge.Installation{
+		{AppID: 100, AppSlug: "acme-coder"},
+	}
+
+	existingIDs := map[string]string{
+		"other-org/coder":    "100",
+		"other-org/reviewer": "999",
+	}
+
+	_, err := resolveSharedRoleAppIDs(context.Background(), fake, existingIDs, "new-org", []string{"coder", "reviewer"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no shared app for role \"reviewer\"")
+}
+
+func TestResolveSharedRoleAppIDs_ErrorWhenNoExistingIDs(t *testing.T) {
+	fake := forge.NewFakeClient()
+
+	_, err := resolveSharedRoleAppIDs(context.Background(), fake, nil, "new-org", []string{"coder"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no existing ROLE_APP_IDS")
+}
+
+func TestResolveSharedRoleAppIDs_SkipsSameOrg(t *testing.T) {
+	fake := forge.NewFakeClient()
+	fake.Installations = []forge.Installation{
+		{AppID: 100, AppSlug: "acme-coder"},
+	}
+
+	existingIDs := map[string]string{
+		"new-org/coder":   "100",
+		"other-org/coder": "100",
+	}
+
+	result, err := resolveSharedRoleAppIDs(context.Background(), fake, existingIDs, "new-org", []string{"coder"})
+	require.NoError(t, err)
+	assert.Equal(t, "100", result["new-org/coder"])
+}
+
+func TestResolveSharedRoleAppIDs_SameOrgUsesOwnEntry(t *testing.T) {
+	fake := forge.NewFakeClient()
+	fake.Installations = []forge.Installation{
+		{AppID: 100, AppSlug: "acme-coder"},
+	}
+
+	existingIDs := map[string]string{
+		"acme-corp/coder": "100",
+	}
+
+	result, err := resolveSharedRoleAppIDs(context.Background(), fake, existingIDs, "acme-corp", []string{"coder"})
+	require.NoError(t, err)
+	assert.Equal(t, "100", result["acme-corp/coder"])
 }

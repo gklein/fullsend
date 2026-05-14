@@ -69,6 +69,13 @@ func DefaultAgentRoles() []string {
 	return []string{"fullsend", "triage", "coder", "review", "fix"}
 }
 
+// PerRepoDefaultRoles returns agent roles for per-repo installation.
+// The "fullsend" dispatch role is excluded because per-repo mode uses
+// the target repo's shim workflow for dispatch instead of a separate app.
+func PerRepoDefaultRoles() []string {
+	return []string{"triage", "coder", "review", "fix"}
+}
+
 // NewOrgConfig creates a new OrgConfig with sensible defaults.
 func NewOrgConfig(allRepos, enabledRepos, roles []string, agents []AgentEntry, inferenceProvider string) *OrgConfig {
 	repos := make(map[string]RepoConfig, len(allRepos))
