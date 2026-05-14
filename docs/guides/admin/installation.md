@@ -32,55 +32,9 @@ The table below lists every scope the installer may request and why. You are nev
 | `admin:org` | install, uninstall, analyze | Manage organization-level Actions variables (the mint URL) |
 | `delete_repo` | uninstall | Delete the `.fullsend` config repository |
 
-The `--inference-region` flag defaults to `global` for the broadest model availability. For a list of all available regions, see the [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions). The `--inference-wif-provider` flag is optional — when omitted, the installer auto-provisions WIF infrastructure.
+The `--inference-region` flag defaults to `global` for the broadest model availability. For a list of all available regions, see the [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions).
 
-## 1. Set up inference authentication with GCP Agent Platform
-
-Fullsend uses [Workload Identity Federation (WIF)](https://cloud.google.com/iam/docs/workload-identity-federation) to authenticate GitHub Actions to [GCP Agent Platform](https://cloud.google.com/products/agent-platform) (formerly Vertex AI). WIF eliminates long-lived credentials — GitHub Actions exchange short-lived OIDC tokens for GCP access tokens. See the [google-github-actions/auth documentation](https://github.com/google-github-actions/auth#direct-workload-identity-federation) for background on direct WIF.
-
-**1a. Create a Workload Identity Pool and OIDC Provider**
-
-```bash
-export GCP_PROJECT="<gcp-project>"
-export ORG_NAME="<org-name>"
-
-gcloud iam workload-identity-pools create github-actions \
-  --location=global \
-  --display-name="GitHub Actions" \
-  --project="$GCP_PROJECT"
-
-gcloud iam workload-identity-pools providers create-oidc github \
-  --location=global \
-  --workload-identity-pool=github-actions \
-  --issuer-uri="https://token.actions.githubusercontent.com" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.repository_owner=assertion.repository_owner,attribute.repository=assertion.repository" \
-  --attribute-condition="assertion.repository == '$ORG_NAME/.fullsend'" \
-  --project="$GCP_PROJECT"
-```
-
-The `attribute-condition` restricts which GitHub Actions workflows can exchange OIDC tokens for GCP credentials. Scoping to `$ORG_NAME/.fullsend` ensures only the `.fullsend` config repo can authenticate — workflows in other repos cannot obtain Vertex AI credentials.
-
-**1b. Grant Vertex AI access to the WIF principal**
-
-```bash
-export PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
-export WIF_PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions/attribute.repository/$ORG_NAME/.fullsend"
-
-gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
-  --role="roles/aiplatform.user" \
-  --member="$WIF_PRINCIPAL" \
-  --condition=None
-```
-
-> **Note:** IAM policy bindings may take several minutes to propagate. If the agent workflow fails with a permission error immediately after setup, wait a few minutes and retry.
-
-**1c. Note the WIF provider resource name**
-
-```bash
-export WIF_PROVIDER="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-actions/providers/github"
-```
-
-## 2. Run the installer
+## 1. Run the installer
 
 The installer is interactive. It will open multiple browser windows to create and install a GitHub App for each agent role. Follow the prompts in each window to complete the app setup.
 
@@ -98,7 +52,7 @@ fullsend admin install "$ORG_NAME" \
   --mint-project "$GCP_PROJECT"
 ```
 
-When `--inference-wif-provider` is omitted, the installer auto-discovers or creates WIF infrastructure (pool `fullsend-pool`, provider `github-oidc`) in the inference project. Pass `--inference-wif-provider "$WIF_PROVIDER"` to use a pre-existing provider instead.
+The installer automatically provisions [Workload Identity Federation (WIF)](https://cloud.google.com/iam/docs/workload-identity-federation) infrastructure (pool `fullsend-pool`, provider `github-oidc`, IAM bindings) in the inference project. WIF eliminates long-lived credentials — GitHub Actions exchange short-lived OIDC tokens for GCP access tokens. To use a pre-existing WIF provider instead, pass `--inference-wif-provider "$WIF_PROVIDER"` (see [Advanced: pre-configure WIF](#advanced-pre-configure-wif) below).
 
 `--mint-project` specifies the GCP project where the OIDC token mint Cloud Function is deployed. It can be the same project as `--inference-project` or a separate project. The installer automatically provisions a Cloud Function, WIF pool (`fullsend-pool`), WIF provider (`github-oidc`), and Secret Manager secrets in the mint project. A service account (`fullsend-mint`) is also created as the Cloud Function's runtime identity to access Secret Manager — this is internal infrastructure and does not require any admin setup.
 
@@ -141,13 +95,13 @@ fullsend admin install "$ADDITIONAL_ORG" \
 
 > **Note:** Multi-org with `--public` requires all orgs to share the same GitHub Apps. Private apps (the default) are single-org only.
 
-## 3. Merge enrollment PRs
+## 2. Merge enrollment PRs
 
 If you chose to enroll repositories during install, the installer dispatches a workflow that creates an enrollment PR in each enrolled repo. These PRs add a shim workflow (`.github/workflows/fullsend.yaml`) that wires events to the agent pipeline.
 
 Review and merge each enrollment PR to complete enrollment.
 
-## 4. Managing repository enrollment
+## 3. Managing repository enrollment
 
 After installation, you can enroll or unenroll repositories at any time using the `repos` subcommands.
 
@@ -196,9 +150,60 @@ The disable command:
 - Warns (but does not reject) repository names not found in the config, allowing safe cleanup of deleted repos
 - Does not delete existing shim workflows (merge the unenrollment PR to remove them)
 
-## 5. Test the pipeline
+## 4. Test the pipeline
 
 Once a repo is enrolled (enrollment PR merged):
 
 1. Create an issue in the enrolled repo
 2. The triage agent picks it up automatically — check the Actions tab in both the target repo and `.fullsend` for workflow run logs
+
+---
+
+## Advanced: pre-configure WIF
+
+The installer auto-provisions WIF infrastructure, but you can create it manually if you need custom pool names, attribute conditions, or want to share a provider across tools.
+
+**Create a Workload Identity Pool and OIDC Provider:**
+
+```bash
+export GCP_PROJECT="<gcp-project>"
+export ORG_NAME="<org-name>"
+
+gcloud iam workload-identity-pools create fullsend-pool \
+  --location=global \
+  --display-name="Fullsend" \
+  --project="$GCP_PROJECT"
+
+gcloud iam workload-identity-pools providers create-oidc github-oidc \
+  --location=global \
+  --workload-identity-pool=fullsend-pool \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository_owner=assertion.repository_owner,attribute.repository=assertion.repository" \
+  --attribute-condition="assertion.repository == '$ORG_NAME/.fullsend'" \
+  --project="$GCP_PROJECT"
+```
+
+**Grant Vertex AI access to the WIF principal:**
+
+```bash
+export PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
+export WIF_PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/fullsend-pool/attribute.repository/$ORG_NAME/.fullsend"
+
+gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+  --role="roles/aiplatform.user" \
+  --member="$WIF_PRINCIPAL" \
+  --condition=None
+```
+
+**Pass the provider to the installer:**
+
+```bash
+export WIF_PROVIDER="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc"
+
+fullsend admin install "$ORG_NAME" \
+  --inference-project "$GCP_PROJECT" \
+  --inference-wif-provider "$WIF_PROVIDER" \
+  --mint-project "$GCP_PROJECT"
+```
+
+> **Note:** IAM policy bindings may take several minutes to propagate. If agent workflows fail with a permission error immediately after setup, wait a few minutes and retry.
