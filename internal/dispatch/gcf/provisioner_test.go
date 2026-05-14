@@ -1255,7 +1255,7 @@ func TestProvisioner_Provision_MultiOrg_WIFCondition(t *testing.T) {
 	_, err := p.Provision(context.Background())
 	require.NoError(t, err)
 
-	assert.Equal(t, "assertion.repository in ['acme/.fullsend', 'widgetco/.fullsend']",
+	assert.Equal(t, "assertion.repository_owner in ['acme', 'widgetco']",
 		fake.lastWIFProviderConfig.AttributeCondition)
 
 	expectedIAMAudience := "https://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc"
@@ -1278,7 +1278,7 @@ func TestProvisioner_Provision_SingleOrg_WIFCondition(t *testing.T) {
 	_, err := p.Provision(context.Background())
 	require.NoError(t, err)
 
-	assert.Equal(t, "assertion.repository == 'acme/.fullsend'",
+	assert.Equal(t, "assertion.repository_owner == 'acme'",
 		fake.lastWIFProviderConfig.AttributeCondition)
 
 	expectedIAMAudience := "https://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc"
@@ -1368,7 +1368,7 @@ func TestProvisioner_Provision_MultiOrg_MergeDoesNotOverwriteExistingPEMs(t *tes
 	}
 
 	// WIF condition should include both orgs.
-	assert.Equal(t, "assertion.repository in ['existing-org/.fullsend', 'new-org/.fullsend']",
+	assert.Equal(t, "assertion.repository_owner in ['existing-org', 'new-org']",
 		fake.lastWIFProviderConfig.AttributeCondition)
 
 	// ROLE_APP_IDS should preserve existing-org's entries and add new-org's.
@@ -1395,7 +1395,7 @@ func TestProvisionWIF_HappyPath(t *testing.T) {
 	assert.Contains(t, fake.calls, "CreateWIFProvider")
 	assert.Contains(t, fake.calls, "SetProjectIAMBinding")
 
-	assert.Equal(t, "assertion.repository == 'acme/.fullsend'", fake.lastWIFProviderConfig.AttributeCondition)
+	assert.Equal(t, "assertion.repository_owner == 'acme'", fake.lastWIFProviderConfig.AttributeCondition)
 }
 
 func TestProvisionWIF_MissingProjectID(t *testing.T) {
@@ -1442,7 +1442,7 @@ func TestProvisionWIF_MultipleOrgs(t *testing.T) {
 
 	_, err := p.ProvisionWIF(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, "assertion.repository in ['acme/.fullsend', 'beta/.fullsend']", fake.lastWIFProviderConfig.AttributeCondition)
+	assert.Equal(t, "assertion.repository_owner in ['acme', 'beta']", fake.lastWIFProviderConfig.AttributeCondition)
 
 	require.Len(t, fake.projectIAMBindings, 2)
 	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/.fullsend")
@@ -1546,7 +1546,7 @@ func TestProvisionWIF_NormalizesOrgCase(t *testing.T) {
 
 	_, err := p.ProvisionWIF(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, "assertion.repository == 'acme/.fullsend'", fake.lastWIFProviderConfig.AttributeCondition)
+	assert.Equal(t, "assertion.repository_owner == 'acme'", fake.lastWIFProviderConfig.AttributeCondition)
 }
 
 func TestProvisionWIF_RepoScoped(t *testing.T) {
@@ -1599,9 +1599,21 @@ func TestProvisionWIF_OrgScoped_Unchanged(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "github-oidc", fake.lastWIFProviderID)
-	assert.Equal(t, "assertion.repository == 'acme/.fullsend'", fake.lastWIFProviderConfig.AttributeCondition)
+	assert.Equal(t, "assertion.repository_owner == 'acme'", fake.lastWIFProviderConfig.AttributeCondition)
 	require.Len(t, fake.projectIAMBindings, 1)
 	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/.fullsend")
+}
+
+func TestBuildAttributeCondition(t *testing.T) {
+	t.Run("single org scopes to repository_owner", func(t *testing.T) {
+		got := buildAttributeCondition([]string{"myorg"})
+		assert.Equal(t, "assertion.repository_owner == 'myorg'", got)
+	})
+
+	t.Run("multiple orgs uses in with repository_owner", func(t *testing.T) {
+		got := buildAttributeCondition([]string{"org1", "org2"})
+		assert.Equal(t, "assertion.repository_owner in ['org1', 'org2']", got)
+	})
 }
 
 func TestBuildRepoProviderID(t *testing.T) {

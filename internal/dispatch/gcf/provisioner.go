@@ -769,24 +769,26 @@ func BuildRepoProviderID(owner, repo string) string {
 	return raw
 }
 
-// buildAttributeCondition constructs a WIF CEL condition scoped to each org's
-// .fullsend repo (not org-wide) to limit which workflows can authenticate.
+// buildAttributeCondition constructs a WIF CEL condition scoped to the
+// organization level via repository_owner. This allows any repo in the
+// org to authenticate — the mint's prevalidateOIDCToken already validates
+// org membership, allowed workflow files, and workflow ref prefixes.
 func buildAttributeCondition(orgs []string) string {
 	if len(orgs) == 1 {
-		return fmt.Sprintf("assertion.repository == '%s/.fullsend'", orgs[0])
+		return fmt.Sprintf("assertion.repository_owner == '%s'", orgs[0])
 	}
 	quoted := make([]string, len(orgs))
 	for i, org := range orgs {
-		quoted[i] = fmt.Sprintf("'%s/.fullsend'", org)
+		quoted[i] = fmt.Sprintf("'%s'", org)
 	}
-	return fmt.Sprintf("assertion.repository in [%s]", strings.Join(quoted, ", "))
+	return fmt.Sprintf("assertion.repository_owner in [%s]", strings.Join(quoted, ", "))
 }
 
 const fullsendRepoSuffix = "/.fullsend"
 
 // parseConditionOrgs extracts GitHub org names from a WIF attribute condition.
-// Supports both repo-scoped ("assertion.repository == 'org/.fullsend'") and
-// legacy org-scoped ("assertion.repository_owner == 'org'") formats.
+// Supports both the current org-scoped ("assertion.repository_owner == 'org'")
+// and legacy repo-scoped ("assertion.repository == 'org/.fullsend'") formats.
 func parseConditionOrgs(condition string) []string {
 	var orgs []string
 	for _, part := range strings.Split(condition, "'") {
