@@ -197,7 +197,7 @@ jobs:
           echo "base_ref=${BASE_REF}" >> "${GITHUB_OUTPUT}"
           echo "PR #${PR_NUM}: ${HEAD_REF} → ${BASE_REF}"
 
-          # Extract human instruction (from /fix comment or workflow_dispatch).
+          # Extract human instruction (from /fs-fix comment or workflow_dispatch).
           # Default to "none" so the env var is always non-empty (the fullsend
           # binary rejects empty runner_env values). The agent checks
           # TRIGGER_SOURCE before reading this value.
@@ -205,8 +205,8 @@ jobs:
           if [[ ! "${TRIGGER_SOURCE}" =~ \[bot\]$ ]]; then
             COMMENT_BODY="$(echo "${EVENT_PAYLOAD}" | jq -r '.comment.body // empty')"
             if [[ -n "${COMMENT_BODY}" ]]; then
-              # Strip the /fix prefix to get the instruction.
-              INSTRUCTION="${COMMENT_BODY#/fix}"
+              # Strip the /fs-fix prefix to get the instruction.
+              INSTRUCTION="${COMMENT_BODY#/fs-fix}"
               INSTRUCTION="${INSTRUCTION#"${INSTRUCTION%%[![:space:]]*}"}"
             fi
             if [[ -z "${INSTRUCTION}" && -n "${INPUT_INSTRUCTION}" ]]; then
@@ -216,7 +216,7 @@ jobs:
               INSTRUCTION="none"
             fi
           fi
-          # Use a random heredoc delimiter so a /fix comment containing
+          # Use a random heredoc delimiter so a /fs-fix comment containing
           # the literal delimiter string cannot inject GITHUB_OUTPUT values.
           DELIM="INSTRUCTION_$(openssl rand -hex 8)"
           {
