@@ -60,7 +60,7 @@ func AgentAppConfig(org, role string) AppConfig {
 
 	base.Name = fmt.Sprintf("fullsend-%s", role)
 
-	switch role {
+	switch role{
 	case "fullsend":
 		base.Description = fmt.Sprintf("Fullsend orchestrator for %s", org)
 		base.Permissions = AppPermissions{
@@ -113,15 +113,6 @@ func AgentAppConfig(org, role string) AppConfig {
 		}
 		base.Events = []string{"issues", "issue_comment", "pull_request"}
 
-	case "retro":
-		base.Description = fmt.Sprintf("Fullsend retro agent for %s", org)
-		base.Permissions = AppPermissions{
-			Contents:     "read",
-			PullRequests: "read",
-			Issues:       "write",
-		}
-		base.Events = []string{"issues", "pull_request"}
-
 	case "prioritize":
 		base.Description = fmt.Sprintf("Fullsend prioritize agent for %s", org)
 		base.Permissions = AppPermissions{
@@ -133,6 +124,17 @@ func AgentAppConfig(org, role string) AppConfig {
 			Issues:               "write",
 		}
 		// No webhook events — this agent runs on a cron schedule, not events.
+		base.Events = []string{}
+
+	case "retro":
+		base.Description = fmt.Sprintf("Fullsend retro agent for %s", org)
+		base.Permissions = AppPermissions{
+			Actions:      "read",
+			Contents:     "read",
+			PullRequests: "read",
+			Issues:       "write",
+		}
+		// No webhook events — triggered via workflow_dispatch from other agents.
 		base.Events = []string{}
 
 	default:

@@ -87,6 +87,20 @@ func TestAgentAppConfig_Prioritize(t *testing.T) {
 	assert.Empty(t, cfg.Events)
 }
 
+func TestAgentAppConfig_Retro(t *testing.T) {
+	cfg := AgentAppConfig("myorg", "retro")
+
+	assert.Equal(t, "fullsend-retro", cfg.Name)
+	assert.Equal(t, "read", cfg.Permissions.Actions)
+	assert.Equal(t, "read", cfg.Permissions.Contents)
+	assert.Equal(t, "read", cfg.Permissions.PullRequests)
+	assert.Equal(t, "write", cfg.Permissions.Issues)
+	assert.Empty(t, cfg.Permissions.OrganizationProjects)
+
+	// Retro is triggered via workflow_dispatch, no webhook events.
+	assert.Empty(t, cfg.Events)
+}
+
 func TestAgentAppConfig_UnknownRole(t *testing.T) {
 	cfg := AgentAppConfig("myorg", "custom-bot")
 
