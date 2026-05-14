@@ -294,13 +294,55 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 
 			var repos []string
 			if enrollAll {
-				// Filter out .fullsend from enrollment.
+				// Filter out .fullsend and per-repo installed repos from enrollment.
+				var reader *bufio.Reader
+				var skippedPerRepo int
+				var skippedErrors int
+				var eligibleCount int
 				for _, r := range allRepos {
-					if r.Name != forge.ConfigRepoName {
-						repos = append(repos, r.Name)
+					if r.Name == forge.ConfigRepoName {
+						continue
 					}
+					eligibleCount++
+					guardVal, guardExists, guardErr := client.GetRepoVariable(ctx, org, r.Name, forge.PerRepoGuardVar)
+					if guardErr != nil {
+						printer.StepWarn(fmt.Sprintf("Could not check per-repo guard for %s: %v — skipping to be safe", r.Name, guardErr))
+						skippedPerRepo++
+						skippedErrors++
+						continue
+					}
+					if guardExists && guardVal == "true" {
+						printer.StepWarn(fmt.Sprintf("Skipping %s — per-repo installation active", r.Name))
+						skippedPerRepo++
+						continue
+					}
+					if guardExists {
+						if reader == nil {
+							reader = bufio.NewReader(os.Stdin)
+						}
+						printer.StepInfo(fmt.Sprintf("%s has per-repo install (guard=%s). Enroll with per-org? [y/n]: ", r.Name, guardVal))
+						choice, _ := reader.ReadString('\n')
+						if strings.TrimSpace(strings.ToLower(choice)) != "y" {
+							printer.StepInfo(fmt.Sprintf("Skipping %s", r.Name))
+							skippedPerRepo++
+							continue
+						}
+					}
+					repos = append(repos, r.Name)
 				}
-				printer.StepInfo(fmt.Sprintf("Enrolling all %d repositories (excluding %s)", len(repos), forge.ConfigRepoName))
+				// If every eligible repo was skipped due to guard-check errors,
+				// the token likely lacks the required scope — fail loudly.
+				if eligibleCount > 0 && skippedErrors == eligibleCount {
+					return fmt.Errorf("all %d repos were skipped due to guard-check errors — verify your token has actions:read scope", eligibleCount)
+				}
+				msg := fmt.Sprintf("Enrolling %d repositories (excluding %s)", len(repos), forge.ConfigRepoName)
+				if skippedPerRepo-skippedErrors > 0 {
+					msg += fmt.Sprintf(", %d per-repo installed", skippedPerRepo-skippedErrors)
+				}
+				if skippedErrors > 0 {
+					msg += fmt.Sprintf(", %d guard-check errors", skippedErrors)
+				}
+				printer.StepInfo(msg)
 			} else {
 				printer.StepInfo("No repositories will be enrolled during install")
 				printer.StepInfo("To enroll repositories later, use:")
@@ -457,9 +499,25 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 
 	needsWIFProvision := inferenceWIFProvider == ""
 
+	guardVal, guardExists, guardErr := client.GetRepoVariable(ctx, owner, repo, forge.PerRepoGuardVar)
+	if guardErr != nil {
+		printer.StepWarn(fmt.Sprintf("Could not check existing guard variable: %v", guardErr))
+	}
+	switch {
+	case guardExists && guardVal == "true":
+		printer.StepInfo(fmt.Sprintf("%s/%s is per-repo mode, updating installation", owner, repo))
+	case guardExists && guardVal == "false":
+		printer.StepWarn(fmt.Sprintf("%s/%s has per-repo guard set to %q — this install will re-enable it", owner, repo, guardVal))
+	case guardExists:
+		printer.StepWarn(fmt.Sprintf("%s/%s has per-repo guard set to unexpected value %q — overwriting with \"true\"", owner, repo, guardVal))
+	default:
+		printer.StepInfo(fmt.Sprintf("Setting up new per-repo installation for %s/%s", owner, repo))
+	}
+
 	repoVars := map[string]string{
 		"FULLSEND_MINT_URL":   mintURL,
 		"FULLSEND_GCP_REGION": inferenceRegion,
+		forge.PerRepoGuardVar: "true",
 	}
 
 	if dryRun {

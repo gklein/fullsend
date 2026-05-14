@@ -12,6 +12,10 @@ import (
 // configuration repository. See ADR-0003.
 const ConfigRepoName = ".fullsend"
 
+// PerRepoGuardVar is the repo variable set by per-repo install to prevent
+// per-org enrollment from overriding a per-repo installation.
+const PerRepoGuardVar = "FULLSEND_PER_REPO_INSTALL"
+
 // ErrNotFound indicates a requested resource was not found on the forge.
 var ErrNotFound = errors.New("not found")
 
@@ -166,6 +170,7 @@ type Client interface {
 	RepoSecretExists(ctx context.Context, owner, repo, name string) (bool, error)
 	CreateOrUpdateRepoVariable(ctx context.Context, owner, repo, name, value string) error
 	RepoVariableExists(ctx context.Context, owner, repo, name string) (bool, error)
+	GetRepoVariable(ctx context.Context, owner, repo, name string) (string, bool, error)
 
 	// Org-level secrets (for cross-repo dispatch tokens)
 	CreateOrgSecret(ctx context.Context, org, name, value string, selectedRepoIDs []int64) error
