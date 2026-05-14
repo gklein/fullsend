@@ -208,7 +208,9 @@ func (p *Provisioner) CopyAgentPEM(ctx context.Context, srcOrg, dstOrg, role str
 
 	dstID := secretID(dstOrg, role)
 	if err := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, dstID); err == nil {
-		return nil
+		// Secret exists — still ensure the mint SA has access,
+		// since older installs may have granted a different SA.
+		return p.ensureSecretIAM(ctx, dstID)
 	}
 
 	srcID := secretID(srcOrg, role)
@@ -218,6 +220,16 @@ func (p *Provisioner) CopyAgentPEM(ctx context.Context, srcOrg, dstOrg, role str
 	}
 
 	return p.StoreAgentPEM(ctx, dstOrg, role, pemData)
+}
+
+func (p *Provisioner) ensureSecretIAM(ctx context.Context, secretName string) error {
+	saEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, p.cfg.ProjectID)
+	secretResource := fmt.Sprintf("projects/%s/secrets/%s", p.cfg.ProjectID, secretName)
+	if err := p.gcpAPI.SetSecretIAMBinding(ctx, secretResource,
+		"serviceAccount:"+saEmail, "roles/secretmanager.secretAccessor"); err != nil {
+		return fmt.Errorf("granting secret access for %s: %w", secretName, err)
+	}
+	return nil
 }
 
 // GetExistingRoleAppIDs reads ROLE_APP_IDS from the deployed mint function.
@@ -573,9 +585,16 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	if existing != nil && existing.EnvVars != nil {
 		mergeAllowedOrgs(existing.EnvVars, envVars)
 		mergeRoleAppIDs(existing.EnvVars, envVars)
+		if v := existing.EnvVars["ALLOWED_WORKFLOW_FILES"]; v != "" {
+			envVars["ALLOWED_WORKFLOW_FILES"] = v
+		}
 	}
 
 	envVars["ALLOWED_ROLES"] = deriveAllowedRoles(envVars["ROLE_APP_IDS"])
+
+	if envVars["ALLOWED_WORKFLOW_FILES"] == "" {
+		envVars["ALLOWED_WORKFLOW_FILES"] = "*"
+	}
 
 	if p.cfg.DeployMode == DeploySkip {
 		if existing == nil || existing.URI == "" {
