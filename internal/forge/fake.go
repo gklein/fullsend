@@ -16,6 +16,7 @@ func NewFakeClient() *FakeClient {
 		WorkflowRuns:   make(map[string]*WorkflowRun),
 		Secrets:        make(map[string]bool),
 		VariablesExist: make(map[string]bool),
+		VariableValues: make(map[string]string),
 		Errors:         make(map[string]error),
 	}
 }

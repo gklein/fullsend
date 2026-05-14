@@ -100,6 +100,10 @@ var githubRepoPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0
 // rolePattern validates agent role names (lowercase alphanumeric, hyphens, underscores).
 var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
+// perRepoGuardVar is the repo variable set by per-repo install to prevent
+// per-org enrollment from overriding a per-repo installation.
+const perRepoGuardVar = "FULLSEND_PER_REPO_INSTALL"
+
 // perOrgOnlyFlags are flags that only apply to per-org mode.
 var perOrgOnlyFlags = []string{
 	"skip-app-setup", "vendor-fullsend-binary", "enroll-all", "enroll-none",
@@ -301,7 +305,12 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 					if r.Name == forge.ConfigRepoName {
 						continue
 					}
-					guardVal, guardExists, _ := client.GetRepoVariable(ctx, org, r.Name, "FULLSEND_PER_REPO_INSTALL")
+					guardVal, guardExists, guardErr := client.GetRepoVariable(ctx, org, r.Name, perRepoGuardVar)
+					if guardErr != nil {
+						printer.StepWarn(fmt.Sprintf("Could not check per-repo guard for %s: %v — skipping to be safe", r.Name, guardErr))
+						skippedPerRepo++
+						continue
+					}
 					if guardExists && guardVal == "true" {
 						printer.StepWarn(fmt.Sprintf("Skipping %s — per-repo installation active", r.Name))
 						skippedPerRepo++
@@ -480,12 +489,15 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 	needsWIFProvision := inferenceWIFProvider == ""
 
 	repoVars := map[string]string{
-		"FULLSEND_MINT_URL":         mintURL,
-		"FULLSEND_GCP_REGION":       inferenceRegion,
-		"FULLSEND_PER_REPO_INSTALL": "true",
+		"FULLSEND_MINT_URL":   mintURL,
+		"FULLSEND_GCP_REGION": inferenceRegion,
+		perRepoGuardVar:       "true",
 	}
 
-	guardVal, guardExists, _ := client.GetRepoVariable(ctx, owner, repo, "FULLSEND_PER_REPO_INSTALL")
+	guardVal, guardExists, guardErr := client.GetRepoVariable(ctx, owner, repo, perRepoGuardVar)
+	if guardErr != nil {
+		printer.StepWarn(fmt.Sprintf("Could not check existing guard variable: %v", guardErr))
+	}
 	switch {
 	case guardExists && guardVal == "true":
 		printer.StepInfo(fmt.Sprintf("%s/%s is per-repo mode, updating installation", owner, repo))

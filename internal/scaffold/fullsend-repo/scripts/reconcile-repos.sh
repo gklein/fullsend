@@ -253,6 +253,9 @@ if [ -n "$ENABLED_REPOS" ]; then
       continue
     fi
 
+    # Clean up any stale removal PR from a previous disable cycle (even for per-repo repos).
+    close_pr_on_branch "$REPO" "$UNENROLL_BRANCH" "Repo re-enabled in config.yaml"
+
     # Skip repos with per-repo installation — they manage their own WIF and shim.
     # Skips both new enrollment and shim updates (per-repo uses a different shim template).
     PER_REPO_VAR=$(gh api "repos/$ORG/$REPO/actions/variables/FULLSEND_PER_REPO_INSTALL" --jq '.value' 2>/dev/null || true)
@@ -261,9 +264,6 @@ if [ -n "$ENABLED_REPOS" ]; then
       SKIPPED=$((SKIPPED + 1))
       continue
     fi
-
-    # Clean up any stale removal PR from a previous disable cycle.
-    close_pr_on_branch "$REPO" "$UNENROLL_BRANCH" "Repo re-enabled in config.yaml"
 
     # Check if already enrolled (shim exists on default branch).
     # Fetch content and SHA in one call to avoid race between reads.
@@ -376,6 +376,14 @@ if [ -n "$DISABLED_REPOS" ]; then
 
     # Close any stale enrollment PR.
     close_pr_on_branch "$REPO" "$ENROLL_BRANCH" "Repo disabled in config.yaml"
+
+    # Skip repos with per-repo installation — unenrollment would break their shim.
+    PER_REPO_VAR=$(gh api "repos/$ORG/$REPO/actions/variables/FULLSEND_PER_REPO_INSTALL" --jq '.value' 2>/dev/null || true)
+    if [[ "$PER_REPO_VAR" == "true" ]]; then
+      echo "::warning::Skipping unenrollment of $REPO — per-repo installation active (FULLSEND_PER_REPO_INSTALL=true)"
+      SKIPPED=$((SKIPPED + 1))
+      continue
+    fi
 
     # Check if a removal PR already exists.
     EXISTING_PR=$(gh pr list --repo "$ORG/$REPO" --head "$UNENROLL_BRANCH" --json url --jq '.[0].url // empty' 2>/dev/null || true)

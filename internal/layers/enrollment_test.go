@@ -296,8 +296,8 @@ func TestEnrollmentLayer_Analyze_MixedEnabledAndDisabled(t *testing.T) {
 
 func TestEnrollmentLayer_Analyze_PerRepoGuardSkips(t *testing.T) {
 	client := &forge.FakeClient{
-		VariablesExist: map[string]bool{
-			"test-org/repo-a/FULLSEND_PER_REPO_INSTALL": true,
+		VariableValues: map[string]string{
+			"test-org/repo-a/FULLSEND_PER_REPO_INSTALL": "true",
 		},
 	}
 	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a"}, nil)
@@ -311,13 +311,29 @@ func TestEnrollmentLayer_Analyze_PerRepoGuardSkips(t *testing.T) {
 	assert.Empty(t, report.WouldInstall)
 }
 
+func TestEnrollmentLayer_Analyze_PerRepoGuardFalse(t *testing.T) {
+	client := &forge.FakeClient{
+		VariableValues: map[string]string{
+			"test-org/repo-a/FULLSEND_PER_REPO_INSTALL": "false",
+		},
+	}
+	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a"}, nil)
+
+	report, err := layer.Analyze(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, StatusNotInstalled, report.Status)
+	require.Len(t, report.WouldInstall, 1)
+	assert.Contains(t, report.WouldInstall[0], "repo-a")
+}
+
 func TestEnrollmentLayer_Analyze_MixedPerRepoAndOrg(t *testing.T) {
 	client := &forge.FakeClient{
 		FileContents: map[string][]byte{
 			"test-org/repo-b/.github/workflows/fullsend.yaml": []byte("shim"),
 		},
-		VariablesExist: map[string]bool{
-			"test-org/repo-a/FULLSEND_PER_REPO_INSTALL": true,
+		VariableValues: map[string]string{
+			"test-org/repo-a/FULLSEND_PER_REPO_INSTALL": "true",
 		},
 	}
 	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a", "repo-b", "repo-c"}, nil)
@@ -334,10 +350,30 @@ func TestEnrollmentLayer_Analyze_MixedPerRepoAndOrg(t *testing.T) {
 	assert.Contains(t, report.WouldInstall[0], "repo-c")
 }
 
+func TestEnrollmentLayer_Analyze_DisabledWithPerRepoGuard(t *testing.T) {
+	client := &forge.FakeClient{
+		FileContents: map[string][]byte{
+			"test-org/repo-x/.github/workflows/fullsend.yaml": []byte("shim"),
+		},
+		VariableValues: map[string]string{
+			"test-org/repo-x/FULLSEND_PER_REPO_INSTALL": "true",
+		},
+	}
+	layer, _ := newEnrollmentLayer(t, client, nil, []string{"repo-x"})
+
+	report, err := layer.Analyze(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, StatusInstalled, report.Status)
+	require.Len(t, report.Details, 1)
+	assert.Contains(t, report.Details[0], "per-repo install, skipped")
+	assert.Empty(t, report.WouldFix)
+}
+
 func TestEnrollmentLayer_Analyze_PerRepoGuardCheckError(t *testing.T) {
 	client := &forge.FakeClient{
 		Errors: map[string]error{
-			"RepoVariableExists": fmt.Errorf("permission denied"),
+			"GetRepoVariable": fmt.Errorf("permission denied"),
 		},
 	}
 	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a"}, nil)

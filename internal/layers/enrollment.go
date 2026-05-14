@@ -193,11 +193,11 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 
 	var enrolled, notEnrolled, perRepo []string
 	for _, repo := range l.enabledRepos {
-		hasGuard, err := l.client.RepoVariableExists(ctx, l.org, repo, perRepoGuardVar)
+		guardVal, guardExists, err := l.client.GetRepoVariable(ctx, l.org, repo, perRepoGuardVar)
 		if err != nil {
 			return nil, fmt.Errorf("checking per-repo guard for %s: %w", repo, err)
 		}
-		if hasGuard {
+		if guardExists && guardVal == "true" {
 			perRepo = append(perRepo, repo)
 			continue
 		}
@@ -212,10 +212,19 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 		}
 	}
 
-	// Check disabled repos for stale shims.
+	// Check disabled repos for stale shims (skip per-repo managed repos).
 	var staleShim []string
 	for _, repo := range l.disabledRepos {
-		_, err := l.client.GetFileContent(ctx, l.org, repo, shimWorkflowPath)
+		guardVal, guardExists, err := l.client.GetRepoVariable(ctx, l.org, repo, perRepoGuardVar)
+		if err != nil {
+			return nil, fmt.Errorf("checking per-repo guard for %s: %w", repo, err)
+		}
+		if guardExists && guardVal == "true" {
+			perRepo = append(perRepo, repo)
+			continue
+		}
+
+		_, err = l.client.GetFileContent(ctx, l.org, repo, shimWorkflowPath)
 		if err == nil {
 			staleShim = append(staleShim, repo)
 		} else if forge.IsNotFound(err) {
