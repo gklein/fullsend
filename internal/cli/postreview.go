@@ -214,9 +214,8 @@ func checkStaleHead(ctx context.Context, client forge.Client, owner, repo string
 // postStaleHeadNotice posts a failure comment when the PR HEAD has moved
 // since the review was generated.
 func postStaleHeadNotice(ctx context.Context, client forge.Client, owner, repo string, pr int, reviewedSHA, currentSHA string, cfg sticky.Config, printer *ui.Printer) error {
-	body := fmt.Sprintf(`## Review: automated review
+	body := fmt.Sprintf(`## Review
 
-**Outcome:** failure
 **Reason:** stale-head
 
 The review agent reviewed commit `+"`%s`"+` but the PR HEAD is now `+"`%s`"+`. This review was discarded to avoid approving unreviewed code.`, reviewedSHA, currentSHA)
@@ -242,9 +241,8 @@ func postFailureNotice(ctx context.Context, client forge.Client, owner, repo str
 	if parsed.Body != "" {
 		body = parsed.Body
 	} else {
-		body = fmt.Sprintf(`## Review: automated review
+		body = fmt.Sprintf(`## Review
 
-**Outcome:** failure
 **Reason:** %s
 
 This PR was NOT reviewed. Do not count this as an approval.`, reason)
