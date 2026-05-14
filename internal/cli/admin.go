@@ -133,9 +133,9 @@ func newInstallCmd() *cobra.Command {
 	var vendorBinary bool
 	var enrollAllFlag bool
 	var enrollNoneFlag bool
-	var gcpProject string
-	var gcpRegion string
-	var gcpWIFProvider string
+	var inferenceProject string
+	var inferenceRegion string
+	var inferenceWIFProvider string
 	var mintProvider string
 	var mintProject string
 	var mintRegion string
@@ -168,8 +168,8 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 						return fmt.Errorf("--%s is only valid for per-org installation (fullsend admin install <org>)", name)
 					}
 				}
-				return runPerRepoInstall(cmd.Context(), arg, agents, mintURL, gcpRegion,
-					gcpProject, gcpWIFProvider,
+				return runPerRepoInstall(cmd.Context(), arg, agents, mintURL, inferenceRegion,
+					inferenceProject, inferenceWIFProvider,
 					scaffoldCustomized, dryRun)
 			}
 
@@ -217,30 +217,45 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 				return fmt.Errorf("--skip-mint-deploy and --force-mint-deploy are mutually exclusive")
 			}
 
-			// Validate GCP flag dependencies.
-			if gcpProject == "" && (gcpRegion != "" || gcpWIFProvider != "") {
-				return fmt.Errorf("--gcp-wif-provider and --gcp-region require --gcp-project to be set")
-			}
-			if gcpProject != "" && gcpRegion == "" {
-				return fmt.Errorf("--gcp-region is required when --gcp-project is set")
-			}
-			if gcpProject != "" && gcpWIFProvider == "" {
-				return fmt.Errorf("--gcp-wif-provider is required when --gcp-project is set")
+			// Validate inference flag dependencies.
+			if inferenceProject == "" && (cmd.Flags().Changed("inference-region") || inferenceWIFProvider != "") {
+				return fmt.Errorf("--inference-wif-provider and --inference-region require --inference-project to be set")
 			}
 
-			// Build inference provider from GCP flags.
+			// Auto-provision WIF when not explicitly given (idempotent: safe to re-run).
+			if inferenceProject != "" && inferenceWIFProvider == "" {
+				if dryRun {
+					printer.StepInfo("Would auto-provision WIF provider in project " + inferenceProject)
+				} else {
+					printer.StepStart("Provisioning WIF infrastructure for inference")
+					gcpClient := gcf.NewLiveGCFClient()
+					provisioner := gcf.NewProvisioner(gcf.Config{
+						ProjectID:  inferenceProject,
+						GitHubOrgs: []string{org},
+					}, gcpClient)
+					inferenceWIFProvider, err = provisioner.ProvisionWIF(ctx)
+					if err != nil {
+						printer.StepFail("WIF provisioning failed")
+						return fmt.Errorf("provisioning WIF for inference: %w", err)
+					}
+					printer.StepDone("WIF infrastructure ready")
+					printer.StepInfo("IAM policy changes may take up to 7 minutes to propagate")
+				}
+			}
+
+			// Build inference provider from flags.
 			var inferenceProvider inference.Provider
 			var inferenceProviderName string
-			if gcpProject != "" {
+			if inferenceProject != "" {
 				vcfg := vertex.Config{
-					ProjectID:   gcpProject,
-					Region:      gcpRegion,
-					WIFProvider: gcpWIFProvider,
+					ProjectID:   inferenceProject,
+					Region:      inferenceRegion,
+					WIFProvider: inferenceWIFProvider,
 				}
 				inferenceProvider = vertex.New(vcfg)
 				inferenceProviderName = "vertex"
 			} else {
-				// Preserve existing inference config if no GCP flags provided.
+				// Preserve existing inference config if no inference flags provided.
 				inferenceProviderName = loadExistingInferenceProvider(ctx, client, org)
 			}
 
@@ -328,9 +343,9 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 	cmd.Flags().BoolVar(&vendorBinary, "vendor-fullsend-binary", false, "cross-compile and upload the fullsend binary into .fullsend/bin/ for development iteration")
 	cmd.Flags().BoolVar(&enrollAllFlag, "enroll-all", false, "enroll all repositories without prompting")
 	cmd.Flags().BoolVar(&enrollNoneFlag, "enroll-none", false, "skip repository enrollment without prompting")
-	cmd.Flags().StringVar(&gcpProject, "gcp-project", "", "GCP project ID for Vertex AI inference")
-	cmd.Flags().StringVar(&gcpRegion, "gcp-region", "", "GCP region for Vertex AI (e.g. global, required with --gcp-project)")
-	cmd.Flags().StringVar(&gcpWIFProvider, "gcp-wif-provider", "", "full Workload Identity Federation provider resource name (e.g. projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER)")
+	cmd.Flags().StringVar(&inferenceProject, "inference-project", "", "GCP project ID for inference (Agent Platform)")
+	cmd.Flags().StringVar(&inferenceRegion, "inference-region", "global", "GCP region for inference (default: global)")
+	cmd.Flags().StringVar(&inferenceWIFProvider, "inference-wif-provider", "", "WIF provider resource name (optional; auto-provisioned if omitted)")
 	cmd.Flags().StringVar(&mintProvider, "mint-provider", "gcf", "token mint provider (gcf)")
 	cmd.Flags().StringVar(&mintProject, "mint-project", "", "cloud project for token mint (e.g. GCP project ID)")
 	cmd.Flags().StringVar(&mintRegion, "mint-region", "us-central1", "cloud region for token mint")
@@ -345,8 +360,8 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 	return cmd
 }
 
-func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRegion,
-	gcpProject, gcpWIFProvider string,
+func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, inferenceRegion,
+	inferenceProject, inferenceWIFProvider string,
 	scaffoldCustomized, dryRun bool) error {
 	if strings.Contains(repoFullName, "://") || strings.HasPrefix(repoFullName, "www.") {
 		return fmt.Errorf("expected owner/repo format, got a URL — use just the owner/repo portion (e.g. acme/widget)")
@@ -374,11 +389,8 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 		}
 		return fmt.Errorf("--mint-url must be a valid HTTPS URL (got scheme=%q)", scheme)
 	}
-	if gcpRegion == "" {
-		return fmt.Errorf("--gcp-region is required for per-repo installation")
-	}
-	if gcpProject == "" {
-		return fmt.Errorf("--gcp-project is required for per-repo installation")
+	if inferenceProject == "" {
+		return fmt.Errorf("--inference-project is required for per-repo installation")
 	}
 	roles, err := parseAgentRoles(agents)
 	if err != nil {
@@ -435,19 +447,19 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 		}
 	}
 
-	needsWIFProvision := gcpWIFProvider == ""
+	needsWIFProvision := inferenceWIFProvider == ""
 
 	repoVars := map[string]string{
 		"FULLSEND_MINT_URL":   mintURL,
-		"FULLSEND_GCP_REGION": gcpRegion,
+		"FULLSEND_GCP_REGION": inferenceRegion,
 	}
 
 	if dryRun {
 		printer.StepInfo("Dry run — no changes will be made")
 		printer.Blank()
 		if needsWIFProvision {
-			printer.StepInfo("Would provision WIF infrastructure in GCP project " + gcpProject)
-			printer.StepInfo(fmt.Sprintf("  Service account: fullsend-mint@%s.iam.gserviceaccount.com", gcpProject))
+			printer.StepInfo("Would provision WIF infrastructure in GCP project " + inferenceProject)
+			printer.StepInfo(fmt.Sprintf("  Service account: fullsend-mint@%s.iam.gserviceaccount.com", inferenceProject))
 			printer.StepInfo("  WIF pool: fullsend-pool")
 			printer.StepInfo(fmt.Sprintf("  WIF provider: %s", gcf.BuildRepoProviderID(owner, repo)))
 			printer.StepInfo(fmt.Sprintf("  Repo restriction: %s/%s", owner, repo))
@@ -476,12 +488,12 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 	if needsWIFProvision {
 		printer.StepStart("Provisioning WIF infrastructure")
 		provisioner := gcf.NewProvisioner(gcf.Config{
-			ProjectID:  gcpProject,
+			ProjectID:  inferenceProject,
 			GitHubOrgs: []string{owner},
 			Repo:       owner + "/" + repo,
 		}, gcf.NewLiveGCFClient())
 		var provErr error
-		gcpWIFProvider, provErr = provisioner.ProvisionWIF(ctx)
+		inferenceWIFProvider, provErr = provisioner.ProvisionWIF(ctx)
 		if provErr != nil {
 			printer.StepFail("WIF provisioning failed")
 			return fmt.Errorf("provisioning WIF: %w", provErr)
@@ -492,8 +504,8 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, gcpRe
 	}
 
 	repoSecrets := map[string]string{
-		"FULLSEND_GCP_PROJECT_ID":   gcpProject,
-		"FULLSEND_GCP_WIF_PROVIDER": gcpWIFProvider,
+		"FULLSEND_GCP_PROJECT_ID":   inferenceProject,
+		"FULLSEND_GCP_WIF_PROVIDER": inferenceWIFProvider,
 	}
 
 	printer.StepStart("Writing per-repo scaffold files")
@@ -1352,7 +1364,7 @@ func printAnalysis(ctx context.Context, stack *layers.Stack, printer *ui.Printer
 
 // loadExistingInferenceProvider reads the inference provider name from
 // an existing config.yaml in .fullsend, if available. This prevents
-// re-installs without --gcp-project from silently erasing the inference section.
+// re-installs without --inference-project from silently erasing the inference section.
 func loadExistingInferenceProvider(ctx context.Context, client forge.Client, org string) string {
 	data, err := client.GetFileContent(ctx, org, forge.ConfigRepoName, "config.yaml")
 	if err != nil {
