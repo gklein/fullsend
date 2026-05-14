@@ -654,17 +654,19 @@ func BuildRepoProviderID(owner, repo string) string {
 	return raw
 }
 
-// buildAttributeCondition constructs a WIF CEL condition scoped to each org's
-// .fullsend repo (not org-wide) to limit which workflows can authenticate.
+// buildAttributeCondition constructs a WIF CEL condition scoped to the
+// organization level via repository_owner. This allows any repo in the
+// org to authenticate — the mint's prevalidateOIDCToken already validates
+// org membership, allowed workflow files, and workflow ref prefixes.
 func buildAttributeCondition(orgs []string) string {
 	if len(orgs) == 1 {
-		return fmt.Sprintf("assertion.repository == '%s/.fullsend'", orgs[0])
+		return fmt.Sprintf("assertion.repository_owner == '%s'", orgs[0])
 	}
 	quoted := make([]string, len(orgs))
 	for i, org := range orgs {
-		quoted[i] = fmt.Sprintf("'%s/.fullsend'", org)
+		quoted[i] = fmt.Sprintf("'%s'", org)
 	}
-	return fmt.Sprintf("assertion.repository in [%s]", strings.Join(quoted, ", "))
+	return fmt.Sprintf("assertion.repository_owner in [%s]", strings.Join(quoted, ", "))
 }
 
 const fullsendRepoSuffix = "/.fullsend"
@@ -781,7 +783,7 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 	if p.cfg.Repo != "" {
 		parts := strings.SplitN(p.cfg.Repo, "/", 2)
 		p.cfg.WIFProvider = BuildRepoProviderID(parts[0], parts[1])
-		attrCondition = fmt.Sprintf("assertion.repository == '%s'", p.cfg.Repo)
+		attrCondition = fmt.Sprintf("assertion.repository_owner == '%s'", parts[0])
 	} else {
 		attrCondition = buildAttributeCondition(orgs)
 	}
