@@ -505,7 +505,7 @@ type Harness struct {
     AllowedRemoteResources []string `yaml:"allowed_remote_resources,omitempty"`
 }
 
-func (h *Harness) Validate() error {
+func (h *Harness) Validate(orgAllowlist []string) error {
     // existing validation...
 
     // Validate allowed_remote_resources entries are HTTPS URLs with trailing slashes
@@ -516,6 +516,22 @@ func (h *Harness) Validate() error {
         }
         if !strings.HasSuffix(prefix, "/") {
             return fmt.Errorf("allowed_remote_resources entry %q must end with / to prevent prefix confusion attacks", prefix)
+        }
+    }
+
+    // Validate harness-level allowed_remote_resources is a subset of org-level allowlist
+    // (per ADR-0037 lines 254-258: prevents insider attacks by requiring CODEOWNERS approval
+    // for org-level config.yaml changes before new domains can be referenced)
+    for _, harnessPrefix := range h.AllowedRemoteResources {
+        found := false
+        for _, orgPrefix := range orgAllowlist {
+            if harnessPrefix == orgPrefix {
+                found = true
+                break
+            }
+        }
+        if !found {
+            return fmt.Errorf("harness allowed_remote_resources entry %q is not in org-level allowlist", harnessPrefix)
         }
     }
 
