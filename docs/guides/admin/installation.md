@@ -181,7 +181,7 @@ gcloud iam workload-identity-pools providers create-oidc github-oidc \
   --workload-identity-pool=fullsend-pool \
   --issuer-uri="https://token.actions.githubusercontent.com" \
   --attribute-mapping="google.subject=assertion.sub,attribute.repository_owner=assertion.repository_owner,attribute.repository=assertion.repository" \
-  --attribute-condition="assertion.repository == '$ORG_NAME/.fullsend'" \
+  --attribute-condition="assertion.repository_owner == '$ORG_NAME'" \
   --project="$GCP_PROJECT"
 ```
 
@@ -189,7 +189,7 @@ gcloud iam workload-identity-pools providers create-oidc github-oidc \
 
 ```bash
 export PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
-export WIF_PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/fullsend-pool/attribute.repository/$ORG_NAME/.fullsend"
+export WIF_PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/fullsend-pool/attribute.repository_owner/$ORG_NAME"
 
 gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
   --role="roles/aiplatform.user" \

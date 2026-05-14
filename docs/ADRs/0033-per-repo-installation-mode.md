@@ -247,10 +247,12 @@ fullsend admin install <owner/repo>     # per-repo installation
 
 Per-repo flags (only valid with `owner/repo` argument):
 - `--mint-url` — token mint URL for OIDC token exchange (required)
-- `--gcp-auth-mode` — GCP authentication mode: `wif` or `sa_key` (default: `sa_key`)
+- `--inference-project` — GCP project for Vertex AI inference (required)
+- `--inference-region` — GCP region for Vertex AI inference (default: `global`)
+- `--inference-wif-provider` — pre-existing WIF provider (auto-provisioned if omitted)
 - `--scaffold-customized` — create `.fullsend/customized/` directory structure
 
-Per-org-only flags (`--mint-project`, `--mint-region`, `--public`, etc.) are rejected when an `owner/repo` argument is given.
+Per-org-only flags (`--mint-region`, `--public`, `--enroll-all`, `--enroll-none`, `--skip-app-setup`, `--vendor-fullsend-binary`, etc.) are rejected when an `owner/repo` argument is given. `--mint-project` is accepted in both modes (defaults to `--inference-project` in per-repo).
 
 **Per-repo install steps**:
 
@@ -258,7 +260,7 @@ Per-org-only flags (`--mint-project`, `--mint-region`, `--public`, etc.) are rej
 2. Generates `.fullsend/config.yaml` with agent roles and kill switch.
 3. Optionally creates `.fullsend/customized/` directory structure (`--scaffold-customized`).
 4. Commits all scaffold files to the target repo via the GitHub API.
-5. Sets repository variables (`FULLSEND_MINT_URL`, `FULLSEND_GCP_REGION`, `FULLSEND_GCP_AUTH_MODE`).
+5. Sets repository variables (`FULLSEND_MINT_URL`, `FULLSEND_GCP_REGION`, `FULLSEND_PER_REPO_INSTALL`).
 6. Sets repository secrets (`FULLSEND_GCP_PROJECT_ID`, and either WIF credentials or SA key JSON depending on `--gcp-auth-mode`).
 7. Auto-provisions WIF pool/provider if `--inference-wif-provider` is omitted.
 
@@ -266,13 +268,19 @@ Per-repo install requires only `repo` and `workflow` OAuth scopes (no `admin:org
 
 ### 8. Coexistence
 
-Per-repo and per-org coexist within the same org. Some repos use the org `.fullsend` config repo (per-org), others run independently (per-repo). There is no conflict — they use different dispatch paths and credential stores.
+Per-repo and per-org coexist within the same org. Some repos use the org `.fullsend` config repo (per-org), others run independently (per-repo). They use different dispatch paths, credential stores, and shim templates.
+
+To prevent per-org enrollment from overriding a per-repo installation, per-repo install sets a repository Actions variable `FULLSEND_PER_REPO_INSTALL=true`. The per-org enrollment flow checks this guard at three points:
+
+1. **CLI (`--enroll-all`)**: Skips repos with `FULLSEND_PER_REPO_INSTALL=true`. Prompts interactively if the guard exists but is not `true` (e.g., admin cleared it). Fails closed on API errors (skips the repo rather than risking overwrite).
+2. **`reconcile-repos.sh`**: Checks the guard via the GitHub API before both enrollment and unenrollment. Skips repos with `true`. Fails closed on non-404 API errors.
+3. **Enrollment `Analyze`**: Reports per-repo repos as "per-repo install, skipped" and excludes them from drift calculation.
 
 A mixed-visibility org is a natural fit: public repos use per-org with a public `.fullsend`, while private repos use per-repo to avoid routing event payloads through a public config repo. Per-repo should be the default recommendation for any private repo.
 
-Migration between models is straightforward:
-- **Per-repo → per-org**: Remove workflow file from target repo, add to `.fullsend/config.yaml` enrollment.
-- **Per-org → per-repo**: Remove from enrollment, add workflow file and set `FULLSEND_MINT_URL` as a repo variable.
+Migration between models:
+- **Per-repo → per-org**: Remove `FULLSEND_PER_REPO_INSTALL` variable from the repo, remove workflow file, add to `.fullsend/config.yaml` enrollment.
+- **Per-org → per-repo**: Remove from enrollment, run `fullsend admin install owner/repo` (sets the guard variable and writes the per-repo shim).
 
 ## Consequences
 
