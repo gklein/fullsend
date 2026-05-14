@@ -1191,6 +1191,8 @@ func TestResolveWIFProvider(t *testing.T) {
 	})
 }
 
+// SYNC: these test cases must match TestBuildRepoProviderID in
+// internal/dispatch/gcf/provisioner_test.go to catch divergence.
 func TestBuildRepoProviderID(t *testing.T) {
 	tests := []struct {
 		owner, repo string
@@ -1199,12 +1201,21 @@ func TestBuildRepoProviderID(t *testing.T) {
 		{"acme", "widget", "gh-acme-widget"},
 		{"Acme", "My.Repo_v2", "gh-acme-my-repo-v2"},
 		{"org", "very-long-repository-name-that-exceeds-limit", "gh-org-very-long-repository-name"},
+		{"a", "b", "gh-a-b"},
+		{"nonflux", "integration-service", "gh-nonflux-integration-service"},
+		{"halfsend", "test-repo", "gh-halfsend-test-repo"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.owner+"/"+tt.repo, func(t *testing.T) {
 			got := buildRepoProviderID(tt.owner, tt.repo)
 			if got != tt.want {
 				t.Fatalf("buildRepoProviderID(%q, %q) = %q, want %q", tt.owner, tt.repo, got, tt.want)
+			}
+			if len(got) < 4 || len(got) > 32 {
+				t.Fatalf("provider ID %q length %d outside 4-32 range", got, len(got))
+			}
+			if got[len(got)-1] == '-' {
+				t.Fatalf("provider ID %q ends with hyphen", got)
 			}
 		})
 	}

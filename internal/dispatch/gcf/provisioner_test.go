@@ -1660,7 +1660,7 @@ func TestCopyAgentPEM_CopiesSecret(t *testing.T) {
 	)
 }
 
-func TestCopyAgentPEM_DestinationExists_Noop(t *testing.T) {
+func TestCopyAgentPEM_DestinationExists_EnsuresIAM(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.secrets = map[string]bool{
 		"fullsend-srcorg--triage-app-pem": true,
@@ -1671,6 +1671,20 @@ func TestCopyAgentPEM_DestinationExists_Noop(t *testing.T) {
 	p := NewProvisioner(Config{ProjectID: "proj1"}, fake)
 	err := p.CopyAgentPEM(context.Background(), "srcorg", "dstorg", "triage")
 	require.NoError(t, err)
+	assert.NotContains(t, fake.calls, "AccessSecretVersion")
+	assert.Contains(t, fake.calls, "SetSecretIAMBinding")
+}
+
+func TestCopyAgentPEM_DestinationCheckError_Propagated(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs = map[string]error{
+		"GetSecret": fmt.Errorf("permission denied"),
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1"}, fake)
+	err := p.CopyAgentPEM(context.Background(), "srcorg", "dstorg", "triage")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "checking destination secret")
 	assert.NotContains(t, fake.calls, "AccessSecretVersion")
 }
 
@@ -1979,4 +1993,64 @@ func TestEnsureOrgInMint_ValueMismatchTriggersUpdate(t *testing.T) {
 	var roleAppIDs map[string]string
 	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateFunctionEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
 	assert.Equal(t, "222", roleAppIDs["acme-corp/coder"])
+}
+
+func TestEnsureOrgInMint_LowercasesOrg(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://mint.example.com",
+		EnvVars: map[string]string{
+			"ALLOWED_ORGS":  "existing-org",
+			"ROLE_APP_IDS":  `{"existing-org/coder":"100"}`,
+			"ALLOWED_ROLES": "coder",
+		},
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.EnsureOrgInMint(context.Background(), "https://mint.example.com", "AcmeCorp", map[string]string{
+		"acmecorp/coder": "200",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
+	assert.Contains(t, fake.lastUpdateFunctionEnvVars["ALLOWED_ORGS"], "acmecorp")
+	assert.NotContains(t, fake.lastUpdateFunctionEnvVars["ALLOWED_ORGS"], "AcmeCorp")
+}
+
+func TestEnsureOrgInMint_DefaultsAllowedWorkflowFiles(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://mint.example.com",
+		EnvVars: map[string]string{
+			"ALLOWED_ORGS":  "existing-org",
+			"ROLE_APP_IDS":  `{"existing-org/coder":"100"}`,
+			"ALLOWED_ROLES": "coder",
+		},
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.EnsureOrgInMint(context.Background(), "https://mint.example.com", "new-org", map[string]string{
+		"new-org/coder": "200",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "*", fake.lastUpdateFunctionEnvVars["ALLOWED_WORKFLOW_FILES"])
+}
+
+func TestEnsureOrgInMint_PreservesExistingAllowedWorkflowFiles(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://mint.example.com",
+		EnvVars: map[string]string{
+			"ALLOWED_ORGS":           "existing-org",
+			"ROLE_APP_IDS":           `{"existing-org/coder":"100"}`,
+			"ALLOWED_ROLES":          "coder",
+			"ALLOWED_WORKFLOW_FILES": ".github/workflows/ci.yml",
+		},
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.EnsureOrgInMint(context.Background(), "https://mint.example.com", "new-org", map[string]string{
+		"new-org/coder": "200",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ".github/workflows/ci.yml", fake.lastUpdateFunctionEnvVars["ALLOWED_WORKFLOW_FILES"])
 }

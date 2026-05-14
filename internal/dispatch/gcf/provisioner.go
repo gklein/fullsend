@@ -211,6 +211,8 @@ func (p *Provisioner) CopyAgentPEM(ctx context.Context, srcOrg, dstOrg, role str
 		// Secret exists — still ensure the mint SA has access,
 		// since older installs may have granted a different SA.
 		return p.ensureSecretIAM(ctx, dstID)
+	} else if !errors.Is(err, ErrSecretNotFound) {
+		return fmt.Errorf("checking destination secret %s: %w", dstID, err)
 	}
 
 	srcID := secretID(srcOrg, role)
@@ -256,6 +258,8 @@ func (p *Provisioner) GetExistingRoleAppIDs(ctx context.Context) (map[string]str
 // Not safe for concurrent calls — run per-repo installs sequentially when
 // sharing a mint.
 func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, org string, roleAppIDs map[string]string) error {
+	org = strings.ToLower(org)
+
 	fn, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
 	if err != nil {
 		return fmt.Errorf("getting mint function: %w", err)
@@ -325,6 +329,10 @@ func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, o
 
 	// Recompute ALLOWED_ROLES from the merged ROLE_APP_IDS.
 	updated["ALLOWED_ROLES"] = deriveAllowedRoles(updated["ROLE_APP_IDS"])
+
+	if updated["ALLOWED_WORKFLOW_FILES"] == "" {
+		updated["ALLOWED_WORKFLOW_FILES"] = "*"
+	}
 
 	opName, err := p.gcpAPI.UpdateFunctionEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
 	if err != nil {
