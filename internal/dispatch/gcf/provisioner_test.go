@@ -362,6 +362,12 @@ func TestProvisioner_Provision_FullFlow(t *testing.T) {
 		Name:  "projects/my-project/locations/us-central1/functions/fullsend-mint",
 		State: "ACTIVE",
 		URI:   "https://fullsend-mint-abc123.run.app",
+		EnvVars: map[string]string{
+			"ALLOWED_ORGS":          "test-org",
+			"ROLE_APP_IDS":          `{"test-org/coder":"12345"}`,
+			"ALLOWED_ROLES":         "coder",
+			"ALLOWED_WORKFLOW_FILES": "*",
+		},
 	}
 
 	p := newTestProvisioner(Config{
@@ -391,6 +397,7 @@ func TestProvisioner_Provision_FullFlow(t *testing.T) {
 		"CreateFunction",
 		"WaitForOperation",
 		"GetFunction",
+		"GetFunction", // EnsureOrgInMint checks env vars (no-op after first deploy)
 		"SetCloudRunInvoker",
 	}
 	assert.Equal(t, expected, fake.calls)
@@ -591,10 +598,13 @@ func TestProvisioner_Provision_SkipDeployReusesExisting(t *testing.T) {
 	vars, err := p.Provision(context.Background())
 	require.NoError(t, err)
 
+	// No code deployment.
 	assert.NotContains(t, fake.calls, "UploadFunctionSource")
 	assert.NotContains(t, fake.calls, "CreateFunction")
 	assert.NotContains(t, fake.calls, "UpdateFunction")
-	assert.NotContains(t, fake.calls, "WaitForOperation")
+
+	// EnsureOrgInMint still registers the org via env-var-only update.
+	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
 	assert.Equal(t, "https://fullsend-mint-abc123.run.app", vars["FULLSEND_MINT_URL"])
 }
 
@@ -612,7 +622,102 @@ func TestProvisioner_Provision_SkipDeployNoExistingFunction(t *testing.T) {
 
 	_, err := p.Provision(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--skip-mint-deploy")
+	assert.Contains(t, err.Error(), "skip-mint-deploy")
+}
+
+func TestProvisioner_Provision_CodeChanged_UpdatesFunction(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		Name:  "projects/my-project/locations/us-central1/functions/fullsend-mint",
+		State: "ACTIVE",
+		URI:   "https://fullsend-mint-abc123.run.app",
+		EnvVars: map[string]string{
+			"GCP_PROJECT_NUMBER":     "123456789",
+			"WIF_POOL_NAME":         "fullsend-pool",
+			"WIF_PROVIDER_NAME":     "github-oidc",
+			"ALLOWED_ORGS":          "test-org",
+			"OIDC_AUDIENCE":         "fullsend-mint",
+			"ALLOWED_ROLES":         "coder",
+			"ROLE_APP_IDS":          `{"test-org/coder":"12345"}`,
+			"FULLSEND_SOURCE_HASH":  "old-hash-that-wont-match",
+			"ALLOWED_WORKFLOW_FILES": "*",
+		},
+	}
+
+	p := newTestProvisioner(Config{
+		ProjectID:         "my-project",
+		GitHubOrgs:        []string{"test-org"},
+		AgentPEMs:         singleRolePEMs(),
+		AgentAppIDs:       singleRoleAppIDs(),
+		FunctionSourceDir: fakeFunctionSourceDir(t),
+	}, fake)
+
+	vars, err := p.Provision(context.Background())
+	require.NoError(t, err)
+
+	// Code deploy happens via UpdateFunction (not CreateFunction).
+	assert.Contains(t, fake.calls, "UploadFunctionSource")
+	assert.Contains(t, fake.calls, "UpdateFunction")
+	assert.NotContains(t, fake.calls, "CreateFunction")
+
+	// UpdateFunction preserves existing env vars, only updating the hash.
+	require.NotNil(t, fake.lastCreateFunctionEnvVars)
+	assert.Equal(t, "test-org", fake.lastCreateFunctionEnvVars["ALLOWED_ORGS"])
+	assert.NotEqual(t, "old-hash-that-wont-match", fake.lastCreateFunctionEnvVars["FULLSEND_SOURCE_HASH"])
+
+	assert.Equal(t, "https://fullsend-mint-abc123.run.app", vars["FULLSEND_MINT_URL"])
+}
+
+func TestProvisioner_Provision_SameCodeNewOrg_EnvVarOnlyUpdate(t *testing.T) {
+	srcDir := fakeFunctionSourceDir(t)
+	sourceZip, err := bundleFunctionSource(srcDir)
+	require.NoError(t, err)
+	srcHash := sha256Hex(sourceZip)
+
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		Name:  "projects/my-project/locations/us-central1/functions/fullsend-mint",
+		State: "ACTIVE",
+		URI:   "https://fullsend-mint-abc123.run.app",
+		EnvVars: map[string]string{
+			"GCP_PROJECT_NUMBER":     "123456789",
+			"WIF_POOL_NAME":         "fullsend-pool",
+			"WIF_PROVIDER_NAME":     "github-oidc",
+			"ALLOWED_ORGS":          "existing-org",
+			"OIDC_AUDIENCE":         "fullsend-mint",
+			"ALLOWED_ROLES":         "coder",
+			"ROLE_APP_IDS":          `{"existing-org/coder":"99999"}`,
+			"FULLSEND_SOURCE_HASH":  srcHash,
+			"ALLOWED_WORKFLOW_FILES": "*",
+		},
+	}
+
+	p := newTestProvisioner(Config{
+		ProjectID:         "my-project",
+		GitHubOrgs:        []string{"new-org"},
+		AgentPEMs:         singleRolePEMs(),
+		AgentAppIDs:       singleRoleAppIDs(),
+		FunctionSourceDir: srcDir,
+	}, fake)
+
+	vars, err := p.Provision(context.Background())
+	require.NoError(t, err)
+
+	// No code deployment — same source hash.
+	assert.NotContains(t, fake.calls, "UploadFunctionSource")
+	assert.NotContains(t, fake.calls, "CreateFunction")
+	assert.NotContains(t, fake.calls, "UpdateFunction")
+
+	// EnsureOrgInMint adds the new org via env-var-only update.
+	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
+
+	// Verify new org was added to ALLOWED_ORGS alongside existing.
+	require.NotNil(t, fake.lastUpdateFunctionEnvVars)
+	allowedOrgs := fake.lastUpdateFunctionEnvVars["ALLOWED_ORGS"]
+	assert.Contains(t, allowedOrgs, "new-org")
+	assert.Contains(t, allowedOrgs, "existing-org")
+
+	assert.Equal(t, "https://fullsend-mint-abc123.run.app", vars["FULLSEND_MINT_URL"])
 }
 
 func TestProvisioner_Provision_SecretExistsSkipsCreation(t *testing.T) {
@@ -1372,8 +1477,11 @@ func TestProvisioner_Provision_MultiOrg_MergeDoesNotOverwriteExistingPEMs(t *tes
 		fake.lastWIFProviderConfig.AttributeCondition)
 
 	// ROLE_APP_IDS should preserve existing-org's entries and add new-org's.
-	assert.Contains(t, fake.lastCreateFunctionEnvVars["ROLE_APP_IDS"], `"existing-org/coder":"999"`)
-	assert.Contains(t, fake.lastCreateFunctionEnvVars["ROLE_APP_IDS"], `"new-org/coder"`)
+	// After the refactor, code deploy preserves existing env vars, and
+	// EnsureOrgInMint merges the new org's entries via UpdateFunctionEnvVars.
+	require.NotNil(t, fake.lastUpdateFunctionEnvVars, "expected EnsureOrgInMint to update env vars")
+	assert.Contains(t, fake.lastUpdateFunctionEnvVars["ROLE_APP_IDS"], `"existing-org/coder":"999"`)
+	assert.Contains(t, fake.lastUpdateFunctionEnvVars["ROLE_APP_IDS"], `"new-org/coder"`)
 }
 
 // --- ProvisionWIF tests ---

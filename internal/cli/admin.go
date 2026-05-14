@@ -104,7 +104,7 @@ var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 var perOrgOnlyFlags = []string{
 	"skip-app-setup", "vendor-fullsend-binary", "enroll-all", "enroll-none",
 	"mint-provider", "mint-source-dir",
-	"skip-mint-deploy", "force-mint-deploy", "public",
+	"public",
 }
 
 // perRepoOnlyFlags are flags that only apply to per-repo mode.

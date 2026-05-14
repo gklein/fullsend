@@ -639,77 +639,98 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		return nil, fmt.Errorf("checking existing function: %w", err)
 	}
 
-	// Merge with existing function config (additive multi-org support).
-	if existing != nil && existing.EnvVars != nil {
-		mergeAllowedOrgs(existing.EnvVars, envVars)
-		mergeRoleAppIDs(existing.EnvVars, envVars)
-		if v := existing.EnvVars["ALLOWED_WORKFLOW_FILES"]; v != "" {
-			envVars["ALLOWED_WORKFLOW_FILES"] = v
-		}
-		if v := existing.EnvVars["PER_REPO_WIF_REPOS"]; v != "" {
-			envVars["PER_REPO_WIF_REPOS"] = v
-		}
-	}
+	// Step 6b: Code deployment — only when source hash changes.
+	sourceZip := earlySourceZip
+	sourceHash := sha256Hex(sourceZip)
 
-	envVars["ALLOWED_ROLES"] = deriveAllowedRoles(envVars["ROLE_APP_IDS"])
-
-	if envVars["ALLOWED_WORKFLOW_FILES"] == "" {
-		envVars["ALLOWED_WORKFLOW_FILES"] = "*"
-	}
-
-	if p.cfg.DeployMode == DeploySkip {
-		if existing == nil || existing.URI == "" {
-			return nil, fmt.Errorf("function %s not found — cannot use --skip-mint-deploy without an existing deployment", functionName)
+	if existing == nil && p.cfg.DeployMode != DeploySkip {
+		// First deploy: CreateFunction with full env vars including org registration.
+		// Mint's init() fatals on missing env vars, so we must set them all at once.
+		envVars["ALLOWED_ROLES"] = deriveAllowedRoles(envVars["ROLE_APP_IDS"])
+		if envVars["ALLOWED_WORKFLOW_FILES"] == "" {
+			envVars["ALLOWED_WORKFLOW_FILES"] = "*"
 		}
-	} else {
-		sourceZip := earlySourceZip
-		sourceHash := sha256Hex(sourceZip)
 		envVars["FULLSEND_SOURCE_HASH"] = sourceHash
 
-		needsDeploy := p.shouldDeploy(existing, envVars)
+		storageSource, err := p.gcpAPI.UploadFunctionSource(ctx, p.cfg.ProjectID, p.cfg.Region, sourceZip)
+		if err != nil {
+			return nil, fmt.Errorf("uploading function source: %w", err)
+		}
 
-		if needsDeploy {
-			storageSource, err := p.gcpAPI.UploadFunctionSource(ctx, p.cfg.ProjectID, p.cfg.Region, sourceZip)
-			if err != nil {
-				return nil, fmt.Errorf("uploading function source: %w", err)
-			}
+		saEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, p.cfg.ProjectID)
+		fnCfg := FunctionConfig{
+			ServiceAccount: saEmail,
+			EnvVars:        envVars,
+			StorageSource:  storageSource,
+			EntryPoint:     "ServeHTTP",
+			Runtime:        "go126",
+		}
 
-			saEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, p.cfg.ProjectID)
-			fnCfg := FunctionConfig{
-				ServiceAccount: saEmail,
-				EnvVars:        envVars,
-				StorageSource:  storageSource,
-				EntryPoint:     "ServeHTTP",
-				Runtime:        "go126",
-			}
+		opName, err := p.gcpAPI.CreateFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, fnCfg)
+		if err != nil {
+			return nil, fmt.Errorf("deploying function: %w", err)
+		}
+		if err := p.gcpAPI.WaitForOperation(ctx, opName); err != nil {
+			return nil, fmt.Errorf("waiting for function deployment: %w", err)
+		}
 
-			var opName string
-			if existing != nil {
-				opName, err = p.gcpAPI.UpdateFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, fnCfg)
-				if err != nil {
-					return nil, fmt.Errorf("updating function: %w", err)
-				}
-			} else {
-				opName, err = p.gcpAPI.CreateFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, fnCfg)
-				if err != nil {
-					return nil, fmt.Errorf("deploying function: %w", err)
-				}
-			}
+		existing, err = p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+		if err != nil {
+			return nil, fmt.Errorf("querying function URL: %w", err)
+		}
+		if existing == nil || existing.URI == "" {
+			return nil, fmt.Errorf("function %s deployed but not found or has no URI", functionName)
+		}
+	} else if p.needsCodeDeploy(existing, sourceHash) {
+		// Code changed: UpdateFunction preserving existing env vars, only updating hash.
+		deployEnvVars := make(map[string]string, len(existing.EnvVars))
+		for k, v := range existing.EnvVars {
+			deployEnvVars[k] = v
+		}
+		deployEnvVars["FULLSEND_SOURCE_HASH"] = sourceHash
 
-			if err := p.gcpAPI.WaitForOperation(ctx, opName); err != nil {
-				return nil, fmt.Errorf("waiting for function deployment: %w", err)
-			}
+		storageSource, err := p.gcpAPI.UploadFunctionSource(ctx, p.cfg.ProjectID, p.cfg.Region, sourceZip)
+		if err != nil {
+			return nil, fmt.Errorf("uploading function source: %w", err)
+		}
 
-			existing, err = p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
-			if err != nil {
-				return nil, fmt.Errorf("querying function URL: %w", err)
-			}
-			if existing == nil || existing.URI == "" {
-				return nil, fmt.Errorf("function %s deployed but not found or has no URI", functionName)
-			}
+		saEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, p.cfg.ProjectID)
+		fnCfg := FunctionConfig{
+			ServiceAccount: saEmail,
+			EnvVars:        deployEnvVars,
+			StorageSource:  storageSource,
+			EntryPoint:     "ServeHTTP",
+			Runtime:        "go126",
+		}
+
+		opName, err := p.gcpAPI.UpdateFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, fnCfg)
+		if err != nil {
+			return nil, fmt.Errorf("updating function: %w", err)
+		}
+		if err := p.gcpAPI.WaitForOperation(ctx, opName); err != nil {
+			return nil, fmt.Errorf("waiting for function deployment: %w", err)
+		}
+
+		existing, err = p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+		if err != nil {
+			return nil, fmt.Errorf("querying function URL: %w", err)
+		}
+		if existing == nil || existing.URI == "" {
+			return nil, fmt.Errorf("function %s deployed but not found or has no URI", functionName)
 		}
 	}
+
+	if existing == nil || existing.URI == "" {
+		return nil, fmt.Errorf("function %s not found — cannot use --skip-mint-deploy without an existing deployment", functionName)
+	}
 	mintURL := existing.URI
+
+	// Register org env vars via EnsureOrgInMint (additive, no-op if already present).
+	for _, org := range installingOrgs {
+		if err := p.EnsureOrgInMint(ctx, mintURL, org, orgScopedAppIDs); err != nil {
+			return nil, fmt.Errorf("registering org %s in mint: %w", org, err)
+		}
+	}
 
 	parsedURL, err := url.Parse(mintURL)
 	if err != nil || parsedURL.Scheme != "https" ||
@@ -1071,25 +1092,14 @@ func bundleFunctionSource(dir string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func envVarsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
 func sha256Hex(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
 }
 
-// shouldDeploy determines whether the Cloud Function needs (re)deployment.
-func (p *Provisioner) shouldDeploy(existing *FunctionInfo, desiredEnvVars map[string]string) bool {
+// needsCodeDeploy determines whether the Cloud Function code needs (re)deployment.
+// Only checks the source hash — env var changes are handled by EnsureOrgInMint.
+func (p *Provisioner) needsCodeDeploy(existing *FunctionInfo, sourceHash string) bool {
 	switch p.cfg.DeployMode {
 	case DeployForce:
 		return true
@@ -1102,6 +1112,6 @@ func (p *Provisioner) shouldDeploy(existing *FunctionInfo, desiredEnvVars map[st
 		if existing.State != "ACTIVE" || existing.URI == "" {
 			return true
 		}
-		return !envVarsEqual(existing.EnvVars, desiredEnvVars)
+		return existing.EnvVars["FULLSEND_SOURCE_HASH"] != sourceHash
 	}
 }
