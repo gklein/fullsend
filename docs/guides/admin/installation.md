@@ -14,7 +14,7 @@ This guide walks through installing fullsend in a GitHub organization and enroll
   *Note*: If running from a local clone of the repository use `go run ./cmd/fullsend/main.go <command>`
 
 - **GCP project** with the following APIs enabled:
-  - [Vertex AI](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) (inference)
+  - [Agent Platform](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) (inference)
   - [Cloud Functions](https://console.cloud.google.com/apis/library/cloudfunctions.googleapis.com) (token mint)
   - [Cloud Run](https://console.cloud.google.com/apis/library/run.googleapis.com) (token mint runtime)
   - [Secret Manager](https://console.cloud.google.com/apis/library/secretmanager.googleapis.com) (PEM storage)
@@ -32,7 +32,7 @@ The table below lists every scope the installer may request and why. You are nev
 | `admin:org` | install, uninstall, analyze | Manage organization-level Actions variables (the mint URL) |
 | `delete_repo` | uninstall | Delete the `.fullsend` config repository |
 
-The `--inference-region` flag defaults to `global` for the broadest model availability. For a list of all available regions, see the [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions).
+The `--inference-region` flag defaults to `global` for the broadest model availability. For a list of all available regions, see the [Agent Platform documentation](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/use-claude).
 
 ## 1. Run the installer
 
@@ -183,7 +183,7 @@ gcloud iam workload-identity-pools providers create-oidc github-oidc \
   --project="$GCP_PROJECT"
 ```
 
-**Grant Vertex AI access to the WIF principal:**
+**Grant Agent Platform access to the WIF principal:**
 
 ```bash
 export PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')

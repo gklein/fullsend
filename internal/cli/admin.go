@@ -343,7 +343,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 	cmd.Flags().BoolVar(&vendorBinary, "vendor-fullsend-binary", false, "cross-compile and upload the fullsend binary into .fullsend/bin/ for development iteration")
 	cmd.Flags().BoolVar(&enrollAllFlag, "enroll-all", false, "enroll all repositories without prompting")
 	cmd.Flags().BoolVar(&enrollNoneFlag, "enroll-none", false, "skip repository enrollment without prompting")
-	cmd.Flags().StringVar(&inferenceProject, "inference-project", "", "GCP project ID for inference (Vertex AI)")
+	cmd.Flags().StringVar(&inferenceProject, "inference-project", "", "GCP project ID for inference (Agent Platform)")
 	cmd.Flags().StringVar(&inferenceRegion, "inference-region", "global", "GCP region for inference (default: global)")
 	cmd.Flags().StringVar(&inferenceWIFProvider, "inference-wif-provider", "", "WIF provider resource name (optional; auto-provisioned if omitted)")
 	cmd.Flags().StringVar(&mintProvider, "mint-provider", "gcf", "token mint provider (gcf)")
