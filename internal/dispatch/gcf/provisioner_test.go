@@ -1548,7 +1548,7 @@ func TestProvisionWIF_RepoScoped(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "gh-acme-widget", fake.lastWIFProviderID)
-	assert.Equal(t, "assertion.repository_owner == 'acme'", fake.lastWIFProviderConfig.AttributeCondition)
+	assert.Equal(t, "assertion.repository == 'acme/widget'", fake.lastWIFProviderConfig.AttributeCondition)
 	assert.Contains(t, wifPath, "gh-acme-widget")
 
 	require.Len(t, fake.projectIAMBindings, 1)
@@ -1572,7 +1572,7 @@ func TestProvisionWIF_RepoScoped_DoesNotTouchSharedProvider(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "gh-acme-widget", fake.lastWIFProviderID)
-	assert.Equal(t, "assertion.repository_owner == 'acme'", fake.lastWIFProviderConfig.AttributeCondition)
+	assert.Equal(t, "assertion.repository == 'acme/widget'", fake.lastWIFProviderConfig.AttributeCondition)
 }
 
 func TestProvisionWIF_OrgScoped_Unchanged(t *testing.T) {

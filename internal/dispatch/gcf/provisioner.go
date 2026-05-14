@@ -672,8 +672,8 @@ func buildAttributeCondition(orgs []string) string {
 const fullsendRepoSuffix = "/.fullsend"
 
 // parseConditionOrgs extracts GitHub org names from a WIF attribute condition.
-// Supports both repo-scoped ("assertion.repository == 'org/.fullsend'") and
-// legacy org-scoped ("assertion.repository_owner == 'org'") formats.
+// Supports both the current org-scoped ("assertion.repository_owner == 'org'")
+// and legacy repo-scoped ("assertion.repository == 'org/.fullsend'") formats.
 func parseConditionOrgs(condition string) []string {
 	var orgs []string
 	for _, part := range strings.Split(condition, "'") {
@@ -783,7 +783,7 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 	if p.cfg.Repo != "" {
 		parts := strings.SplitN(p.cfg.Repo, "/", 2)
 		p.cfg.WIFProvider = BuildRepoProviderID(parts[0], parts[1])
-		attrCondition = fmt.Sprintf("assertion.repository_owner == '%s'", parts[0])
+		attrCondition = fmt.Sprintf("assertion.repository == '%s'", p.cfg.Repo)
 	} else {
 		attrCondition = buildAttributeCondition(orgs)
 	}
