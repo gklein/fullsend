@@ -542,7 +542,9 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		// Extract debug log if --debug was enabled.
 		if debug != "" {
 			debugDst := filepath.Join(iterDir, claudeDebugLog)
-			if err := sandbox.DownloadFile(sandboxName, sandbox.SandboxWorkspace+"/"+claudeDebugLog, debugDst); err == nil {
+			if err := sandbox.DownloadFile(sandboxName, sandbox.SandboxWorkspace+"/"+claudeDebugLog, debugDst); err != nil {
+				printer.StepWarn("Failed to extract debug log: " + err.Error())
+			} else {
 				printer.StepInfo("Extracted claude-debug.log")
 			}
 		}
