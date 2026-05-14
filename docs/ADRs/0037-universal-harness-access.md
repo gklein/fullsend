@@ -16,8 +16,6 @@ topics:
 
 Date: 2026-05-07
 
-**Note:** This ADR is numbered 0037. ADR numbers 0029 and 0035 are intentionally reserved/skipped per project conventions. The sequence is: 0034 → 0036 → 0037.
-
 ## Status
 
 Proposed
