@@ -14,10 +14,6 @@ const (
 
 	// repoMaintenanceWorkflow is the workflow file that handles enrollment.
 	repoMaintenanceWorkflow = "repo-maintenance.yml"
-
-	// perRepoGuardVar is the repo variable set by per-repo install to prevent
-	// per-org enrollment from overriding a per-repo installation.
-	perRepoGuardVar = "FULLSEND_PER_REPO_INSTALL"
 )
 
 // EnrollmentLayer monitors workflow-driven enrollment of target repos.
@@ -193,7 +189,7 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 
 	var enrolled, notEnrolled, perRepo []string
 	for _, repo := range l.enabledRepos {
-		guardVal, guardExists, err := l.client.GetRepoVariable(ctx, l.org, repo, perRepoGuardVar)
+		guardVal, guardExists, err := l.client.GetRepoVariable(ctx, l.org, repo, forge.PerRepoGuardVar)
 		if err != nil {
 			return nil, fmt.Errorf("checking per-repo guard for %s: %w", repo, err)
 		}
@@ -215,7 +211,7 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	// Check disabled repos for stale shims (skip per-repo managed repos).
 	var staleShim []string
 	for _, repo := range l.disabledRepos {
-		guardVal, guardExists, err := l.client.GetRepoVariable(ctx, l.org, repo, perRepoGuardVar)
+		guardVal, guardExists, err := l.client.GetRepoVariable(ctx, l.org, repo, forge.PerRepoGuardVar)
 		if err != nil {
 			return nil, fmt.Errorf("checking per-repo guard for %s: %w", repo, err)
 		}

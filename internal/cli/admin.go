@@ -100,10 +100,6 @@ var githubRepoPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0
 // rolePattern validates agent role names (lowercase alphanumeric, hyphens, underscores).
 var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
-// perRepoGuardVar is the repo variable set by per-repo install to prevent
-// per-org enrollment from overriding a per-repo installation.
-const perRepoGuardVar = "FULLSEND_PER_REPO_INSTALL"
-
 // perOrgOnlyFlags are flags that only apply to per-org mode.
 var perOrgOnlyFlags = []string{
 	"skip-app-setup", "vendor-fullsend-binary", "enroll-all", "enroll-none",
@@ -299,16 +295,18 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 			var repos []string
 			if enrollAll {
 				// Filter out .fullsend and per-repo installed repos from enrollment.
-				reader := bufio.NewReader(os.Stdin)
+				var reader *bufio.Reader
 				var skippedPerRepo int
+				var skippedErrors int
 				for _, r := range allRepos {
 					if r.Name == forge.ConfigRepoName {
 						continue
 					}
-					guardVal, guardExists, guardErr := client.GetRepoVariable(ctx, org, r.Name, perRepoGuardVar)
+					guardVal, guardExists, guardErr := client.GetRepoVariable(ctx, org, r.Name, forge.PerRepoGuardVar)
 					if guardErr != nil {
 						printer.StepWarn(fmt.Sprintf("Could not check per-repo guard for %s: %v — skipping to be safe", r.Name, guardErr))
 						skippedPerRepo++
+						skippedErrors++
 						continue
 					}
 					if guardExists && guardVal == "true" {
@@ -317,6 +315,9 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 						continue
 					}
 					if guardExists {
+						if reader == nil {
+							reader = bufio.NewReader(os.Stdin)
+						}
 						printer.StepInfo(fmt.Sprintf("%s has per-repo install (guard=%s). Enroll with per-org? [y/n]: ", r.Name, guardVal))
 						choice, _ := reader.ReadString('\n')
 						if strings.TrimSpace(strings.ToLower(choice)) != "y" {
@@ -326,6 +327,12 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 						}
 					}
 					repos = append(repos, r.Name)
+				}
+				// If every eligible repo was skipped due to guard-check errors,
+				// the token likely lacks the required scope — fail loudly.
+				eligibleCount := len(allRepos) - 1 // exclude .fullsend
+				if eligibleCount > 0 && skippedErrors == eligibleCount {
+					return fmt.Errorf("all %d repos were skipped due to guard-check errors — verify your token has actions:read scope", eligibleCount)
 				}
 				msg := fmt.Sprintf("Enrolling %d repositories (excluding %s)", len(repos), forge.ConfigRepoName)
 				if skippedPerRepo > 0 {
@@ -488,23 +495,25 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 
 	needsWIFProvision := inferenceWIFProvider == ""
 
-	repoVars := map[string]string{
-		"FULLSEND_MINT_URL":   mintURL,
-		"FULLSEND_GCP_REGION": inferenceRegion,
-		perRepoGuardVar:       "true",
-	}
-
-	guardVal, guardExists, guardErr := client.GetRepoVariable(ctx, owner, repo, perRepoGuardVar)
+	guardVal, guardExists, guardErr := client.GetRepoVariable(ctx, owner, repo, forge.PerRepoGuardVar)
 	if guardErr != nil {
 		printer.StepWarn(fmt.Sprintf("Could not check existing guard variable: %v", guardErr))
 	}
 	switch {
 	case guardExists && guardVal == "true":
 		printer.StepInfo(fmt.Sprintf("%s/%s is per-repo mode, updating installation", owner, repo))
+	case guardExists && guardVal == "false":
+		printer.StepWarn(fmt.Sprintf("%s/%s has per-repo guard set to %q — this install will re-enable it", owner, repo, guardVal))
 	case guardExists:
-		printer.StepInfo(fmt.Sprintf("%s/%s was per-repo mode (guard=%s), re-enabling and updating", owner, repo, guardVal))
+		printer.StepWarn(fmt.Sprintf("%s/%s has per-repo guard set to unexpected value %q — overwriting with \"true\"", owner, repo, guardVal))
 	default:
 		printer.StepInfo(fmt.Sprintf("Setting up new per-repo installation for %s/%s", owner, repo))
+	}
+
+	repoVars := map[string]string{
+		"FULLSEND_MINT_URL":   mintURL,
+		"FULLSEND_GCP_REGION": inferenceRegion,
+		forge.PerRepoGuardVar: "true",
 	}
 
 	if dryRun {

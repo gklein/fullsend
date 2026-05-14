@@ -295,11 +295,8 @@ func TestEnrollmentLayer_Analyze_MixedEnabledAndDisabled(t *testing.T) {
 }
 
 func TestEnrollmentLayer_Analyze_PerRepoGuardSkips(t *testing.T) {
-	client := &forge.FakeClient{
-		VariableValues: map[string]string{
-			"test-org/repo-a/FULLSEND_PER_REPO_INSTALL": "true",
-		},
-	}
+	client := forge.NewFakeClient()
+	client.VariableValues["test-org/repo-a/FULLSEND_PER_REPO_INSTALL"] = "true"
 	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a"}, nil)
 
 	report, err := layer.Analyze(context.Background())
@@ -312,11 +309,8 @@ func TestEnrollmentLayer_Analyze_PerRepoGuardSkips(t *testing.T) {
 }
 
 func TestEnrollmentLayer_Analyze_PerRepoGuardFalse(t *testing.T) {
-	client := &forge.FakeClient{
-		VariableValues: map[string]string{
-			"test-org/repo-a/FULLSEND_PER_REPO_INSTALL": "false",
-		},
-	}
+	client := forge.NewFakeClient()
+	client.VariableValues["test-org/repo-a/FULLSEND_PER_REPO_INSTALL"] = "false"
 	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a"}, nil)
 
 	report, err := layer.Analyze(context.Background())
@@ -371,11 +365,8 @@ func TestEnrollmentLayer_Analyze_DisabledWithPerRepoGuard(t *testing.T) {
 }
 
 func TestEnrollmentLayer_Analyze_PerRepoGuardCheckError(t *testing.T) {
-	client := &forge.FakeClient{
-		Errors: map[string]error{
-			"GetRepoVariable": fmt.Errorf("permission denied"),
-		},
-	}
+	client := forge.NewFakeClient()
+	client.Errors["GetRepoVariable"] = fmt.Errorf("permission denied")
 	layer, _ := newEnrollmentLayer(t, client, []string{"repo-a"}, nil)
 
 	_, err := layer.Analyze(context.Background())

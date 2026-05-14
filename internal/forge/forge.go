@@ -12,6 +12,10 @@ import (
 // configuration repository. See ADR-0003.
 const ConfigRepoName = ".fullsend"
 
+// PerRepoGuardVar is the repo variable set by per-repo install to prevent
+// per-org enrollment from overriding a per-repo installation.
+const PerRepoGuardVar = "FULLSEND_PER_REPO_INSTALL"
+
 // ErrNotFound indicates a requested resource was not found on the forge.
 var ErrNotFound = errors.New("not found")
 
