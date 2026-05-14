@@ -27,6 +27,12 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7.6.0
 
+      - name: Install lychee
+        run: |
+          curl -sSfL "https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/lychee.tar.gz
+          echo "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a  /tmp/lychee.tar.gz" | sha256sum -c
+          tar xzf /tmp/lychee.tar.gz -C /usr/local/bin --strip-components=1 lychee-x86_64-unknown-linux-gnu/lychee
+
       - name: Install pre-commit
         run: uv pip install --system pre-commit
 
@@ -38,3 +44,23 @@ jobs:
 
       - name: Run ADR linting
         run: make lint
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Run Vitest (admin SPA)
+        run: npm test
+
+      - name: Run svelte-check
+        run: npm run check

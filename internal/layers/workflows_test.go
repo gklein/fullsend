@@ -24,47 +24,48 @@ func newWorkflowsLayer(t *testing.T, client *forge.FakeClient) (*WorkflowsLayer,
 }
 
 func TestWorkflowsLayer_Name(t *testing.T) {
-	layer, _ := newWorkflowsLayer(t, &forge.FakeClient{})
+	layer, _ := newWorkflowsLayer(t, forge.NewFakeClient())
 	assert.Equal(t, "workflows", layer.Name())
 }
 
 func TestWorkflowsLayer_Install_WritesAllFiles(t *testing.T) {
-	client := &forge.FakeClient{}
+	client := forge.NewFakeClient()
 	layer, _ := newWorkflowsLayer(t, client)
 
 	err := layer.Install(context.Background())
 	require.NoError(t, err)
 
-	// Should have created scaffold files + CODEOWNERS in the .fullsend repo
-	require.True(t, len(client.CreatedFiles) >= 23,
-		"expected at least 23 files (22 scaffold + CODEOWNERS), got %d", len(client.CreatedFiles))
+	// Scaffold files go through CommitFiles as a single batch.
+	require.Len(t, client.CommittedFiles, 1, "expected exactly one CommitFiles call")
+	batch := client.CommittedFiles[0]
+	assert.Equal(t, "test-org", batch.Owner)
+	assert.Equal(t, ".fullsend", batch.Repo)
 
-	paths := make(map[string]string) // path -> content
-	for _, f := range client.CreatedFiles {
-		assert.Equal(t, "test-org", f.Owner)
-		assert.Equal(t, ".fullsend", f.Repo)
+	paths := make(map[string]string)
+	for _, f := range batch.Files {
 		paths[f.Path] = string(f.Content)
 	}
 
 	assert.Contains(t, paths, ".github/workflows/triage.yml")
 	assert.Contains(t, paths, ".github/workflows/code.yml")
 	assert.Contains(t, paths, ".github/workflows/review.yml")
+	assert.Contains(t, paths, ".github/workflows/fix.yml")
 	assert.Contains(t, paths, ".github/workflows/repo-maintenance.yml")
-	assert.Contains(t, paths, "CODEOWNERS")
 
-	// Verify CODEOWNERS contains the authenticated user
+	// CODEOWNERS is included in the same batch.
+	assert.Contains(t, paths, "CODEOWNERS")
 	assert.Contains(t, paths["CODEOWNERS"], "admin-user")
 }
 
 func TestWorkflowsLayer_Install_TriageWorkflowContent(t *testing.T) {
-	client := &forge.FakeClient{}
+	client := forge.NewFakeClient()
 	layer, _ := newWorkflowsLayer(t, client)
 
 	err := layer.Install(context.Background())
 	require.NoError(t, err)
 
 	var triageContent string
-	for _, f := range client.CreatedFiles {
+	for _, f := range client.CommittedFiles[0].Files {
 		if f.Path == ".github/workflows/triage.yml" {
 			triageContent = string(f.Content)
 			break
@@ -72,21 +73,20 @@ func TestWorkflowsLayer_Install_TriageWorkflowContent(t *testing.T) {
 	}
 	require.NotEmpty(t, triageContent, "triage.yml should have been written")
 
-	// Verify it matches the scaffold content
 	expected, err := scaffold.FullsendRepoFile(".github/workflows/triage.yml")
 	require.NoError(t, err)
 	assert.Equal(t, string(expected), triageContent)
 }
 
 func TestWorkflowsLayer_Install_RepoMaintenanceContent(t *testing.T) {
-	client := &forge.FakeClient{}
+	client := forge.NewFakeClient()
 	layer, _ := newWorkflowsLayer(t, client)
 
 	err := layer.Install(context.Background())
 	require.NoError(t, err)
 
 	var maintenanceContent string
-	for _, f := range client.CreatedFiles {
+	for _, f := range client.CommittedFiles[0].Files {
 		if f.Path == ".github/workflows/repo-maintenance.yml" {
 			maintenanceContent = string(f.Content)
 			break
@@ -94,31 +94,16 @@ func TestWorkflowsLayer_Install_RepoMaintenanceContent(t *testing.T) {
 	}
 	require.NotEmpty(t, maintenanceContent, "repo-maintenance.yml should have been written")
 
-	// Verify it matches the scaffold content
 	expected, err := scaffold.FullsendRepoFile(".github/workflows/repo-maintenance.yml")
 	require.NoError(t, err)
 	assert.Equal(t, string(expected), maintenanceContent)
 }
 
-func TestWorkflowsLayer_Install_CODEOWNERSOptional(t *testing.T) {
-	// Use a custom client that only errors on CODEOWNERS path
-	client := &codeownersErrorClient{FakeClient: &forge.FakeClient{}}
-	var buf bytes.Buffer
-	printer := ui.New(&buf)
-	layer := NewWorkflowsLayer("test-org", client, printer, "admin-user")
-
-	err := layer.Install(context.Background())
-	// Install should succeed even though CODEOWNERS write failed
-	require.NoError(t, err)
-
-	// All scaffold files should have been created (CODEOWNERS excluded since it failed)
-	assert.Len(t, client.created, 37)
-}
 
 func TestWorkflowsLayer_Install_Error(t *testing.T) {
 	client := &forge.FakeClient{
 		Errors: map[string]error{
-			"CreateOrUpdateFile": errors.New("write failed"),
+			"CommitFiles": errors.New("write failed"),
 		},
 	}
 	layer, _ := newWorkflowsLayer(t, client)
@@ -128,8 +113,30 @@ func TestWorkflowsLayer_Install_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "write failed")
 }
 
+func TestWorkflowsLayer_Install_ExecutableModes(t *testing.T) {
+	client := forge.NewFakeClient()
+	layer, _ := newWorkflowsLayer(t, client)
+
+	err := layer.Install(context.Background())
+	require.NoError(t, err)
+
+	modes := make(map[string]string)
+	for _, f := range client.CommittedFiles[0].Files {
+		modes[f.Path] = f.Mode
+	}
+
+	assert.Equal(t, "100644", modes[".github/workflows/triage.yml"])
+	assert.Equal(t, "100644", modes["customized/agents/.gitkeep"])
+	assert.Equal(t, "100644", modes["AGENTS.md"])
+
+	for path, mode := range modes {
+		assert.Equal(t, "100644", mode, "all installed files should be 100644 (no executables after layering): %s", path)
+	}
+}
+
+
 func TestWorkflowsLayer_Uninstall_Noop(t *testing.T) {
-	client := &forge.FakeClient{}
+	client := forge.NewFakeClient()
 	layer, _ := newWorkflowsLayer(t, client)
 
 	err := layer.Uninstall(context.Background())
@@ -160,7 +167,7 @@ func TestWorkflowsLayer_Analyze_AllPresent(t *testing.T) {
 
 	assert.Equal(t, "workflows", report.Name)
 	assert.Equal(t, StatusInstalled, report.Status)
-	assert.Len(t, report.Details, 38)
+	assert.Len(t, report.Details, len(managedFiles))
 }
 
 func TestWorkflowsLayer_Analyze_NonePresent(t *testing.T) {
@@ -174,7 +181,7 @@ func TestWorkflowsLayer_Analyze_NonePresent(t *testing.T) {
 
 	assert.Equal(t, "workflows", report.Name)
 	assert.Equal(t, StatusNotInstalled, report.Status)
-	assert.Len(t, report.WouldInstall, 38)
+	assert.Len(t, report.WouldInstall, len(managedFiles))
 }
 
 func TestWorkflowsLayer_Analyze_Partial(t *testing.T) {
@@ -226,25 +233,4 @@ func TestManagedFilesDoNotIncludeOldPlaceholders(t *testing.T) {
 		assert.NotEqual(t, ".github/workflows/repo-onboard.yaml", path,
 			"managedFiles should not include old repo-onboard.yaml placeholder")
 	}
-}
-
-// codeownersErrorClient is a test double that errors only on CODEOWNERS writes.
-// It embeds FakeClient for all other methods.
-type codeownersErrorClient struct {
-	*forge.FakeClient
-	created []forge.FileRecord
-}
-
-func (c *codeownersErrorClient) CreateOrUpdateFile(_ context.Context, owner, repo, path, message string, content []byte) error {
-	if path == "CODEOWNERS" {
-		return errors.New("codeowners write failed")
-	}
-	c.created = append(c.created, forge.FileRecord{
-		Owner:   owner,
-		Repo:    repo,
-		Path:    path,
-		Message: message,
-		Content: content,
-	})
-	return nil
 }

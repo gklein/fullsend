@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fullsend-ai/fullsend/internal/forge"
 )
 
 // newTestClient creates a LiveClient pointed at the given httptest server.
@@ -29,11 +31,12 @@ func TestListOrgRepos(t *testing.T) {
 
 		page++
 		if page == 1 {
-			// First page: 3 repos (one archived, one fork)
+			// First page: 4 repos (one archived, one fork, one private)
 			json.NewEncoder(w).Encode([]map[string]any{
 				{"name": "repo1", "full_name": "org/repo1", "default_branch": "main", "private": false, "archived": false, "fork": false},
 				{"name": "archived-repo", "full_name": "org/archived-repo", "default_branch": "main", "private": false, "archived": true, "fork": false},
 				{"name": "forked-repo", "full_name": "org/forked-repo", "default_branch": "main", "private": false, "archived": false, "fork": true},
+				{"name": "private-repo", "full_name": "org/private-repo", "default_branch": "main", "private": true, "archived": false, "fork": false},
 			})
 		} else {
 			// Second page: empty → stops pagination
@@ -783,6 +786,151 @@ func TestSetOrgSecretRepos(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestCreateOrUpdateOrgVariable_Create(t *testing.T) {
+	callNum := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callNum++
+		switch callNum {
+		case 1:
+			// PATCH (update) → 404 (variable doesn't exist yet)
+			assert.Equal(t, "PATCH", r.Method)
+			assert.Equal(t, "/orgs/myorg/actions/variables/DISPATCH_URL", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+		case 2:
+			// POST (create)
+			assert.Equal(t, "POST", r.Method)
+			assert.Equal(t, "/orgs/myorg/actions/variables", r.URL.Path)
+
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			assert.Equal(t, "DISPATCH_URL", body["name"])
+			assert.Equal(t, "https://func.example.com", body["value"])
+			assert.Equal(t, "selected", body["visibility"])
+
+			repoIDs, ok := body["selected_repository_ids"].([]any)
+			require.True(t, ok)
+			assert.Len(t, repoIDs, 2)
+			assert.Equal(t, float64(100), repoIDs[0])
+			assert.Equal(t, float64(200), repoIDs[1])
+
+			w.WriteHeader(http.StatusCreated)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	err := client.CreateOrUpdateOrgVariable(context.Background(), "myorg", "DISPATCH_URL", "https://func.example.com", []int64{100, 200})
+	require.NoError(t, err)
+}
+
+func TestCreateOrUpdateOrgVariable_Update(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// PATCH (update) → 200 (variable exists)
+		assert.Equal(t, "PATCH", r.Method)
+		assert.Equal(t, "/orgs/myorg/actions/variables/DISPATCH_URL", r.URL.Path)
+
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		assert.Equal(t, "https://new-url.example.com", body["value"])
+		assert.Equal(t, "selected", body["visibility"])
+
+		repoIDs, ok := body["selected_repository_ids"].([]any)
+		require.True(t, ok)
+		assert.Len(t, repoIDs, 1)
+
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	err := client.CreateOrUpdateOrgVariable(context.Background(), "myorg", "DISPATCH_URL", "https://new-url.example.com", []int64{300})
+	require.NoError(t, err)
+}
+
+func TestCreateOrUpdateOrgVariable_NilRepoIDs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// PATCH → 404 → POST
+		if r.Method == "PATCH" {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+			return
+		}
+		assert.Equal(t, "POST", r.Method)
+
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		assert.Equal(t, "selected", body["visibility"])
+		repoIDs, ok := body["selected_repository_ids"].([]any)
+		require.True(t, ok, "selected_repository_ids should be an empty array, not nil")
+		assert.Empty(t, repoIDs)
+
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	err := client.CreateOrUpdateOrgVariable(context.Background(), "myorg", "VAR", "value", nil)
+	require.NoError(t, err)
+}
+
+func TestOrgVariableExists(t *testing.T) {
+	t.Run("exists", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "GET", r.Method)
+			assert.Equal(t, "/orgs/myorg/actions/variables/DISPATCH_URL", r.URL.Path)
+			json.NewEncoder(w).Encode(map[string]any{"name": "DISPATCH_URL"})
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv)
+		exists, err := client.OrgVariableExists(context.Background(), "myorg", "DISPATCH_URL")
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
+
+	t.Run("not exists", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv)
+		exists, err := client.OrgVariableExists(context.Background(), "myorg", "MISSING")
+		require.NoError(t, err)
+		assert.False(t, exists)
+	})
+}
+
+func TestDeleteOrgVariable(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "DELETE", r.Method)
+			assert.Equal(t, "/orgs/myorg/actions/variables/DISPATCH_URL", r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv)
+		err := client.DeleteOrgVariable(context.Background(), "myorg", "DISPATCH_URL")
+		require.NoError(t, err)
+	})
+
+	t.Run("idempotent 404", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "DELETE", r.Method)
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv)
+		err := client.DeleteOrgVariable(context.Background(), "myorg", "ALREADY_GONE")
+		require.NoError(t, err)
+	})
+}
+
 func TestListOrgRepos_Pagination(t *testing.T) {
 	page := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -818,4 +966,330 @@ func TestListOrgRepos_Pagination(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, repos, 101)
 	assert.Equal(t, 2, page) // Should have made exactly 2 requests
+}
+
+func TestCreateOrUpdateFile_RetriesOn504(t *testing.T) {
+	callNum := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callNum++
+		switch {
+		case callNum == 1:
+			// First GET for existing file — return 404 (file doesn't exist)
+			assert.Equal(t, "GET", r.Method)
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+		case callNum == 2:
+			// First PUT — return 504 Gateway Timeout
+			assert.Equal(t, "PUT", r.Method)
+			w.WriteHeader(http.StatusGatewayTimeout)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Gateway Timeout"})
+		case callNum == 3:
+			// Retry: GET for existing file — return 404
+			assert.Equal(t, "GET", r.Method)
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+		case callNum == 4:
+			// Retry: PUT — succeeds
+			assert.Equal(t, "PUT", r.Method)
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]any{})
+		default:
+			t.Errorf("unexpected call %d", callNum)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	err := client.CreateOrUpdateFile(context.Background(), "owner", "repo", "test.txt", "add file", []byte("content"))
+	require.NoError(t, err)
+	assert.Equal(t, 4, callNum, "expected exactly 4 calls (GET+PUT fail, GET+PUT succeed)")
+}
+
+func TestCreateOrUpdateFile_RetriesOnAll5xxCodes(t *testing.T) {
+	for _, statusCode := range []int{
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+	} {
+		t.Run(fmt.Sprintf("status_%d", statusCode), func(t *testing.T) {
+			callNum := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				callNum++
+				switch {
+				case callNum == 1:
+					// GET existing file — 404
+					w.WriteHeader(http.StatusNotFound)
+					json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+				case callNum == 2:
+					// PUT — return 5xx
+					w.WriteHeader(statusCode)
+					json.NewEncoder(w).Encode(map[string]any{"message": http.StatusText(statusCode)})
+				case callNum == 3:
+					// Retry GET — 404
+					w.WriteHeader(http.StatusNotFound)
+					json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+				case callNum == 4:
+					// Retry PUT — succeeds
+					w.WriteHeader(http.StatusCreated)
+					json.NewEncoder(w).Encode(map[string]any{})
+				}
+			}))
+			defer srv.Close()
+
+			client := newTestClient(t, srv)
+			err := client.CreateOrUpdateFile(context.Background(), "owner", "repo", "test.txt", "add", []byte("data"))
+			require.NoError(t, err)
+			assert.GreaterOrEqual(t, callNum, 4, "should have retried after %d", statusCode)
+		})
+	}
+}
+
+func TestCreateOrUpdateFile_NoRetryOnNon5xx(t *testing.T) {
+	callNum := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callNum++
+		switch {
+		case callNum == 1:
+			// GET existing file — 404
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+		case callNum == 2:
+			// PUT — return 422 Unprocessable Entity (not retryable)
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Validation Failed"})
+		default:
+			t.Errorf("unexpected call %d — should not have retried", callNum)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	err := client.CreateOrUpdateFile(context.Background(), "owner", "repo", "test.txt", "add", []byte("data"))
+	require.Error(t, err)
+	assert.Equal(t, 2, callNum, "should not retry on 422")
+}
+
+func TestCreateOrUpdateFile_MaxRetriesExceeded(t *testing.T) {
+	callNum := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callNum++
+		if r.Method == "GET" {
+			// Always return 404 for the GET (file doesn't exist)
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+			return
+		}
+		// PUT always returns 504
+		w.WriteHeader(http.StatusGatewayTimeout)
+		json.NewEncoder(w).Encode(map[string]any{"message": "Gateway Timeout"})
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	err := client.CreateOrUpdateFile(context.Background(), "owner", "repo", "test.txt", "add", []byte("data"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "after 5 attempts")
+}
+
+func TestIsTransientStatus(t *testing.T) {
+	transient := []int{404, 409, 502, 503, 504}
+	for _, code := range transient {
+		assert.True(t, isTransientStatus(code), "expected %d to be transient", code)
+	}
+
+	nonTransient := []int{200, 201, 400, 401, 403, 422, 500}
+	for _, code := range nonTransient {
+		assert.False(t, isTransientStatus(code), "expected %d to not be transient", code)
+	}
+}
+
+func TestBlobSHA(t *testing.T) {
+	// printf "blob 5\0hello" | sha1sum
+	got := blobSHA([]byte("hello"))
+	assert.Equal(t, "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0", got)
+
+	// echo -n "" | git hash-object --stdin
+	got = blobSHA([]byte{})
+	assert.Equal(t, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", got)
+}
+
+func TestCommitFiles_AllNew(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo":
+			json.NewEncoder(w).Encode(map[string]string{"default_branch": "main"})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/ref/heads/main":
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": map[string]string{"sha": "abc123"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/commits/abc123":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree": map[string]string{"sha": "tree000"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/trees/tree000":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree":      []any{},
+				"truncated": false,
+			})
+
+		case r.Method == "POST" && r.URL.Path == "/repos/org/repo/git/trees":
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			assert.Equal(t, "tree000", body["base_tree"])
+			entries := body["tree"].([]any)
+			assert.Len(t, entries, 2)
+
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"sha": "newtree"})
+
+		case r.Method == "POST" && r.URL.Path == "/repos/org/repo/git/commits":
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			assert.Equal(t, "newtree", body["tree"])
+			assert.Equal(t, []any{"abc123"}, body["parents"])
+
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"sha": "newcommit"})
+
+		case r.Method == "PATCH" && r.URL.Path == "/repos/org/repo/git/refs/heads/main":
+			var body map[string]string
+			json.NewDecoder(r.Body).Decode(&body)
+			assert.Equal(t, "newcommit", body["sha"])
+			json.NewEncoder(w).Encode(map[string]any{})
+
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	files := []forge.TreeFile{
+		{Path: "file1.txt", Content: []byte("content1"), Mode: "100644"},
+		{Path: "scripts/run.sh", Content: []byte("#!/bin/bash"), Mode: "100755"},
+	}
+	committed, err := client.CommitFiles(context.Background(), "org", "repo", "test commit", files)
+	require.NoError(t, err)
+	assert.True(t, committed)
+}
+
+func TestCommitFiles_AllUnchanged(t *testing.T) {
+	content := []byte("existing content")
+	existingSHA := blobSHA(content)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo":
+			json.NewEncoder(w).Encode(map[string]string{"default_branch": "main"})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/ref/heads/main":
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": map[string]string{"sha": "abc123"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/commits/abc123":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree": map[string]string{"sha": "tree000"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/trees/tree000":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree": []map[string]string{
+					{"path": "file.txt", "mode": "100644", "sha": existingSHA},
+				},
+				"truncated": false,
+			})
+
+		default:
+			t.Errorf("unexpected request: %s %s (should not create tree/commit)", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	files := []forge.TreeFile{
+		{Path: "file.txt", Content: content, Mode: "100644"},
+	}
+	committed, err := client.CommitFiles(context.Background(), "org", "repo", "no-op", files)
+	require.NoError(t, err)
+	assert.False(t, committed)
+}
+
+func TestCommitFiles_ModeChange(t *testing.T) {
+	content := []byte("#!/bin/bash\necho hello")
+	existingSHA := blobSHA(content)
+
+	var treeCreated bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo":
+			json.NewEncoder(w).Encode(map[string]string{"default_branch": "main"})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/ref/heads/main":
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": map[string]string{"sha": "abc123"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/commits/abc123":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree": map[string]string{"sha": "tree000"},
+			})
+
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/trees/tree000":
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree": []map[string]string{
+					{"path": "scripts/run.sh", "mode": "100644", "sha": existingSHA},
+				},
+				"truncated": false,
+			})
+
+		case r.Method == "POST" && r.URL.Path == "/repos/org/repo/git/trees":
+			treeCreated = true
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			entries := body["tree"].([]any)
+			require.Len(t, entries, 1)
+			entry := entries[0].(map[string]any)
+			assert.Equal(t, "100755", entry["mode"])
+
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"sha": "newtree"})
+
+		case r.Method == "POST" && r.URL.Path == "/repos/org/repo/git/commits":
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"sha": "newcommit"})
+
+		case r.Method == "PATCH" && r.URL.Path == "/repos/org/repo/git/refs/heads/main":
+			json.NewEncoder(w).Encode(map[string]any{})
+
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	files := []forge.TreeFile{
+		{Path: "scripts/run.sh", Content: content, Mode: "100755"},
+	}
+	committed, err := client.CommitFiles(context.Background(), "org", "repo", "fix modes", files)
+	require.NoError(t, err)
+	assert.True(t, committed)
+	assert.True(t, treeCreated, "should create tree for mode change")
+}
+
+func TestCommitFiles_Empty(t *testing.T) {
+	client := New("token")
+	committed, err := client.CommitFiles(context.Background(), "org", "repo", "msg", nil)
+	require.NoError(t, err)
+	assert.False(t, committed)
 }

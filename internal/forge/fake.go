@@ -37,9 +37,58 @@ type OrgSecretRecord struct {
 	RepoIDs          []int64
 }
 
+// OrgVariableRecord records an org-level variable creation/update call.
+type OrgVariableRecord struct {
+	Org, Name, Value string
+	RepoIDs          []int64
+}
+
 // VariableRecord records a variable creation/update call.
 type VariableRecord struct {
 	Owner, Repo, Name, Value string
+}
+
+// UpdatedCommentRecord records an issue comment update call.
+type UpdatedCommentRecord struct {
+	Owner, Repo string
+	CommentID   int
+	Body        string
+}
+
+// CreatedIssueRecord records an issue creation call.
+type CreatedIssueRecord struct {
+	Owner, Repo string
+	Title, Body string
+	Labels      []string
+	Number      int
+}
+
+// MinimizedCommentRecord records a comment minimize call.
+type MinimizedCommentRecord struct {
+	NodeID string
+	Reason string
+}
+
+// ReviewRecord records a pull request review creation call.
+type ReviewRecord struct {
+	Owner, Repo string
+	Number      int
+	Event, Body string
+	CommitSHA   string
+}
+
+// DismissedReviewRecord records a review dismissal call.
+type DismissedReviewRecord struct {
+	Owner, Repo string
+	Number      int
+	ReviewID    int
+	Message     string
+}
+
+// CommitFilesRecord records a CommitFiles call.
+type CommitFilesRecord struct {
+	Owner, Repo, Message string
+	Files                []TreeFile
 }
 
 // FakeClient is a thread-safe test double for forge.Client.
@@ -53,6 +102,7 @@ type FakeClient struct {
 	FileContents      map[string][]byte       // key: "owner/repo/path"
 	WorkflowRuns      map[string]*WorkflowRun // key: "owner/repo/workflow"
 	AuthenticatedUser string
+	OrgPlan           string // plan name returned by GetOrgPlan (default: "free")
 	Installations     []Installation
 	Secrets           map[string]bool             // key: "owner/repo/name"
 	PullRequests      map[string][]ChangeProposal // key: "owner/repo"
@@ -66,23 +116,50 @@ type FakeClient struct {
 	OrgSecrets       map[string]bool    // key: "org/name"
 	OrgSecretRepoIDs map[string][]int64 // key: "org/name" → repo IDs
 
+	// Org-level variable state
+	OrgVariables      map[string]bool   // key: "org/name"
+	OrgVariableValues map[string]string // key: "org/name" → value
+
 	// Error injection: key is method name, value is error to return.
 	Errors map[string]error
 
-	// Call recorders
-	CreatedRepos      []Repository
-	CreatedFiles      []FileRecord
-	CreatedBranches   []string // "owner/repo/branch"
-	CreatedProposals  []ChangeProposal
-	DeletedRepos      []string // "owner/repo"
-	DeletedFiles      []FileRecord
-	CreatedSecrets    []SecretRecord
-	Variables         []VariableRecord
-	DeletedOrgSecrets []string // "org/name"
-	CreatedOrgSecrets []OrgSecretRecord
+	// Issue comments for ListIssueComments / UpdateIssueComment.
+	IssueComments map[string][]IssueComment // key: "owner/repo/number"
+	OpenIssues    map[string][]Issue        // key: "owner/repo"
 
-	// internal counter for change proposal numbers
+	// CommitFilesChanged controls the return value of CommitFiles (default true).
+	CommitFilesChanged *bool
+
+	// Pull request head SHA for GetPullRequestHeadSHA.
+	PullRequestHeadSHA string
+
+	// Pull request reviews for ListPullRequestReviews.
+	PRReviews map[string][]PullRequestReview // key: "owner/repo/number"
+
+	// Call recorders
+	CreatedRepos        []Repository
+	CreatedFiles        []FileRecord
+	CreatedBranches     []string // "owner/repo/branch"
+	CreatedProposals    []ChangeProposal
+	DeletedRepos        []string // "owner/repo"
+	DeletedFiles        []FileRecord
+	CreatedSecrets      []SecretRecord
+	Variables           []VariableRecord
+	DeletedOrgSecrets   []string // "org/name"
+	CreatedOrgSecrets   []OrgSecretRecord
+	CreatedOrgVariables []OrgVariableRecord
+	DeletedOrgVariables []string // "org/name"
+	CreatedIssues       []CreatedIssueRecord
+	UpdatedComments     []UpdatedCommentRecord
+	MinimizedComments   []MinimizedCommentRecord
+	CreatedReviews      []ReviewRecord
+	DismissedReviews    []DismissedReviewRecord
+	CommittedFiles      []CommitFilesRecord
+
+	// internal counters
 	proposalCounter int
+	commentCounter  int
+	issueCounter    int
 }
 
 // err checks for an injected error for the given method name.
@@ -103,7 +180,7 @@ func (f *FakeClient) ListOrgRepos(_ context.Context, _ string) ([]Repository, er
 
 	var result []Repository
 	for _, r := range f.Repos {
-		if r.Archived || r.Fork {
+		if r.Archived || r.Fork || r.Private {
 			continue
 		}
 		result = append(result, r)
@@ -290,6 +367,32 @@ func (f *FakeClient) DeleteFile(_ context.Context, owner, repo, path, message st
 	return nil
 }
 
+func (f *FakeClient) CommitFiles(_ context.Context, owner, repo, message string, files []TreeFile) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("CommitFiles"); e != nil {
+		return false, e
+	}
+
+	f.CommittedFiles = append(f.CommittedFiles, CommitFilesRecord{
+		Owner:   owner,
+		Repo:    repo,
+		Message: message,
+		Files:   files,
+	})
+
+	if f.FileContents == nil {
+		f.FileContents = make(map[string][]byte)
+	}
+	for _, file := range files {
+		f.FileContents[owner+"/"+repo+"/"+file.Path] = file.Content
+	}
+
+	changed := f.CommitFilesChanged == nil || *f.CommitFilesChanged
+	return changed, nil
+}
+
 func (f *FakeClient) CreateBranch(_ context.Context, owner, repo, branchName string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -377,6 +480,20 @@ func (f *FakeClient) ListRepoPullRequests(_ context.Context, owner, repo string)
 		}
 	}
 	return []ChangeProposal{}, nil
+}
+
+func (f *FakeClient) GetOrgPlan(_ context.Context, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("GetOrgPlan"); e != nil {
+		return "", e
+	}
+
+	if f.OrgPlan == "" {
+		return "free", nil
+	}
+	return f.OrgPlan, nil
 }
 
 func (f *FakeClient) GetAuthenticatedUser(_ context.Context) (string, error) {
@@ -506,13 +623,34 @@ func (f *FakeClient) DispatchWorkflow(_ context.Context, _, _, _, _ string, _ ma
 	return nil
 }
 
-func (f *FakeClient) CreateIssue(_ context.Context, _, _, _, _ string) (*Issue, error) {
+func (f *FakeClient) CreateIssue(_ context.Context, owner, repo, title, body string, labels ...string) (*Issue, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if e := f.err("CreateIssue"); e != nil {
 		return nil, e
 	}
-	return &Issue{Number: 1, Title: "fake", URL: "https://fake"}, nil
+	f.issueCounter++
+	issue := Issue{
+		Number: f.issueCounter,
+		Title:  title,
+		Body:   body,
+		URL:    fmt.Sprintf("https://github.com/%s/%s/issues/%d", owner, repo, f.issueCounter),
+		Labels: append([]string(nil), labels...),
+	}
+	f.CreatedIssues = append(f.CreatedIssues, CreatedIssueRecord{
+		Owner:  owner,
+		Repo:   repo,
+		Title:  title,
+		Body:   body,
+		Labels: append([]string(nil), labels...),
+		Number: issue.Number,
+	})
+	key := owner + "/" + repo
+	if f.OpenIssues == nil {
+		f.OpenIssues = make(map[string][]Issue)
+	}
+	f.OpenIssues[key] = append(f.OpenIssues[key], issue)
+	return &issue, nil
 }
 
 func (f *FakeClient) CloseIssue(_ context.Context, _, _ string, _ int) error {
@@ -521,13 +659,192 @@ func (f *FakeClient) CloseIssue(_ context.Context, _, _ string, _ int) error {
 	return f.err("CloseIssue")
 }
 
-func (f *FakeClient) ListIssueComments(_ context.Context, _, _ string, _ int) ([]IssueComment, error) {
+func (f *FakeClient) ListOpenIssues(_ context.Context, owner, repo string, labels ...string) ([]Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e := f.err("ListOpenIssues"); e != nil {
+		return nil, e
+	}
+	if f.OpenIssues == nil {
+		return nil, nil
+	}
+	issues := f.OpenIssues[owner+"/"+repo]
+	if len(labels) == 0 {
+		return append([]Issue(nil), issues...), nil
+	}
+	filtered := make([]Issue, 0, len(issues))
+	for _, issue := range issues {
+		if issueHasLabels(issue, labels) {
+			filtered = append(filtered, issue)
+		}
+	}
+	return filtered, nil
+}
+
+func issueHasLabels(issue Issue, labels []string) bool {
+	present := make(map[string]struct{}, len(issue.Labels))
+	for _, label := range issue.Labels {
+		present[label] = struct{}{}
+	}
+	for _, label := range labels {
+		if _, ok := present[label]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *FakeClient) ListIssueComments(_ context.Context, owner, repo string, number int) ([]IssueComment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if e := f.err("ListIssueComments"); e != nil {
 		return nil, e
 	}
+	if f.IssueComments != nil {
+		key := fmt.Sprintf("%s/%s/%d", owner, repo, number)
+		if comments, ok := f.IssueComments[key]; ok {
+			return comments, nil
+		}
+	}
 	return nil, nil
+}
+
+func (f *FakeClient) CreateIssueComment(_ context.Context, owner, repo string, number int, body string) (*IssueComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e := f.err("CreateIssueComment"); e != nil {
+		return nil, e
+	}
+	f.commentCounter++
+	comment := IssueComment{
+		ID:        f.commentCounter,
+		NodeID:    fmt.Sprintf("IC_fake_%d", f.commentCounter),
+		HTMLURL:   fmt.Sprintf("https://github.com/%s/%s/issues/%d#issuecomment-%d", owner, repo, number, f.commentCounter),
+		Body:      body,
+		Author:    f.AuthenticatedUser,
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}
+	key := fmt.Sprintf("%s/%s/%d", owner, repo, number)
+	if f.IssueComments == nil {
+		f.IssueComments = make(map[string][]IssueComment)
+	}
+	f.IssueComments[key] = append(f.IssueComments[key], comment)
+	return &comment, nil
+}
+
+func (f *FakeClient) UpdateIssueComment(_ context.Context, owner, repo string, commentID int, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e := f.err("UpdateIssueComment"); e != nil {
+		return e
+	}
+	f.UpdatedComments = append(f.UpdatedComments, UpdatedCommentRecord{
+		Owner:     owner,
+		Repo:      repo,
+		CommentID: commentID,
+		Body:      body,
+	})
+	for key, comments := range f.IssueComments {
+		for i, c := range comments {
+			if c.ID == commentID {
+				f.IssueComments[key][i].Body = body
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+func (f *FakeClient) MinimizeComment(_ context.Context, nodeID, reason string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e := f.err("MinimizeComment"); e != nil {
+		return e
+	}
+	f.MinimizedComments = append(f.MinimizedComments, MinimizedCommentRecord{
+		NodeID: nodeID,
+		Reason: reason,
+	})
+	return nil
+}
+
+func (f *FakeClient) GetPullRequestHeadSHA(_ context.Context, _, _ string, _ int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e := f.err("GetPullRequestHeadSHA"); e != nil {
+		return "", e
+	}
+	return f.PullRequestHeadSHA, nil
+}
+
+func (f *FakeClient) CreatePullRequestReview(_ context.Context, owner, repo string, number int, event, body, commitSHA string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e := f.err("CreatePullRequestReview"); e != nil {
+		return e
+	}
+	f.CreatedReviews = append(f.CreatedReviews, ReviewRecord{
+		Owner:     owner,
+		Repo:      repo,
+		Number:    number,
+		Event:     event,
+		Body:      body,
+		CommitSHA: commitSHA,
+	})
+
+	review := PullRequestReview{
+		ID:     len(f.CreatedReviews) + 1000,
+		NodeID: fmt.Sprintf("PRR_fake_%d", len(f.CreatedReviews)+1000),
+		User:   f.AuthenticatedUser,
+		State:  event,
+		Body:   body,
+	}
+	key := fmt.Sprintf("%s/%s/%d", owner, repo, number)
+	if f.PRReviews == nil {
+		f.PRReviews = make(map[string][]PullRequestReview)
+	}
+	f.PRReviews[key] = append(f.PRReviews[key], review)
+	return nil
+}
+
+func (f *FakeClient) ListPullRequestReviews(_ context.Context, owner, repo string, number int) ([]PullRequestReview, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e := f.err("ListPullRequestReviews"); e != nil {
+		return nil, e
+	}
+	if f.PRReviews != nil {
+		key := fmt.Sprintf("%s/%s/%d", owner, repo, number)
+		if reviews, ok := f.PRReviews[key]; ok {
+			return reviews, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *FakeClient) DismissPullRequestReview(_ context.Context, owner, repo string, number, reviewID int, message string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e := f.err("DismissPullRequestReview"); e != nil {
+		return e
+	}
+	f.DismissedReviews = append(f.DismissedReviews, DismissedReviewRecord{
+		Owner:    owner,
+		Repo:     repo,
+		Number:   number,
+		ReviewID: reviewID,
+		Message:  message,
+	})
+	key := fmt.Sprintf("%s/%s/%d", owner, repo, number)
+	if f.PRReviews != nil {
+		for i, r := range f.PRReviews[key] {
+			if r.ID == reviewID {
+				f.PRReviews[key][i].State = "DISMISSED"
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func (f *FakeClient) MergeChangeProposal(_ context.Context, _, _ string, _ int) error {
@@ -645,5 +962,73 @@ func (f *FakeClient) SetOrgSecretRepos(_ context.Context, org, name string, repo
 		f.OrgSecretRepoIDs = make(map[string][]int64)
 	}
 	f.OrgSecretRepoIDs[org+"/"+name] = repoIDs
+	return nil
+}
+
+func (f *FakeClient) GetOrgSecretRepos(_ context.Context, org, name string) ([]int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("GetOrgSecretRepos"); e != nil {
+		return nil, e
+	}
+
+	if f.OrgSecretRepoIDs == nil {
+		return nil, nil
+	}
+	return f.OrgSecretRepoIDs[org+"/"+name], nil
+}
+
+func (f *FakeClient) CreateOrUpdateOrgVariable(_ context.Context, org, name, value string, selectedRepoIDs []int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("CreateOrUpdateOrgVariable"); e != nil {
+		return e
+	}
+
+	f.CreatedOrgVariables = append(f.CreatedOrgVariables, OrgVariableRecord{
+		Org:     org,
+		Name:    name,
+		Value:   value,
+		RepoIDs: selectedRepoIDs,
+	})
+
+	if f.OrgVariables == nil {
+		f.OrgVariables = make(map[string]bool)
+	}
+	f.OrgVariables[org+"/"+name] = true
+
+	if f.OrgVariableValues == nil {
+		f.OrgVariableValues = make(map[string]string)
+	}
+	f.OrgVariableValues[org+"/"+name] = value
+	return nil
+}
+
+func (f *FakeClient) OrgVariableExists(_ context.Context, org, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("OrgVariableExists"); e != nil {
+		return false, e
+	}
+
+	if f.OrgVariables == nil {
+		return false, nil
+	}
+	return f.OrgVariables[org+"/"+name], nil
+}
+
+func (f *FakeClient) DeleteOrgVariable(_ context.Context, org, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("DeleteOrgVariable"); e != nil {
+		return e
+	}
+
+	f.DeletedOrgVariables = append(f.DeletedOrgVariables, org+"/"+name)
+	delete(f.OrgVariables, org+"/"+name)
 	return nil
 }

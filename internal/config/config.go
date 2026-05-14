@@ -19,6 +19,8 @@ type AgentEntry struct {
 // DispatchConfig configures how agent work is dispatched.
 type DispatchConfig struct {
 	Platform string `yaml:"platform"`
+	Mode     string `yaml:"mode,omitempty"`     // "oidc-mint"
+	MintURL  string `yaml:"mint_url,omitempty"` // informational, set when mode=oidc-mint
 }
 
 // InferenceConfig configures the inference provider used by agents.
@@ -41,17 +43,18 @@ type RepoConfig struct {
 
 // OrgConfig is the top-level configuration for a fullsend organization.
 type OrgConfig struct {
-	Version   string                `yaml:"version"`
-	Dispatch  DispatchConfig        `yaml:"dispatch"`
-	Inference InferenceConfig       `yaml:"inference,omitempty"`
-	Defaults  RepoDefaults          `yaml:"defaults"`
-	Agents    []AgentEntry          `yaml:"agents"`
-	Repos     map[string]RepoConfig `yaml:"repos"`
+	Version    string                `yaml:"version"`
+	KillSwitch bool                  `yaml:"kill_switch,omitempty"`
+	Dispatch   DispatchConfig        `yaml:"dispatch"`
+	Inference  InferenceConfig       `yaml:"inference,omitempty"`
+	Defaults   RepoDefaults          `yaml:"defaults"`
+	Agents     []AgentEntry          `yaml:"agents"`
+	Repos      map[string]RepoConfig `yaml:"repos"`
 }
 
 // ValidRoles returns the set of recognized agent roles.
 func ValidRoles() []string {
-	return []string{"fullsend", "triage", "coder", "review"}
+	return []string{"fullsend", "triage", "coder", "review", "fix", "retro", "prioritize"}
 }
 
 // ValidProviders returns the set of recognized inference providers.
@@ -59,11 +62,18 @@ func ValidProviders() []string {
 	return []string{"vertex"}
 }
 
-// DefaultAgentRoles returns the standard set of agent roles used
-// when no custom roles are specified. This is the same as ValidRoles
-// but exists as a separate function for semantic clarity.
+// DefaultAgentRoles returns the standard set of agent roles installed
+// when no custom roles are specified. This excludes optional roles
+// like "prioritize" that must be explicitly requested via --agents.
 func DefaultAgentRoles() []string {
-	return ValidRoles()
+	return []string{"fullsend", "triage", "coder", "review", "fix"}
+}
+
+// PerRepoDefaultRoles returns agent roles for per-repo installation.
+// The "fullsend" dispatch role is excluded because per-repo mode uses
+// the target repo's shim workflow for dispatch instead of a separate app.
+func PerRepoDefaultRoles() []string {
+	return []string{"triage", "coder", "review", "fix"}
 }
 
 // NewOrgConfig creates a new OrgConfig with sensible defaults.
@@ -126,14 +136,22 @@ func (c *OrgConfig) Validate() error {
 	if c.Dispatch.Platform != "github-actions" {
 		return fmt.Errorf("unsupported platform %q: must be \"github-actions\"", c.Dispatch.Platform)
 	}
+	if c.Dispatch.Mode != "" && c.Dispatch.Mode != "oidc-mint" {
+		return fmt.Errorf("unsupported dispatch mode %q: must be \"oidc-mint\"", c.Dispatch.Mode)
+	}
 	if c.Defaults.MaxImplementationRetries < 0 {
 		return fmt.Errorf("max_implementation_retries must be >= 0, got %d", c.Defaults.MaxImplementationRetries)
 	}
 	valid := ValidRoles()
+	seen := make(map[string]bool, len(c.Defaults.Roles))
 	for _, role := range c.Defaults.Roles {
 		if !slices.Contains(valid, role) {
 			return fmt.Errorf("invalid role %q: must be one of %s", role, strings.Join(valid, ", "))
 		}
+		if seen[role] {
+			return fmt.Errorf("duplicate role %q in defaults.roles", role)
+		}
+		seen[role] = true
 	}
 	if c.Inference.Provider != "" {
 		validProviders := ValidProviders()
@@ -180,4 +198,67 @@ func (c *OrgConfig) AgentSlugs() map[string]string {
 // DefaultRoles returns the default roles configured for the organization.
 func (c *OrgConfig) DefaultRoles() []string {
 	return c.Defaults.Roles
+}
+
+// PerRepoConfig holds configuration for per-repo installation mode.
+// Stored in .fullsend/config.yaml within the target repository.
+type PerRepoConfig struct {
+	Version    string   `yaml:"version"`
+	KillSwitch bool     `yaml:"kill_switch,omitempty"`
+	Roles      []string `yaml:"roles,omitempty"`
+}
+
+const perRepoConfigHeader = `# fullsend per-repo configuration
+# https://github.com/fullsend-ai/fullsend
+#
+# This file configures fullsend for per-repo installation mode.
+# See ADR 0033 for details.
+`
+
+// NewPerRepoConfig creates a new PerRepoConfig with the given roles.
+func NewPerRepoConfig(roles []string) *PerRepoConfig {
+	if roles == nil {
+		roles = DefaultAgentRoles()
+	}
+	return &PerRepoConfig{
+		Version: "1",
+		Roles:   roles,
+	}
+}
+
+// ParsePerRepoConfig parses YAML bytes into a PerRepoConfig.
+func ParsePerRepoConfig(data []byte) (*PerRepoConfig, error) {
+	var cfg PerRepoConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing per-repo config: %w", err)
+	}
+	return &cfg, nil
+}
+
+// Marshal serializes the PerRepoConfig to YAML with a descriptive header.
+func (c *PerRepoConfig) Marshal() ([]byte, error) {
+	body, err := yaml.Marshal(c)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling per-repo config: %w", err)
+	}
+	return []byte(perRepoConfigHeader + string(body)), nil
+}
+
+// Validate checks the PerRepoConfig for structural correctness.
+func (c *PerRepoConfig) Validate() error {
+	if c.Version != "1" {
+		return fmt.Errorf("unsupported version %q: must be \"1\"", c.Version)
+	}
+	valid := ValidRoles()
+	seen := make(map[string]bool, len(c.Roles))
+	for _, role := range c.Roles {
+		if !slices.Contains(valid, role) {
+			return fmt.Errorf("invalid role %q: must be one of %s", role, strings.Join(valid, ", "))
+		}
+		if seen[role] {
+			return fmt.Errorf("duplicate role %q in roles", role)
+		}
+		seen[role] = true
+	}
+	return nil
 }

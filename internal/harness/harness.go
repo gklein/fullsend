@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	validAgentName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-	validModelName = regexp.MustCompile(`^[a-zA-Z0-9_.@-]+$`)
+	validAgentName  = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	validModelName  = regexp.MustCompile(`^[a-zA-Z0-9_.@-]+$`)
+	validPluginName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 	envVarRef      = regexp.MustCompile(`\$\{([^}]+)\}`)
 )
 
@@ -26,9 +27,9 @@ var (
 // Use this for env files that contain variable references which must be resolved
 // on the host (because the sandbox does not have those variables set).
 type HostFile struct {
-	Src      string `yaml:"src"`              // host path (may use ${VAR} expansion)
-	Dest     string `yaml:"dest"`             // destination path inside the sandbox
-	Expand   bool   `yaml:"expand,omitempty"` // expand ${VAR} in file content before copying
+	Src      string `yaml:"src"`                // host path (may use ${VAR} expansion)
+	Dest     string `yaml:"dest"`               // destination path inside the sandbox
+	Expand   bool   `yaml:"expand,omitempty"`   // expand ${VAR} in file content before copying
 	Optional bool   `yaml:"optional,omitempty"` // skip if src path is missing or expands to empty
 }
 
@@ -80,12 +81,12 @@ func LoadProviderDefs(dir string) ([]ProviderDef, error) {
 // SecurityConfig configures security scanning for the agent run.
 // Secure by default: omitting this block enables all scanners with fail_mode: closed.
 type SecurityConfig struct {
-	Enabled      *bool            `yaml:"enabled,omitempty"`       // nil = true (secure by default)
-	FailMode     string           `yaml:"fail_mode,omitempty"`     // "closed" or "open". Default: "closed"
-	HostScanners *HostScanners    `yaml:"host_scanners,omitempty"`
-	SandboxHooks *SandboxHooks    `yaml:"sandbox_hooks,omitempty"`
+	Enabled      *bool             `yaml:"enabled,omitempty"`   // nil = true (secure by default)
+	FailMode     string            `yaml:"fail_mode,omitempty"` // "closed" or "open". Default: "closed"
+	HostScanners *HostScanners     `yaml:"host_scanners,omitempty"`
+	SandboxHooks *SandboxHooks     `yaml:"sandbox_hooks,omitempty"`
 	Escalation   *EscalationConfig `yaml:"escalation,omitempty"`
-	Trace        *TraceConfig     `yaml:"trace,omitempty"`
+	Trace        *TraceConfig      `yaml:"trace,omitempty"`
 }
 
 // HostScanners configures which scanners run on the host before sandbox creation
@@ -111,11 +112,21 @@ type LLMGuardConfig struct {
 // SandboxHooks configures Claude Code PreToolUse/PostToolUse hooks
 // that run inside the sandbox during agent execution.
 type SandboxHooks struct {
-	Tirith                  *TirithConfig `yaml:"tirith,omitempty"`
-	SSRFPreTool             *bool         `yaml:"ssrf_pretool,omitempty"`              // default: true
-	SecretRedactPostTool    *bool         `yaml:"secret_redact_posttool,omitempty"`    // default: true
-	UnicodePostTool         *bool         `yaml:"unicode_posttool,omitempty"`          // default: true
-	ContextSuppressPostTool *bool         `yaml:"context_suppress_posttool,omitempty"` // default: true
+	Tirith                  *TirithConfig        `yaml:"tirith,omitempty"`
+	SSRFPreTool             *bool                `yaml:"ssrf_pretool,omitempty"`              // default: true
+	SecretRedactPostTool    *bool                `yaml:"secret_redact_posttool,omitempty"`    // default: true
+	UnicodePostTool         *bool                `yaml:"unicode_posttool,omitempty"`          // default: true
+	ContextSuppressPostTool *bool                `yaml:"context_suppress_posttool,omitempty"` // default: true
+	CanaryPreTool           *bool                `yaml:"canary_pretool,omitempty"`              // default: true
+	CanaryPostTool          *bool                `yaml:"canary_posttool,omitempty"`              // default: true
+	ToolAllowlistPreTool    *ToolAllowlistConfig `yaml:"tool_allowlist_pretool,omitempty"`
+}
+
+// ToolAllowlistConfig configures the tool call allowlist PreToolUse hook.
+// Disabled by default — requires FULLSEND_TOOL_ALLOWLIST env var to define
+// the allowed tool set per agent role.
+type ToolAllowlistConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"` // default: false (opt-in)
 }
 
 // TirithConfig configures the Tirith Rust CLI scanner for terminal security.
@@ -182,6 +193,7 @@ type Harness struct {
 	Image          string            `yaml:"image,omitempty"`
 	Policy         string            `yaml:"policy,omitempty"`
 	Skills         []string          `yaml:"skills,omitempty"`
+	Plugins        []string          `yaml:"plugins,omitempty"`
 	Providers      []string          `yaml:"providers,omitempty"`
 	HostFiles      []HostFile        `yaml:"host_files,omitempty"`
 	APIServers     []APIServer       `yaml:"api_servers,omitempty"`
@@ -226,6 +238,12 @@ func (h *Harness) Validate() error {
 	}
 	if h.Model != "" && !validModelName.MatchString(h.Model) {
 		return fmt.Errorf("model %q contains invalid characters (allowed: a-z, A-Z, 0-9, _, -, ., @)", h.Model)
+	}
+	for i, p := range h.Plugins {
+		pluginBase := filepath.Base(p)
+		if !validPluginName.MatchString(pluginBase) {
+			return fmt.Errorf("plugins[%d] name %q contains invalid characters (allowed: a-z, A-Z, 0-9, _, -)", i, pluginBase)
+		}
 	}
 	if h.TimeoutMinutes < 0 {
 		return fmt.Errorf("timeout_minutes must be non-negative, got %d", h.TimeoutMinutes)
@@ -330,6 +348,11 @@ func (h *Harness) ResolveRelativeTo(baseDir string) error {
 			return err
 		}
 	}
+	for i := range h.Plugins {
+		if h.Plugins[i], err = resolve(fmt.Sprintf("plugins[%d]", i), h.Plugins[i]); err != nil {
+			return err
+		}
+	}
 	for i, hf := range h.HostFiles {
 		if !strings.Contains(hf.Src, "${") {
 			if h.HostFiles[i].Src, err = resolve(fmt.Sprintf("host_files[%d].src", i), hf.Src); err != nil {
@@ -419,9 +442,19 @@ func (h *Harness) ValidateFilesExist() error {
 			return err
 		}
 	}
+	for i, p := range h.Plugins {
+		if err := check(fmt.Sprintf("plugins[%d]", i), p); err != nil {
+			return err
+		}
+	}
 	for i, hf := range h.HostFiles {
 		// Skip ${VAR} paths — they are expanded at bootstrap time.
 		if strings.Contains(hf.Src, "${") {
+			continue
+		}
+		// Skip optional host files — they may not exist until runtime
+		// (e.g., files created by the pre-script).
+		if hf.Optional {
 			continue
 		}
 		if err := check(fmt.Sprintf("host_files[%d].src", i), hf.Src); err != nil {

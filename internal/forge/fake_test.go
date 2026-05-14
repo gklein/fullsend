@@ -336,6 +336,66 @@ func TestFakeClient_CreateOrgSecret(t *testing.T) {
 	assert.True(t, exists)
 }
 
+func TestFakeClient_OrgVariableExists(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("exists", func(t *testing.T) {
+		fc := &FakeClient{
+			OrgVariables: map[string]bool{"myorg/DISPATCH_URL": true},
+		}
+		exists, err := fc.OrgVariableExists(ctx, "myorg", "DISPATCH_URL")
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
+
+	t.Run("not exists", func(t *testing.T) {
+		fc := &FakeClient{
+			OrgVariables: map[string]bool{},
+		}
+		exists, err := fc.OrgVariableExists(ctx, "myorg", "MISSING")
+		require.NoError(t, err)
+		assert.False(t, exists)
+	})
+
+	t.Run("nil map", func(t *testing.T) {
+		fc := &FakeClient{}
+		exists, err := fc.OrgVariableExists(ctx, "myorg", "VAR")
+		require.NoError(t, err)
+		assert.False(t, exists)
+	})
+}
+
+func TestFakeClient_CreateOrUpdateOrgVariable(t *testing.T) {
+	ctx := context.Background()
+	fc := &FakeClient{}
+
+	err := fc.CreateOrUpdateOrgVariable(ctx, "myorg", "DISPATCH_URL", "https://func.example.com", []int64{100, 200})
+	require.NoError(t, err)
+
+	// Should be recorded.
+	require.Len(t, fc.CreatedOrgVariables, 1)
+	assert.Equal(t, "myorg", fc.CreatedOrgVariables[0].Org)
+	assert.Equal(t, "DISPATCH_URL", fc.CreatedOrgVariables[0].Name)
+	assert.Equal(t, "https://func.example.com", fc.CreatedOrgVariables[0].Value)
+	assert.Equal(t, []int64{100, 200}, fc.CreatedOrgVariables[0].RepoIDs)
+
+	// Should be queryable.
+	exists, err := fc.OrgVariableExists(ctx, "myorg", "DISPATCH_URL")
+	require.NoError(t, err)
+	assert.True(t, exists)
+}
+
+func TestFakeClient_DeleteOrgVariable(t *testing.T) {
+	ctx := context.Background()
+	fc := &FakeClient{}
+
+	err := fc.DeleteOrgVariable(ctx, "myorg", "DISPATCH_URL")
+	require.NoError(t, err)
+
+	require.Len(t, fc.DeletedOrgVariables, 1)
+	assert.Equal(t, "myorg/DISPATCH_URL", fc.DeletedOrgVariables[0])
+}
+
 func TestFakeClient_ErrorInjection(t *testing.T) {
 	ctx := context.Background()
 	injected := errors.New("injected error")
@@ -383,6 +443,20 @@ func TestFakeClient_ErrorInjection(t *testing.T) {
 		{"SetOrgSecretRepos", func(fc *FakeClient) error {
 			return fc.SetOrgSecretRepos(ctx, "o", "n", nil)
 		}},
+		{"CommitFiles", func(fc *FakeClient) error {
+			_, err := fc.CommitFiles(ctx, "o", "r", "m", nil)
+			return err
+		}},
+		{"CreateOrUpdateOrgVariable", func(fc *FakeClient) error {
+			return fc.CreateOrUpdateOrgVariable(ctx, "o", "n", "v", nil)
+		}},
+		{"OrgVariableExists", func(fc *FakeClient) error {
+			_, err := fc.OrgVariableExists(ctx, "o", "n")
+			return err
+		}},
+		{"DeleteOrgVariable", func(fc *FakeClient) error {
+			return fc.DeleteOrgVariable(ctx, "o", "n")
+		}},
 	}
 
 	for _, m := range methods {
@@ -412,6 +486,7 @@ func TestFakeClient_ThreadSafety(t *testing.T) {
 		Installations: []Installation{{ID: 1, AppSlug: "app"}},
 		Secrets:       map[string]bool{"o/r/secret": true},
 		OrgSecrets:    map[string]bool{"o/secret": true},
+		OrgVariables:  map[string]bool{"o/var": true},
 	}
 
 	var wg sync.WaitGroup
@@ -443,6 +518,10 @@ func TestFakeClient_ThreadSafety(t *testing.T) {
 			_, _ = fc.OrgSecretExists(ctx, "o", "secret")
 			_ = fc.DeleteOrgSecret(ctx, "o", "n")
 			_ = fc.SetOrgSecretRepos(ctx, "o", "n", []int64{1, 2})
+			_, _ = fc.CommitFiles(ctx, "o", "r", "m", []TreeFile{{Path: "p", Content: []byte("c"), Mode: "100644"}})
+			_ = fc.CreateOrUpdateOrgVariable(ctx, "o", "n", "v", []int64{1})
+			_, _ = fc.OrgVariableExists(ctx, "o", "var")
+			_ = fc.DeleteOrgVariable(ctx, "o", "n")
 		}(i)
 	}
 

@@ -30,7 +30,7 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, page playwr
 		}
 	}
 
-	// 2. Delete stale FULLSEND_DISPATCH_TOKEN org secret if it exists.
+	// 2. Delete stale FULLSEND_DISPATCH_TOKEN org secret if it exists (legacy PAT mode artifact).
 	dispatchExists, dispatchErr := client.OrgSecretExists(ctx, testOrg, "FULLSEND_DISPATCH_TOKEN")
 	if dispatchErr != nil {
 		t.Logf("[cleanup] Warning: could not check dispatch token org secret: %v", dispatchErr)
@@ -50,6 +50,14 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, page playwr
 		if delErr := deleteAppViaPlaywright(page, slug, t.Logf, screenshotDir); delErr != nil {
 			t.Logf("[cleanup] App %s not found or could not delete: %v", slug, delErr)
 		}
+
+		newSlug := "fullsend-" + role // OIDC convention: fullsend-triage, etc.
+		if newSlug != slug {
+			t.Logf("[cleanup] Attempting to delete app %s (if it exists)", newSlug)
+			if delErr := deleteAppViaPlaywright(page, newSlug, t.Logf, screenshotDir); delErr != nil {
+				t.Logf("[cleanup] App %s not found or could not delete: %v", newSlug, delErr)
+			}
+		}
 	}
 
 	// Also clean up apps found via installations (catches old naming conventions).
@@ -58,8 +66,9 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, page playwr
 		t.Logf("[cleanup] Warning: could not list installations: %v", err)
 	} else {
 		for _, inst := range installations {
-			isStale := strings.HasPrefix(inst.AppSlug, "fullsend-"+testOrg) || // old: fullsend-halfsend-*
-				strings.HasPrefix(inst.AppSlug, testOrg+"-") // v6: halfsend-*
+			// Safe: testOrg is a dedicated E2E org with no production apps.
+			isStale := strings.HasPrefix(inst.AppSlug, testOrg+"-") || // v6: halfsend-*
+				strings.HasPrefix(inst.AppSlug, "fullsend-") // OIDC + old: fullsend-triage, fullsend-halfsend-*, etc.
 			if isStale {
 				t.Logf("[cleanup] Deleting stale installed app: %s", inst.AppSlug)
 				if delErr := deleteAppViaPlaywright(page, inst.AppSlug, t.Logf, screenshotDir); delErr != nil {
@@ -69,13 +78,7 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, page playwr
 		}
 	}
 
-	// 4. Delete any stale dispatch PATs from previous runs.
-	// Use bulk deletion to clean up all accumulated dispatch PATs — if too
-	// many accumulate, GitHub enforces a 50-token limit and blocks creation.
-	t.Log("[cleanup] Cleaning up stale dispatch PATs...")
-	deleteAllDispatchPATs(page, testOrg, screenshotDir, t.Logf)
-
-	// 5. Ensure test-repo exists (needed for enrollment testing).
+	// 4. Ensure test-repo exists (needed for enrollment testing).
 	_, err = client.GetRepo(ctx, testOrg, testRepo)
 	if forge.IsNotFound(err) {
 		t.Logf("[cleanup] Creating missing %s repo", testRepo)
@@ -84,15 +87,15 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, page playwr
 		}
 	}
 
-	// 6. Delete stale enrollment and unenrollment branches from test-repo.
+	// 5. Delete stale enrollment and unenrollment branches from test-repo.
 	deleteBranch(ctx, token, testOrg, testRepo, "fullsend/onboard", t)
 	deleteBranch(ctx, token, testOrg, testRepo, "fullsend/offboard", t)
 
-	// 7. Delete shim workflow from test-repo's default branch (left behind
+	// 6. Delete shim workflow from test-repo's default branch (left behind
 	// when a previous run merged the enrollment PR in Phase 2.5).
 	deleteShimWorkflow(ctx, token, testOrg, testRepo, t)
 
-	// 8. Close any open fullsend-related PRs in test-repo.
+	// 7. Close any open fullsend-related PRs in test-repo.
 	prs, err := client.ListRepoPullRequests(ctx, testOrg, testRepo)
 	if err != nil {
 		t.Logf("[cleanup] Warning: could not list PRs: %v", err)

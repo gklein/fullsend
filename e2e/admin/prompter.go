@@ -17,3 +17,9 @@ func (AutoPrompter) WaitForEnter(_ string) error {
 func (AutoPrompter) Confirm(_ string) (bool, error) {
 	return true, nil
 }
+
+// ReadLine returns an empty string. In e2e tests, the PEM recovery
+// path is not exercised (apps are freshly created each run).
+func (AutoPrompter) ReadLine(_ string) (string, error) {
+	return "", nil
+}

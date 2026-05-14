@@ -7,7 +7,7 @@ repos:
       - id: end-of-file-fixer
       - id: trailing-whitespace
       - id: detect-private-key
-        exclude: "internal/layers/secrets_test\\.go$|internal/security/scanner_test\\.go$|tests/.*test_.*\\.py$"
+        exclude: "internal/layers/secrets_test\\.go$|internal/security/scanner_test\\.go$|internal/dispatch/gcf/provisioner_test\\.go$|tests/.*test_.*\\.py$"
       - id: check-added-large-files
         args: ["--maxkb=1000"]
       - id: check-merge-conflict
@@ -73,8 +73,9 @@ repos:
 
       - id: lint-adr-frontmatter
         name: lint ADR frontmatter
-        entry: uv run --script ./hack/lint-adr-frontmatter
-        language: system
+        entry: ./hack/lint-adr-frontmatter
+        language: python
+        additional_dependencies: ["pyyaml>=6.0"]
         files: ^docs/ADRs/.*\.md$
         pass_filenames: false
 
@@ -84,3 +85,17 @@ repos:
         language: script
         pass_filenames: false
         always_run: true
+
+      - id: lint-md-links
+        name: lint markdown links
+        entry: lychee --offline --no-progress --include-fragments --exclude-path node_modules --exclude-path experiments '**/*.md'
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: lint-workflow-size
+        name: lint workflow file size
+        entry: ./hack/lint-workflow-size
+        language: script
+        files: ^internal/scaffold/fullsend-repo/(\.github/workflows/|templates/)
+        pass_filenames: false

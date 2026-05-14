@@ -3,8 +3,8 @@ name: Filing GitHub Issues
 description: >
   File well-crafted GitHub issues. Use when the user wants to report a bug,
   request a feature, propose a change, or file any GitHub issue. Searches for
-  duplicates, asks clarifying questions, applies labels, and creates the issue
-  using the gh CLI.
+  duplicates, asks clarifying questions, and creates the issue using the
+  gh CLI.
 ---
 
 # Filing GitHub Issues
@@ -47,17 +47,7 @@ phrasing.
   reference them, or whether to proceed with a new issue.
 - Do not file a duplicate without the user's explicit go-ahead.
 
-### 3. Discover available labels
-
-Fetch the repository's labels:
-
-```bash
-gh label list --repo <owner/name>
-```
-
-Hold onto this list. You will use it in step 6.
-
-### 4. Ask clarifying questions
+### 3. Ask clarifying questions
 
 Think divergently about what this issue needs before you write it. Consider
 the problem from multiple angles:
@@ -84,7 +74,7 @@ reader would need. Then ask your clarifying questions:
 
 Wait for the user's answers before proceeding.
 
-### 5. Write the issue
+### 4. Write the issue
 
 Draft the issue title and body.
 
@@ -114,21 +104,7 @@ that convention. Avoid vague words like "issue with" or "problem in."
 
 Present the draft to the user. Wait for approval or edits before filing.
 
-### 6. Apply labels
-
-Review the labels you fetched in step 3. Select any that fit the issue. Match
-conservatively — a label should clearly apply, not just vaguely relate.
-
-Common label categories to look for:
-
-- **Area/component:** labels that name subsystems or modules
-- **Priority/severity:** critical, high, low
-- **Status:** triage, needs-info, good-first-issue
-
-Present your label choices to the user alongside the draft. If the repo has no
-labels or none fit, skip labeling.
-
-### 7. File the issue
+### 5. File the issue
 
 After the user approves the draft:
 
@@ -138,14 +114,42 @@ gh issue create --repo <owner/name> \
   --body "$(cat <<'EOF'
 <body>
 EOF
-)" \
-  --label "<label1>,<label2>"
+)"
 ```
 
-Omit `--label` if no labels apply or if you lack permission to set them (the
-`gh` CLI will error; do not retry — file without labels and tell the user).
-
 Return the issue URL to the user.
+
+#### Sub-issues (parent / child in GitHub)
+
+When the user wants a **child issue under a parent** (epic, breakdown, hierarchy),
+GitHub’s **sub-issue relationship is not created by the issue body**. Text like
+“Part of #N” or cross-links is optional for readers only; the graph stays flat
+without an API call.
+
+After creating the parent and child (parent first, then child), link them with
+the **REST sub-issues API**:
+
+1. Resolve the child’s **database `id`** (integer), which is **not** the issue
+   `number`, and assign it (example: `CHILD_ID=$(gh api ... --jq .id)`):
+   ```bash
+   CHILD_ID=$(gh api repos/<owner>/<name>/issues/<child_number> --jq .id)
+   ```
+2. Attach the child to the parent:
+   ```bash
+   echo "{\"sub_issue_id\": $CHILD_ID}" | gh api repos/<owner>/<name>/issues/<parent_number>/sub_issues \
+     --method POST --input -
+   ```
+   Use `"replace_parent": true` in the JSON body only when moving a child that
+   already has a parent.
+3. Confirm:
+   ```bash
+   gh api repos/<owner>/<name>/issues/<child_number>/parent
+   ```
+
+**GraphQL (alternative):** `addSubIssue` with parent and child node IDs, or
+`createIssue` with `parentIssueId` when the child is created in the same step.
+
+Do this **after** each `gh issue create` succeeds; then return all issue URLs.
 
 ## Constraints
 
@@ -155,3 +159,5 @@ Return the issue URL to the user.
   numbers, error messages, or reproduction steps.
 - **Respect the repo's conventions.** If existing issues use a template or
   follow a pattern, match it. Check `.github/ISSUE_TEMPLATE/` if it exists.
+- **Sub-issues:** If there is a parent/child hierarchy, use GitHub’s sub-issue
+  API after creation; do not rely on body mentions alone.
