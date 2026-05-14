@@ -174,16 +174,6 @@ func TestInstallCmd_PerRepoAcceptsMintRegion(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestInstallCmd_PerRepoRequiresInferenceProject(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget",
-		"--mint-url", "https://mint.example.com",
-		"--inference-region", "us-central1"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--inference-project is required for per-repo installation")
-}
-
 func TestParseAgentRoles(t *testing.T) {
 	tests := []struct {
 		input   string

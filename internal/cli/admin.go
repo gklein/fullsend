@@ -532,6 +532,7 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 		if exists {
 			continue
 		}
+		copied := false
 		for _, key := range sortedKeys {
 			parts := strings.SplitN(key, "/", 2)
 			if len(parts) != 2 || parts[1] != role || parts[0] == owner {
@@ -543,7 +544,11 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 				return fmt.Errorf("copying shared PEM for %s: %w", role, err)
 			}
 			printer.StepDone(fmt.Sprintf("Copied shared %s PEM", role))
+			copied = true
 			break
+		}
+		if !copied {
+			printer.StepWarn(fmt.Sprintf("No shared PEM source found for %s — manual PEM setup required", role))
 		}
 	}
 
@@ -822,7 +827,14 @@ func resolveSharedRoleAppIDs(ctx context.Context, client forge.Client, existingI
 			continue
 		}
 		// Otherwise, find a shared app from another org.
-		for key, appID := range existingIDs {
+		// Sort keys for deterministic selection when multiple orgs share the role.
+		sortedExisting := make([]string, 0, len(existingIDs))
+		for k := range existingIDs {
+			sortedExisting = append(sortedExisting, k)
+		}
+		sort.Strings(sortedExisting)
+		for _, key := range sortedExisting {
+			appID := existingIDs[key]
 			parts := strings.SplitN(key, "/", 2)
 			if len(parts) != 2 || parts[1] != role || parts[0] == owner {
 				continue

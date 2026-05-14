@@ -262,7 +262,7 @@ func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, o
 	allowedOrgs := fn.EnvVars["ALLOWED_ORGS"]
 	orgPresent := false
 	for _, o := range strings.Split(allowedOrgs, ",") {
-		if strings.TrimSpace(o) == org {
+		if strings.EqualFold(strings.TrimSpace(o), org) {
 			orgPresent = true
 			break
 		}
@@ -303,7 +303,10 @@ func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, o
 	updated["ALLOWED_ORGS"] = desired["ALLOWED_ORGS"]
 
 	// Build desired ROLE_APP_IDS including the new entries.
-	newRoleAppIDs, _ := json.Marshal(roleAppIDs)
+	newRoleAppIDs, err := json.Marshal(roleAppIDs)
+	if err != nil {
+		return fmt.Errorf("marshaling role app IDs: %w", err)
+	}
 	desired["ROLE_APP_IDS"] = string(newRoleAppIDs)
 	mergeRoleAppIDs(updated, desired)
 	updated["ROLE_APP_IDS"] = desired["ROLE_APP_IDS"]
