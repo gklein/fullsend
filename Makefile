@@ -111,6 +111,7 @@ script-test:
 	bash internal/scaffold/fullsend-repo/scripts/post-review-test.sh
 	bash internal/scaffold/fullsend-repo/scripts/reconcile-repos-test.sh
 	bash internal/scaffold/fullsend-repo/scripts/validate-output-schema-test.sh
+	bash internal/scaffold/fullsend-repo/scripts/pre-code-test.sh
 	python3 internal/scaffold/fullsend-repo/scripts/process-fix-result-test.py
 
 test: lint go-vet go-test script-test
