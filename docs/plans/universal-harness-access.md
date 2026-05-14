@@ -87,16 +87,6 @@ pre_script: scripts/pre-code.sh  # scripts must be local (security)
 **Trade-off:** This means the `.fullsend` repository will still contain local copies of pre/post scripts, validation scripts, and other executable resources. For organizations with many scripts, updates to upstream scripts will still produce "wall of text" diffs when the local copies are updated.
 
 **Mitigations:**
-- **Minimal wrapper pattern (future capability):** Local scripts could be thin wrappers that download and verify a URL-sourced script at runtime, then execute it in a restricted sandbox. The wrapper is small and rarely changes; the actual script logic lives at a URL. Example:
-  ```bash
-  #!/bin/bash
-  # pre-code-wrapper.sh (local, version-controlled)
-  fullsend fetch-and-run \
-    --url https://github.com/fullsend-ai/scripts/pre-code.sh \
-    --sha256 abc123... \
-    --sandbox restricted
-  ```
-  **Important:** This pattern requires an in-sandbox execution mechanism (something like `pre_commands`/`post_commands` in the harness schema that run inside the sandbox before/after the agent's main execution). Today, `pre_script` and `post_script` run outside the sandbox, so there's no enforcement point to guarantee the wrapper runs in a restricted context. Without in-sandbox execution, this pattern has the same blast radius as allowing URL-sourced scripts directly — the wrapper is local and auditable, but the actual script logic is remote. This pattern should either be scoped to future in-sandbox execution work or removed until that capability exists.
 - **Vendoring with lock files:** Use a lock file (similar to `package-lock.json`) to pin script URLs and hashes. A `fullsend vendor` command updates local copies and the lock file. Diffs show only the lock file changes (URL and hash updates) rather than the full script content.
 - **Future:** If URL-sourced scripts are permitted in the future, they would run in a heavily restricted sandbox with no access to secrets, no network access, and no filesystem writes outside `/tmp`. This shifts the security boundary from "local = trusted" to "sandboxed = constrained regardless of source."
 
@@ -563,7 +553,9 @@ func IsURL(s string) bool {
     }
     // Reject malformed URLs that url.Parse accepts but shouldn't be allowed:
     // - Empty host (https:, https://, https:///path)
-    // - Userinfo (https://user:pass@host/ - credentials in URL)
+    // - Userinfo (e.g., https://user:pass@host/ - credentials in URL)
+    // Note: url.Parse sets u.User for standard userinfo forms, though not all edge cases.
+    // Implementations should consider additional validation if strict userinfo rejection is required.
     if u.Host == "" || u.User != nil {
         return false
     }
