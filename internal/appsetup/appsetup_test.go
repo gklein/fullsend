@@ -72,6 +72,45 @@ func TestAppSlug(t *testing.T) {
 	assert.Equal(t, "fullsend-review", AppSlug("fullsend", "review"))
 }
 
+func TestValidateAppSet(t *testing.T) {
+	assert.NoError(t, ValidateAppSet("fullsend-ai"))
+	assert.NoError(t, ValidateAppSet("custom"))
+	assert.NoError(t, ValidateAppSet("my-org-apps"))
+	assert.Error(t, ValidateAppSet(""))
+	assert.Error(t, ValidateAppSet("-leading"))
+	assert.Error(t, ValidateAppSet("trailing-"))
+	assert.Error(t, ValidateAppSet("has spaces"))
+	assert.Error(t, ValidateAppSet("UPPERCASE"))
+	assert.Error(t, ValidateAppSet("special!chars"))
+}
+
+func TestSetup_NonDefaultAppSet_FlowsThrough(t *testing.T) {
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{
+			{ID: 200, AppID: 20, AppSlug: "custom-prefix-fullsend"},
+		},
+		AppClientIDs: map[string]string{
+			"custom-prefix-fullsend": "Iv1.custom123",
+		},
+	}
+	prompter := &fakePrompter{}
+	browser := newFakeBrowser()
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, prompter, browser, printer).
+		WithAppSet("custom-prefix").
+		WithSecretExists(func(_ string) (bool, error) {
+			return true, nil
+		})
+
+	creds, err := s.Run(context.Background(), "myorg", "fullsend")
+	require.NoError(t, err)
+
+	assert.Equal(t, 20, creds.AppID)
+	assert.Equal(t, "custom-prefix-fullsend", creds.Slug)
+	assert.Equal(t, "Iv1.custom123", creds.ClientID)
+}
+
 func TestSetup_ExistingApp_SecretExists_AutoReuse(t *testing.T) {
 	client := &forge.FakeClient{
 		Installations: []forge.Installation{

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -169,8 +170,26 @@ func (s *Setup) WithPublicApps(public bool) *Setup {
 	return s
 }
 
+// validAppSet matches lowercase alphanumeric strings with optional hyphens,
+// not starting or ending with a hyphen.
+var validAppSet = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// ValidateAppSet checks that an app set prefix is non-empty and contains only
+// lowercase alphanumeric characters and hyphens (no leading/trailing hyphens).
+func ValidateAppSet(appSet string) error {
+	if appSet == "" {
+		return fmt.Errorf("app set prefix must not be empty")
+	}
+	if !validAppSet.MatchString(appSet) {
+		return fmt.Errorf("app set prefix %q must contain only lowercase alphanumeric characters and hyphens", appSet)
+	}
+	return nil
+}
+
 // WithAppSet sets the app set prefix for GitHub App naming.
 // Apps are named "{appSet}-{role}" (e.g., "fullsend-ai-coder").
+// The appSet must be non-empty and contain only lowercase alphanumeric
+// characters and hyphens.
 func (s *Setup) WithAppSet(appSet string) *Setup {
 	s.appSet = appSet
 	return s

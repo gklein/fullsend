@@ -227,6 +227,10 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
   configuration directory. No config repo or cross-repo dispatch needed.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := appsetup.ValidateAppSet(appSet); err != nil {
+				return fmt.Errorf("invalid --app-set value: %w", err)
+			}
+
 			arg := args[0]
 			if strings.Contains(arg, "/") {
 				for _, name := range perOrgOnlyFlags {
@@ -967,6 +971,7 @@ func vendorFullsendBinary(ctx context.Context, client forge.Client, printer *ui.
 
 func newUninstallCmd() *cobra.Command {
 	var yolo bool
+	var appSet string
 
 	cmd := &cobra.Command{
 		Use:   "uninstall <org>",
@@ -977,6 +982,10 @@ func newUninstallCmd() *cobra.Command {
 			org := args[0]
 			if err := validateOrgName(org); err != nil {
 				return err
+			}
+
+			if err := appsetup.ValidateAppSet(appSet); err != nil {
+				return fmt.Errorf("invalid --app-set value: %w", err)
 			}
 
 			token, err := resolveToken()
@@ -1005,11 +1014,12 @@ func newUninstallCmd() *cobra.Command {
 				}
 			}
 
-			return runUninstall(ctx, client, printer, org)
+			return runUninstall(ctx, client, printer, org, appSet)
 		},
 	}
 
 	cmd.Flags().BoolVar(&yolo, "yolo", false, "skip confirmation prompt")
+	cmd.Flags().StringVar(&appSet, "app-set", appsetup.DefaultAppSet, "app set name prefix for GitHub Apps (must match the value used during install)")
 
 	return cmd
 }
@@ -1493,7 +1503,7 @@ func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, o
 }
 
 // runUninstall tears down the fullsend installation.
-func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer, org string) error {
+func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer, org, appSet string) error {
 	// Try to load agent slugs from existing config. If the .fullsend repo
 	// is already gone (e.g., previous partial uninstall), fall back to the
 	// default naming convention so we can still guide the user to delete
@@ -1515,7 +1525,7 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 	if len(agentSlugs) == 0 {
 		// Config unavailable — assume default app naming convention.
 		for _, role := range config.DefaultAgentRoles() {
-			agentSlugs = append(agentSlugs, appsetup.AppSlug(appsetup.DefaultAppSet, role))
+			agentSlugs = append(agentSlugs, appsetup.AppSlug(appSet, role))
 		}
 		if err != nil {
 			printer.StepInfo("Config repo unavailable; using default app names")
