@@ -245,20 +245,23 @@ fullsend admin install <org>            # per-org installation
 fullsend admin install <owner/repo>     # per-repo installation
 ```
 
-Per-repo flags (only valid with `owner/repo` argument):
-- `--mint-url` — token mint URL for OIDC token exchange (required)
+Per-repo flags:
 - `--inference-project` — GCP project for Vertex AI inference (required)
 - `--inference-region` — GCP region for Vertex AI inference (default: `global`)
 - `--inference-wif-provider` — pre-existing WIF provider (auto-provisioned if omitted)
-- `--scaffold-customized` — create `.fullsend/customized/` directory structure
 
-Per-org-only flags (`--mint-region`, `--public`, `--enroll-all`, `--enroll-none`, `--skip-app-setup`, `--vendor-fullsend-binary`, etc.) are rejected when an `owner/repo` argument is given. `--mint-project` is accepted in both modes (defaults to `--inference-project` in per-repo).
+Shared flags (valid for both per-org and per-repo):
+- `--mint-url` — token mint URL for OIDC token exchange (optional; auto-discovered from `--mint-project`/`--mint-region` if omitted)
+- `--mint-project` — GCP project containing the mint function (defaults to `--inference-project` in per-repo)
+- `--mint-region` — cloud region for the mint function (default: `us-central1`)
+
+Per-org-only flags (`--public`, `--enroll-all`, `--enroll-none`, `--skip-app-setup`, `--vendor-fullsend-binary`, `--skip-mint-deploy`, etc.) are rejected when an `owner/repo` argument is given.
 
 **Per-repo install steps**:
 
 1. Generates `.github/workflows/fullsend.yml` from the per-repo shim template.
 2. Generates `.fullsend/config.yaml` with agent roles and kill switch.
-3. Optionally creates `.fullsend/customized/` directory structure (`--scaffold-customized`).
+3. Creates `.fullsend/customized/` directory structure (agents, skills, schemas, harness, policies, scripts, env).
 4. Commits all scaffold files to the target repo via the GitHub API.
 5. Sets repository variables (`FULLSEND_MINT_URL`, `FULLSEND_GCP_REGION`, `FULLSEND_PER_REPO_INSTALL`).
 6. Sets repository secrets (`FULLSEND_GCP_PROJECT_ID`, WIF credentials).
