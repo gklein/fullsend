@@ -1254,3 +1254,44 @@ func TestResolveSharedRoleAppIDs_SameOrgUsesOwnEntry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "100", result["acme-corp/coder"])
 }
+
+func TestInstallCmd_SkipMintCheckRequiresMintURL(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--skip-mint-check", "--inference-project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--mint-url is required when using --skip-mint-check")
+}
+
+func TestInstallCmd_SkipMintCheckAcceptsNonCloudRunURL(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--skip-mint-check",
+		"--mint-url", "https://mint.example.com/v1/token",
+		"--inference-project", "my-project",
+		"--dry-run"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
+func TestInstallCmd_SkipMintCheckSkipsMintProject(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--skip-mint-check",
+		"--mint-url", "https://mint.example.com/v1/token",
+		"--inference-project", "my-project",
+		"--dry-run"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
+func TestInstallCmd_SkipMintCheckRejectsHTTP(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--skip-mint-check",
+		"--mint-url", "http://mint.example.com",
+		"--inference-project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--mint-url must be a valid HTTPS URL")
+}

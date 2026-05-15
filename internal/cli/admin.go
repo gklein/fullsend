@@ -121,9 +121,22 @@ type perRepoInstallConfig struct {
 	MintProvider        string
 	MintSourceDir       string
 	MintSkipDeploy      bool
+	SkipMintCheck       bool
 }
 
 func validateMintURL(raw string) error {
+	if err := validateMintURLHTTPS(raw); err != nil {
+		return err
+	}
+	parsed, _ := url.Parse(raw)
+	if !strings.HasSuffix(parsed.Host, ".run.app") &&
+		!strings.HasSuffix(parsed.Host, ".cloudfunctions.net") {
+		return fmt.Errorf("--mint-url must be a Cloud Run URL (.run.app or .cloudfunctions.net), got host %q", parsed.Host)
+	}
+	return nil
+}
+
+func validateMintURLHTTPS(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		scheme := ""
@@ -131,10 +144,6 @@ func validateMintURL(raw string) error {
 			scheme = parsed.Scheme
 		}
 		return fmt.Errorf("--mint-url must be a valid HTTPS URL (got scheme=%q)", scheme)
-	}
-	if !strings.HasSuffix(parsed.Host, ".run.app") &&
-		!strings.HasSuffix(parsed.Host, ".cloudfunctions.net") {
-		return fmt.Errorf("--mint-url must be a Cloud Run URL (.run.app or .cloudfunctions.net), got host %q", parsed.Host)
 	}
 	return nil
 }
@@ -168,6 +177,7 @@ func newInstallCmd() *cobra.Command {
 	var mintRegion string
 	var mintSourceDir string
 	var mintSkipDeploy bool
+	var skipMintCheck bool
 	var publicApps bool
 	// Per-repo flags.
 	var mintURL string
@@ -216,6 +226,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 					MintProvider:        mintProvider,
 					MintSourceDir:       mintSourceDir,
 					MintSkipDeploy:      mintSkipDeploy,
+					SkipMintCheck:       skipMintCheck,
 				})
 			}
 
@@ -436,6 +447,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 	cmd.Flags().StringVar(&mintRegion, "mint-region", "us-central1", "cloud region for token mint")
 	cmd.Flags().StringVar(&mintSourceDir, "mint-source-dir", "", "path to mint function source (default: internal/mint/)")
 	cmd.Flags().BoolVar(&mintSkipDeploy, "skip-mint-deploy", false, "skip Cloud Function deployment, reuse existing mint URL")
+	cmd.Flags().BoolVar(&skipMintCheck, "skip-mint-check", false, "skip all GCP-based mint validation and app setup; trust the provided --mint-url")
 	cmd.Flags().BoolVar(&publicApps, "public", false, "create public (unlisted) GitHub Apps installable by other orgs")
 	// Shared flags.
 	cmd.Flags().StringVar(&mintURL, "mint-url", "", "token mint URL for OIDC token exchange")
@@ -458,6 +470,7 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 	mintProvider := c.MintProvider
 	mintSourceDir := c.MintSourceDir
 	mintSkipDeploy := c.MintSkipDeploy
+	skipMintCheck := c.SkipMintCheck
 
 	if strings.Contains(repoFullName, "://") || strings.HasPrefix(repoFullName, "www.") {
 		return fmt.Errorf("expected owner/repo format, got a URL — use just the owner/repo portion (e.g. acme/widget)")
@@ -474,12 +487,19 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 		return fmt.Errorf("invalid repo name %q: must contain only alphanumeric characters, hyphens, dots, or underscores", repo)
 	}
 
-	if mintURL != "" {
+	if skipMintCheck {
+		if mintURL == "" {
+			return fmt.Errorf("--mint-url is required when using --skip-mint-check")
+		}
+		if err := validateMintURLHTTPS(mintURL); err != nil {
+			return err
+		}
+	} else if mintURL != "" {
 		if err := validateMintURL(mintURL); err != nil {
 			return err
 		}
 	}
-	if mintProject == "" && mintURL == "" {
+	if mintProject == "" && mintURL == "" && !skipMintCheck {
 		return fmt.Errorf("--mint-project (or --inference-project) is required for per-repo installation")
 	}
 	if inferenceProject == "" {
@@ -561,48 +581,53 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 	var agentAppIDs map[string]string
 	var agentPEMs map[string][]byte
 
-	discoverer := gcf.NewProvisioner(gcf.Config{
-		ProjectID:  mintProject,
-		Region:     mintRegion,
-		GitHubOrgs: []string{owner},
-	}, gcf.NewLiveGCFClient())
-
 	var existingIDs map[string]string
 
-	if mintURL != "" {
+	if skipMintCheck {
 		mintFound = true
-		// Mint URL provided — still discover role IDs from the function
-		// to resolve existing apps. Skipped in dry-run to avoid requiring
-		// GCP credentials for preview-only invocations.
-		if mintProject != "" && !dryRun {
-			printer.StepStart("Resolving app IDs from mint")
+		printer.StepDone(fmt.Sprintf("Using self-provisioned mint at %s (--skip-mint-check)", mintURL))
+	} else {
+		discoverer := gcf.NewProvisioner(gcf.Config{
+			ProjectID:  mintProject,
+			Region:     mintRegion,
+			GitHubOrgs: []string{owner},
+		}, gcf.NewLiveGCFClient())
+
+		if mintURL != "" {
+			mintFound = true
+			// Mint URL provided — still discover role IDs from the function
+			// to resolve existing apps. Skipped in dry-run to avoid requiring
+			// GCP credentials for preview-only invocations.
+			if mintProject != "" && !dryRun {
+				printer.StepStart("Resolving app IDs from mint")
+				discovery, discoverErr := discoverer.DiscoverMint(ctx)
+				if discoverErr != nil {
+					if !errors.Is(discoverErr, gcf.ErrFunctionNotFound) {
+						printer.StepFail("Failed to read mint state")
+						return fmt.Errorf("reading mint state: %w", discoverErr)
+					}
+					printer.StepDone("Mint function not found in project — will discover apps from setup")
+				} else {
+					existingIDs = discovery.RoleAppIDs
+					printer.StepDone("Resolved app IDs from mint")
+				}
+			}
+		} else if mintProject != "" {
+			printer.StepStart("Discovering mint infrastructure")
 			discovery, discoverErr := discoverer.DiscoverMint(ctx)
 			if discoverErr != nil {
 				if !errors.Is(discoverErr, gcf.ErrFunctionNotFound) {
-					printer.StepFail("Failed to read mint state")
-					return fmt.Errorf("reading mint state: %w", discoverErr)
+					printer.StepFail("Mint discovery failed")
+					return fmt.Errorf("failed to discover mint in project %s region %s: %w",
+						mintProject, mintRegion, discoverErr)
 				}
-				printer.StepDone("Mint function not found in project — will discover apps from setup")
+				printer.StepDone("No existing mint found — will deploy")
 			} else {
+				mintURL = discovery.URL
+				mintFound = true
 				existingIDs = discovery.RoleAppIDs
-				printer.StepDone("Resolved app IDs from mint")
+				printer.StepDone(fmt.Sprintf("Found mint at %s", mintURL))
 			}
-		}
-	} else if mintProject != "" {
-		printer.StepStart("Discovering mint infrastructure")
-		discovery, discoverErr := discoverer.DiscoverMint(ctx)
-		if discoverErr != nil {
-			if !errors.Is(discoverErr, gcf.ErrFunctionNotFound) {
-				printer.StepFail("Mint discovery failed")
-				return fmt.Errorf("failed to discover mint in project %s region %s: %w",
-					mintProject, mintRegion, discoverErr)
-			}
-			printer.StepDone("No existing mint found — will deploy")
-		} else {
-			mintURL = discovery.URL
-			mintFound = true
-			existingIDs = discovery.RoleAppIDs
-			printer.StepDone(fmt.Sprintf("Found mint at %s", mintURL))
 		}
 	}
 
@@ -636,23 +661,31 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 		}
 		printer.StepInfo("Dry run — no changes will be made")
 		printer.Blank()
-		if !appsFound && !skipAppSetup {
-			printer.StepInfo(fmt.Sprintf("Would create GitHub Apps for roles: %s", strings.Join(roles, ", ")))
-			if publicApps {
-				printer.StepInfo("  Apps would be public (unlisted)")
+		if skipMintCheck {
+			printer.StepInfo("Mint checks skipped (--skip-mint-check):")
+			printer.StepInfo(fmt.Sprintf("  Mint URL (trusted): %s", mintURL))
+			printer.StepInfo("  App setup: skipped")
+			printer.StepInfo("  GCP mint validation: skipped")
+			printer.StepInfo("  PEM storage: skipped")
+		} else {
+			if !appsFound && !skipAppSetup {
+				printer.StepInfo(fmt.Sprintf("Would create GitHub Apps for roles: %s", strings.Join(roles, ", ")))
+				if publicApps {
+					printer.StepInfo("  Apps would be public (unlisted)")
+				}
+				printer.Blank()
 			}
-			printer.Blank()
-		}
-		if !mintFound {
-			printer.StepInfo(fmt.Sprintf("Would deploy token mint to project %s, region %s", mintProject, mintRegion))
-			printer.Blank()
-		}
-		printer.StepInfo("Mint infrastructure:")
-		printer.StepInfo(fmt.Sprintf("  Mint URL: %s", mintDisplay))
-		printer.StepInfo(fmt.Sprintf("  Mint project: %s, region: %s", mintProject, mintRegion))
-		if mintFound {
-			printer.StepInfo(fmt.Sprintf("  Would register %s in ALLOWED_ORGS", owner))
-			printer.StepInfo(fmt.Sprintf("  Would set ROLE_APP_IDS entries for %s/{%s}", owner, strings.Join(roles, ",")))
+			if !mintFound {
+				printer.StepInfo(fmt.Sprintf("Would deploy token mint to project %s, region %s", mintProject, mintRegion))
+				printer.Blank()
+			}
+			printer.StepInfo("Mint infrastructure:")
+			printer.StepInfo(fmt.Sprintf("  Mint URL: %s", mintDisplay))
+			printer.StepInfo(fmt.Sprintf("  Mint project: %s, region: %s", mintProject, mintRegion))
+			if mintFound {
+				printer.StepInfo(fmt.Sprintf("  Would register %s in ALLOWED_ORGS", owner))
+				printer.StepInfo(fmt.Sprintf("  Would set ROLE_APP_IDS entries for %s/{%s}", owner, strings.Join(roles, ",")))
+			}
 		}
 		printer.Blank()
 		if needsWIFProvision {
@@ -690,10 +723,10 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 		return err
 	}
 
-	needAppSetup := !appsFound && !skipAppSetup
-	needMintDeploy := !mintFound
+	needAppSetup := !appsFound && !skipAppSetup && !skipMintCheck
+	needMintDeploy := !mintFound && !skipMintCheck
 
-	if skipAppSetup && !appsFound {
+	if !skipMintCheck && skipAppSetup && !appsFound {
 		if !mintFound {
 			return fmt.Errorf("no mint function found in project %s region %s and --skip-app-setup prevents creating one", mintProject, mintRegion)
 		}
@@ -736,7 +769,9 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 		}
 	}
 
-	if needMintDeploy {
+	if skipMintCheck {
+		printer.StepDone(fmt.Sprintf("Skipping mint provisioning (--skip-mint-check), using %s", mintURL))
+	} else if needMintDeploy {
 		if mintProvider != "gcf" {
 			return fmt.Errorf("--mint-provider must be 'gcf' for mint deployment")
 		}
