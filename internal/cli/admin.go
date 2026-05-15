@@ -987,10 +987,6 @@ func newUninstallCmd() *cobra.Command {
 				return fmt.Errorf("invalid --app-set: %w", err)
 			}
 
-			if err := appsetup.ValidateAppSet(appSet); err != nil {
-				return fmt.Errorf("invalid --app-set value: %w", err)
-			}
-
 			token, err := resolveToken()
 			if err != nil {
 				return err
