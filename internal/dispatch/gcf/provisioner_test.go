@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1369,10 +1370,94 @@ func TestBundleFunctionSource_SkipsTestFiles(t *testing.T) {
 	assert.NotContains(t, names, ".hidden")
 }
 
-func TestBundleFunctionSource_EmptyPath(t *testing.T) {
-	_, err := bundleFunctionSource("")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "function source directory not configured")
+func TestBundleFunctionSource_EmptyPath_UsesEmbedded(t *testing.T) {
+	data, err := bundleFunctionSource("")
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	assert.Contains(t, names, "go.mod")
+	assert.Contains(t, names, "main.go")
+	assert.Contains(t, names, "go.sum")
+	assert.NotContains(t, names, "main_test.go")
+}
+
+func TestBundleFunctionSource_NonexistentDir_UsesEmbedded(t *testing.T) {
+	data, err := bundleFunctionSource("/nonexistent/path/to/mint")
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	assert.Contains(t, names, "go.mod")
+	assert.Contains(t, names, "go.sum")
+	assert.Contains(t, names, "main.go")
+}
+
+func TestBundleEmbeddedMintSource(t *testing.T) {
+	data, err := bundleEmbeddedMintSource()
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	assert.Contains(t, names, "go.mod")
+	assert.Contains(t, names, "go.sum")
+	assert.Contains(t, names, "main.go")
+	assert.Len(t, names, 3)
+}
+
+func TestEmbeddedMintSource_MatchesOriginal(t *testing.T) {
+	// origDir is internal/mint/ relative to this test's package (internal/dispatch/gcf/).
+	origDir := filepath.Join("..", "..", "mint")
+	entries, err := os.ReadDir(origDir)
+	if os.IsNotExist(err) {
+		t.Skipf("original mint source not available at %s (running outside repo)", origDir)
+	}
+	require.NoError(t, err, "reading original mint dir")
+
+	// Check that every embedded file matches its original.
+	for embeddedName, realName := range embeddedMintFiles {
+		orig, err := os.ReadFile(filepath.Join(origDir, realName))
+		require.NoError(t, err, "reading original %s", realName)
+
+		embedded, err := embeddedMintSource.ReadFile("mintsrc/" + embeddedName)
+		require.NoError(t, err, "reading embedded %s", embeddedName)
+
+		assert.Equal(t, string(orig), string(embedded),
+			"mintsrc/%s is out of sync with internal/mint/%s — copy to internal/dispatch/gcf/mintsrc/%s to update",
+			embeddedName, realName, embeddedName)
+	}
+
+	// Check that no deployable files in internal/mint/ are missing from the embed map.
+	knownReals := make(map[string]bool)
+	for _, realName := range embeddedMintFiles {
+		knownReals[realName] = true
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		if !knownReals[entry.Name()] {
+			t.Errorf("internal/mint/%s exists but is not in embeddedMintFiles — add it to mintsrc/ with .embed suffix", entry.Name())
+		}
+	}
 }
 
 // --- multi-org tests ---

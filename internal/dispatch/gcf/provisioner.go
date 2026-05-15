@@ -9,10 +9,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -38,6 +40,18 @@ const (
 
 // ErrFunctionNotFound is returned when the mint function does not exist.
 var ErrFunctionNotFound = errors.New("mint function not found")
+
+//go:embed mintsrc/go.mod.embed mintsrc/go.sum.embed mintsrc/main.go.embed
+var embeddedMintSource embed.FS
+
+// embeddedMintFiles maps embedded filenames (.embed suffix avoids
+// triggering Go's module boundary detection) to their real names for the
+// Cloud Function deployment zip.
+var embeddedMintFiles = map[string]string{
+	"go.mod.embed":  "go.mod",
+	"go.sum.embed":  "go.sum",
+	"main.go.embed": "main.go",
+}
 
 // Compile-time check that Provisioner implements dispatch.Dispatcher.
 var _ dispatch.Dispatcher = (*Provisioner)(nil)
@@ -1217,18 +1231,25 @@ func sortedByteMapKeys(m map[string][]byte) []string {
 }
 
 // bundleFunctionSource creates a zip archive from the function source directory.
+// When the directory is empty or does not exist on disk, it falls back to the
+// source embedded in the binary at build time.
 func bundleFunctionSource(dir string) ([]byte, error) {
 	if dir == "" {
-		return nil, fmt.Errorf("function source directory not configured")
+		return bundleEmbeddedMintSource()
 	}
-
-	var buf bytes.Buffer
-	w := zip.NewWriter(&buf)
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return bundleEmbeddedMintSource()
+		}
 		return nil, fmt.Errorf("reading function source dir: %w", err)
 	}
+
+	log.Printf("Using local mint source from %s (not the embedded version)", dir)
+
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
 
 	var fileCount int
 	var hasGoMod bool
@@ -1261,6 +1282,41 @@ func bundleFunctionSource(dir string) ([]byte, error) {
 	}
 	if !hasGoMod {
 		return nil, fmt.Errorf("function source directory %s is missing go.mod", dir)
+	}
+
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("closing zip: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// bundleEmbeddedMintSource creates a zip archive from the mint source files
+// embedded in the binary. Files use a .embed suffix to prevent the Go
+// toolchain from treating the directory as a module root, and are renamed
+// to their real names in the zip.
+func bundleEmbeddedMintSource() ([]byte, error) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+
+	keys := make([]string, 0, len(embeddedMintFiles))
+	for k := range embeddedMintFiles {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, embeddedName := range keys {
+		realName := embeddedMintFiles[embeddedName]
+		data, err := embeddedMintSource.ReadFile("mintsrc/" + embeddedName)
+		if err != nil {
+			return nil, fmt.Errorf("reading embedded file %s: %w", embeddedName, err)
+		}
+		f, err := w.Create(realName)
+		if err != nil {
+			return nil, fmt.Errorf("creating zip entry %s: %w", realName, err)
+		}
+		if _, err := f.Write(data); err != nil {
+			return nil, fmt.Errorf("writing zip entry %s: %w", realName, err)
+		}
 	}
 
 	if err := w.Close(); err != nil {

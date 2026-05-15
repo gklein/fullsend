@@ -9,9 +9,9 @@ This guide walks through installing fullsend in a GitHub organization and enroll
 
   > **Note on scope breadth:** `gh auth` scopes apply to *every* organization your account belongs to — GitHub does not support per-org scoping for classic OAuth tokens. If that is a concern, create a [fine-grained personal access token](https://github.com/settings/tokens?type=beta) scoped to the target organization and export it as `GH_TOKEN` before running the installer.
 
-- **fullsend CLI** — download the latest binary from [GitHub Releases](https://github.com/fullsend-ai/fullsend/releases)
+- **fullsend CLI** — download the latest binary from [GitHub Releases](https://github.com/fullsend-ai/fullsend/releases). The binary includes an embedded copy of the mint Cloud Function source, so it works standalone without needing the repository checked out.
 
-  *Note*: If running from a local clone of the repository use `go run ./cmd/fullsend/main.go <command>`
+  *Note*: If running from a local clone of the repository, the CLI uses the local `internal/mint/` source instead of the embedded copy (a log message confirms this). This lets developers iterate on the mint source without rebuilding the binary. Use `go run ./cmd/fullsend/main.go <command>` to run from source.
 
 - **GCP project** with the following APIs enabled:
   - [Agent Platform](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) (inference)
@@ -71,7 +71,7 @@ The installer automatically provisions [Workload Identity Federation (WIF)](http
 | `--mint-region` | `us-central1` | Cloud region for the token mint function |
 | `--mint-url` | | Use an existing mint at this URL instead of deploying one |
 | `--mint-provider` | `gcf` | Token mint provider backend |
-| `--mint-source-dir` | `internal/mint/` | Path to mint function source directory |
+| `--mint-source-dir` | `internal/mint/` | Path to mint function source directory. When the path does not exist (e.g., running from a downloaded binary), the embedded source baked into the binary is used automatically |
 | `--public` | `false` | Create public unlisted GitHub Apps (for multi-org) |
 | `--app-set` | `fullsend` | App set name prefix for GitHub Apps (see [Custom app sets](#custom-app-sets)) |
 | `--skip-app-setup` | `false` | Skip GitHub App creation (reuse existing apps) |
@@ -83,7 +83,7 @@ The installer automatically provisions [Workload Identity Federation (WIF)](http
 
 The `--skip-mint-check` flag bypasses all mint validation, GCP provisioning, and app setup. It requires `--mint-url` to be set and only validates that the URL uses HTTPS. This is useful when the mint infrastructure is managed externally or you want to skip GCP API calls entirely.
 
-The installer automatically detects when the deployed mint function is up-to-date (same source hash) and skips code redeployment, only updating WIF infrastructure, org registration, and PEM secrets. Use `--skip-mint-deploy` when running from a machine without the function source code.
+The installer automatically detects when the deployed mint function is up-to-date (same source hash) and skips code redeployment, only updating WIF infrastructure, org registration, and PEM secrets. Use `--skip-mint-deploy` to explicitly skip the Cloud Function deployment step.
 
 > **Mint URL stability:** The mint URL is stable across redeploys within the same project and region — updating the Cloud Function does not change its URL. Adding a new org to an existing mint only updates env vars (`ROLE_APP_IDS`, `ALLOWED_ORGS`) without redeploying the function. Existing enrolled repos continue working with no changes. However, deploying to a **different region** (e.g., changing `--mint-region` from `us-central1` to `us-east5`) creates a new Cloud Run service with a different URL. All enrolled repos store the mint URL in a repo variable (`FULLSEND_MINT_URL`) or org variable, so changing the region requires updating every enrolled repo's variable to the new URL. Avoid changing `--mint-region` after initial deployment unless you plan to update all consumers.
 
