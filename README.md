@@ -40,6 +40,11 @@ This is not a product spec. It's an evolving exploration of a hard problem space
   - [Cross-Run Memory](docs/problems/cross-run-memory.md) — How agents learn from prior run outcomes without violating the ephemeral sandbox invariant
 - **[docs/problems/applied/](docs/problems/applied/)** — Organization-specific considerations for downstream consumers:
   - [konflux-ci](docs/problems/applied/konflux-ci/) — Kubernetes-native CI/CD platform (the original proving ground)
+- **[docs/plans/](docs/plans/)** — Implementation plans for accepted or in-progress designs:
+  - [Universal Harness Access](docs/plans/universal-harness-access.md) — Making harnesses and agents universally accessible via URLs and paths, enabling community sharing and composability
+  - [Agent Execution Environment](docs/plans/agent-execution-environment.md) — Sandbox and runtime environment for agent execution
+  - [Vertex AI Inference Provisioning](docs/plans/vertex-inference-provisioning.md) — Provisioning and configuration for Vertex AI inference endpoints
+  - [ADR-0046 Drift Scanner](docs/plans/2026-03-06-adr46-drift-scanner.md) — Implementation plan for ADR-0046 drift detection tool
 - **[docs/guides/](docs/guides/)** — Practical how-to documentation for administrators and developers (see [ADR 0023](docs/ADRs/0023-user-documentation-structure.md))
 - **[docs/ADRs/](docs/ADRs/)** — Architecture Decision Records for crystallizing specific decisions (see [ADR 0001](docs/ADRs/0001-use-adrs-for-decision-making.md))
 - **[web/](web/)** — Browser-delivered assets for the public site (document graph today; future Vite app here). Cloudflare Worker config lives in [`cloudflare_site/`](cloudflare_site/) ([ADR 0019](docs/ADRs/0019-web-source-and-cloudflare-site-layout.md)).
