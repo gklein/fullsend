@@ -242,8 +242,7 @@ jobs:
           fi
           STAGE_ROLE="$STAGE"
           case "$STAGE" in
-            code) STAGE_ROLE="coder" ;;
-            retro|prioritize) STAGE_ROLE="fullsend" ;;
+            code|fix) STAGE_ROLE="coder" ;;
           esac
           ROLES=$(yq '.roles[]' .fullsend/config.yaml 2>/dev/null || echo "")
           if [[ -n "$ROLES" ]] && ! echo "$ROLES" | grep -Fqx "$STAGE_ROLE"; then

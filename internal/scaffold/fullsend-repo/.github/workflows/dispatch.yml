@@ -256,8 +256,7 @@ jobs:
           set -euo pipefail
           STAGE_ROLE="$STAGE"
           case "$STAGE" in
-            code) STAGE_ROLE="coder" ;;
-            retro|prioritize) STAGE_ROLE="fullsend" ;;
+            code|fix) STAGE_ROLE="coder" ;;
           esac
 
           ROLES=$(yq '.defaults.roles[]' config.yaml 2>/dev/null || echo "")
