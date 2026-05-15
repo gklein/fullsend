@@ -146,14 +146,6 @@ func TestInstallCmd_PerRepoRejectsNonHTTPSMintURL(t *testing.T) {
 	assert.Contains(t, err.Error(), "--mint-url must be a valid HTTPS URL")
 }
 
-func TestInstallCmd_PerOrgRejectsPerRepoFlags(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme", "--scaffold-customized"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--scaffold-customized is only valid for per-repo installation")
-}
-
 func TestInstallCmd_PerRepoRejectsPerOrgFlags(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com", "--inference-project", "my-project", "--mint-provider", "gcf"})

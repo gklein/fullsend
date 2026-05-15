@@ -108,9 +108,7 @@ var perOrgOnlyFlags = []string{
 }
 
 // perRepoOnlyFlags are flags that only apply to per-repo mode.
-var perRepoOnlyFlags = []string{
-	"scaffold-customized",
-}
+var perRepoOnlyFlags []string
 
 // parseAgentRoles splits a comma-separated agents string into a validated role list.
 func parseAgentRoles(agents string) ([]string, error) {
@@ -399,7 +397,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 	cmd.Flags().BoolVar(&publicApps, "public", false, "create public (unlisted) GitHub Apps installable by other orgs")
 	// Per-repo flags.
 	cmd.Flags().StringVar(&mintURL, "mint-url", "", "token mint URL for OIDC token exchange (per-repo mode)")
-	cmd.Flags().BoolVar(&scaffoldCustomized, "scaffold-customized", false, "create .fullsend/customized/ directory structure (per-repo mode)")
+	cmd.Flags().BoolVar(&scaffoldCustomized, "scaffold-customized", false, "create .fullsend/customized/ directory structure for agent runtime")
 
 	return cmd
 }
