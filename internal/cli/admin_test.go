@@ -106,12 +106,12 @@ func TestInstallCmd_Flags(t *testing.T) {
 	assert.Equal(t, "false", scaffoldCustomizedFlag.DefValue)
 }
 
-func TestInstallCmd_PerRepoRequiresMintURL(t *testing.T) {
+func TestInstallCmd_PerRepoRequiresMintURLOrProject(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "acme/widget"})
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--mint-url is required for per-repo installation")
+	assert.Contains(t, err.Error(), "--mint-url or --mint-project")
 }
 
 func TestInstallCmd_PerRepoRequiresInferenceProject(t *testing.T) {
@@ -148,10 +148,10 @@ func TestInstallCmd_PerRepoRejectsNonHTTPSMintURL(t *testing.T) {
 
 func TestInstallCmd_PerOrgRejectsPerRepoFlags(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme", "--mint-url", "https://mint.example.com"})
+	cmd.SetArgs([]string{"admin", "install", "acme", "--scaffold-customized"})
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--mint-url is only valid for per-repo installation")
+	assert.Contains(t, err.Error(), "--scaffold-customized is only valid for per-repo installation")
 }
 
 func TestInstallCmd_PerRepoRejectsPerOrgFlags(t *testing.T) {

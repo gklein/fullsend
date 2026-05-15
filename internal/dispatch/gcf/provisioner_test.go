@@ -382,6 +382,7 @@ func TestProvisioner_Provision_FullFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	expected := []string{
+		"GetFunction", // auto-routing check (no existing function → full deploy)
 		"GetProjectNumber",
 		"CreateServiceAccount",
 		"CreateWIFPool",
@@ -392,7 +393,6 @@ func TestProvisioner_Provision_FullFlow(t *testing.T) {
 		"CreateSecret",
 		"AddSecretVersion",
 		"SetSecretIAMBinding",
-		"GetFunction",
 		"UploadFunctionSource",
 		"CreateFunction",
 		"WaitForOperation",
@@ -536,7 +536,7 @@ func TestProvisioner_Provision_SkipsRedeployWhenUnchanged(t *testing.T) {
 	assert.Equal(t, "https://fullsend-mint-abc123.run.app", vars["FULLSEND_MINT_URL"])
 }
 
-func TestProvisioner_Provision_ForceDeployAlwaysDeploys(t *testing.T) {
+func TestProvisioner_Provision_SameHashAutoRoutesToExistingMint(t *testing.T) {
 	srcDir := fakeFunctionSourceDir(t)
 	sourceZip, err := bundleFunctionSource(srcDir)
 	require.NoError(t, err)
@@ -566,15 +566,17 @@ func TestProvisioner_Provision_ForceDeployAlwaysDeploys(t *testing.T) {
 		AgentPEMs:         singleRolePEMs(),
 		AgentAppIDs:       singleRoleAppIDs(),
 		FunctionSourceDir: srcDir,
-		DeployMode:        DeployForce,
 	}, fake)
 
 	vars, err := p.Provision(context.Background())
 	require.NoError(t, err)
 
-	assert.Contains(t, fake.calls, "UploadFunctionSource")
-	assert.Contains(t, fake.calls, "UpdateFunction")
-	assert.Contains(t, fake.calls, "WaitForOperation")
+	// Same hash → auto-routed to provisionWithExistingMint, skipping full infrastructure.
+	assert.NotContains(t, fake.calls, "UploadFunctionSource")
+	assert.NotContains(t, fake.calls, "CreateFunction")
+	assert.NotContains(t, fake.calls, "UpdateFunction")
+	assert.NotContains(t, fake.calls, "GetProjectNumber")
+	assert.NotContains(t, fake.calls, "CreateServiceAccount")
 	assert.Equal(t, "https://fullsend-mint-abc123.run.app", vars["FULLSEND_MINT_URL"])
 }
 
@@ -772,6 +774,14 @@ func TestProvisioner_Provision_SecretNotFoundCreatesNew(t *testing.T) {
 func TestProvisioner_Provision_BundledMode(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.errs["GetSecret"] = ErrSecretNotFound
+	fake.functionInfo = &FunctionInfo{
+		Name: "projects/shared-project/locations/us-central1/functions/fullsend-mint",
+		State: "ACTIVE",
+		URI:  "https://fullsend-mint-shared.run.app",
+		EnvVars: map[string]string{
+			"ALLOWED_ORGS": "test-org",
+		},
+	}
 
 	p := newTestProvisioner(Config{
 		ProjectID: "shared-project",
@@ -949,6 +959,15 @@ func TestProvisioner_Provision_NoPEMs_APIError(t *testing.T) {
 
 func TestProvisioner_Provision_BundledMode_NoPEMs_SecretsExist(t *testing.T) {
 	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		Name:  "projects/shared-project/locations/us-central1/functions/fullsend-mint",
+		State: "ACTIVE",
+		URI:   "https://fullsend-mint-shared.run.app",
+		EnvVars: map[string]string{
+			"ALLOWED_ORGS": "test-org",
+			"ROLE_APP_IDS": `{"test-org/coder":"12345"}`,
+		},
+	}
 
 	p := newTestProvisioner(Config{
 		ProjectID:  "shared-project",
@@ -980,7 +999,7 @@ func TestProvisioner_Provision_BundledMode_NoPEMs_SecretsMissing(t *testing.T) {
 
 	_, err := p.Provision(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no PEM and secret")
+	assert.Contains(t, err.Error(), "no PEM provided and no existing PEM found to copy")
 }
 
 func TestProvisioner_Provision_BundledMode_NoPEMs_APIError(t *testing.T) {
@@ -1003,6 +1022,15 @@ func TestProvisioner_Provision_BundledMode_NoPEMs_APIError(t *testing.T) {
 
 func TestProvisioner_Provision_BundledMode_PartialPEMs(t *testing.T) {
 	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		Name:  "projects/shared-project/locations/us-central1/functions/fullsend-mint",
+		State: "ACTIVE",
+		URI:   "https://fullsend-mint-shared.run.app",
+		EnvVars: map[string]string{
+			"ALLOWED_ORGS": "test-org",
+			"ROLE_APP_IDS": `{"test-org/coder":"12345","test-org/triage":"67890"}`,
+		},
+	}
 
 	p := newTestProvisioner(Config{
 		ProjectID:   "shared-project",

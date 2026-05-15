@@ -34,8 +34,6 @@ const (
 	DeployAuto DeployMode = iota
 	// DeploySkip never redeploys; reuses the existing function URL.
 	DeploySkip
-	// DeployForce always redeploys regardless of changes.
-	DeployForce
 )
 
 // Compile-time check that Provisioner implements dispatch.Dispatcher.
@@ -232,6 +230,20 @@ func (p *Provisioner) ensureSecretIAM(ctx context.Context, secretName string) er
 		return fmt.Errorf("granting secret access for %s: %w", secretName, err)
 	}
 	return nil
+}
+
+// GetFunctionURL returns the URL of the deployed mint function.
+// Used for auto-discovering the mint URL when --mint-url is not provided.
+func (p *Provisioner) GetFunctionURL(ctx context.Context) (string, error) {
+	fn, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+	if err != nil {
+		return "", fmt.Errorf("checking mint function: %w", err)
+	}
+	if fn == nil || fn.URI == "" {
+		return "", fmt.Errorf("mint function %s not found in project %s region %s",
+			functionName, p.cfg.ProjectID, p.cfg.Region)
+	}
+	return fn.URI, nil
 }
 
 // GetExistingRoleAppIDs reads ROLE_APP_IDS from the deployed mint function.
@@ -446,7 +458,9 @@ func (p *Provisioner) Provision(ctx context.Context) (map[string]string, error) 
 	return p.provisionSelfManaged(ctx)
 }
 
-// provisionWithExistingMint stores PEMs in an existing mint's Secret Manager.
+// provisionWithExistingMint handles PEM storage, org registration, and
+// per-repo WIF registration for an existing mint. Shared by both per-org
+// (when auto-routed from provisionSelfManaged) and per-repo flows.
 func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string]string, error) {
 	if p.cfg.ProjectID == "" {
 		return nil, fmt.Errorf("GCP project ID is required for PEM storage")
@@ -461,24 +475,60 @@ func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string
 	}
 
 	for _, org := range p.cfg.GitHubOrgs {
+		// Store new PEMs (per-org with fresh apps).
 		for _, role := range sortedByteMapKeys(p.cfg.AgentPEMs) {
 			if err := p.StoreAgentPEM(ctx, org, role, p.cfg.AgentPEMs[role]); err != nil {
 				return nil, fmt.Errorf("storing PEM for %s/%s: %w", org, role, err)
 			}
 		}
 
+		// Check and auto-copy PEMs for roles without fresh PEMs.
 		for _, role := range sortedStringMapKeys(p.cfg.AgentAppIDs) {
 			if _, hasPEM := p.cfg.AgentPEMs[role]; hasPEM {
 				continue
 			}
-			sid := secretID(org, role)
-			if err := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, sid); err != nil {
-				if errors.Is(err, ErrSecretNotFound) {
-					return nil, fmt.Errorf("role %q has no PEM and secret %s not found in project %s",
-						role, sid, p.cfg.ProjectID)
-				}
-				return nil, fmt.Errorf("checking secret %s for role %q: %w", sid, role, err)
+			exists, err := p.SecretExists(ctx, org, role)
+			if err != nil {
+				return nil, fmt.Errorf("checking PEM for %s/%s: %w", org, role, err)
 			}
+			if exists {
+				continue
+			}
+			// PEM doesn't exist — try to copy from another org that has this role.
+			existingIDs, _ := p.GetExistingRoleAppIDs(ctx)
+			copied := false
+			for _, key := range sortedStringMapKeys(existingIDs) {
+				parts := strings.SplitN(key, "/", 2)
+				if len(parts) != 2 || parts[1] != role || parts[0] == org {
+					continue
+				}
+				if err := p.CopyAgentPEM(ctx, parts[0], org, role); err == nil {
+					log.Printf("copied PEM for %s/%s from %s", org, role, parts[0])
+					copied = true
+					break
+				}
+			}
+			if !copied {
+				return nil, fmt.Errorf("role %q: no PEM provided and no existing PEM found to copy for %s", role, org)
+			}
+		}
+	}
+
+	// Register org env vars via EnsureOrgInMint (additive, no-op if already present).
+	for _, org := range p.cfg.GitHubOrgs {
+		perOrgAppIDs := make(map[string]string, len(p.cfg.AgentAppIDs))
+		for role, appID := range p.cfg.AgentAppIDs {
+			perOrgAppIDs[org+"/"+role] = appID
+		}
+		if err := p.EnsureOrgInMint(ctx, p.cfg.MintURL, org, perOrgAppIDs); err != nil {
+			return nil, fmt.Errorf("registering org %s in mint: %w", org, err)
+		}
+	}
+
+	// Per-repo WIF registration — when cfg.Repo is set.
+	if p.cfg.Repo != "" {
+		if err := p.RegisterPerRepoWIF(ctx, p.cfg.Repo); err != nil {
+			return nil, fmt.Errorf("registering per-repo WIF: %w", err)
 		}
 	}
 
@@ -507,12 +557,44 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		}
 	}
 
-	// Bundle function source early to fail fast before provisioning GCP
-	// resources. The result is reused at deployment time to avoid redundant
-	// I/O and a TOCTOU window.
-	earlySourceZip, err := bundleFunctionSource(p.cfg.FunctionSourceDir)
+	// Check existing function state before infrastructure setup.
+	existing, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
 	if err != nil {
-		return nil, fmt.Errorf("validating function source: %w", err)
+		return nil, fmt.Errorf("checking existing function: %w", err)
+	}
+
+	// Determine if code deployment is needed. When the function already
+	// exists and is active with the same source hash, skip the full
+	// infrastructure path and use the lightweight provisionWithExistingMint.
+	needsDeploy := true
+	var earlySourceZip []byte
+
+	if existing != nil && existing.URI != "" && existing.State == "ACTIVE" {
+		switch {
+		case p.cfg.DeployMode == DeploySkip:
+			needsDeploy = false
+		case p.cfg.FunctionSourceDir == "":
+			needsDeploy = false
+		default: // DeployAuto
+			earlySourceZip, err = bundleFunctionSource(p.cfg.FunctionSourceDir)
+			if err != nil {
+				return nil, fmt.Errorf("validating function source: %w", err)
+			}
+			needsDeploy = existing.EnvVars["FULLSEND_SOURCE_HASH"] != sha256Hex(earlySourceZip)
+		}
+
+		if !needsDeploy {
+			p.cfg.MintURL = existing.URI
+			return p.provisionWithExistingMint(ctx)
+		}
+	}
+
+	// Full infrastructure path — only when deploying code.
+	if earlySourceZip == nil {
+		earlySourceZip, err = bundleFunctionSource(p.cfg.FunctionSourceDir)
+		if err != nil {
+			return nil, fmt.Errorf("validating function source: %w", err)
+		}
 	}
 
 	// Step 1: Get project number.
@@ -634,11 +716,6 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		"ROLE_APP_IDS":       string(roleAppIDsJSON),
 	}
 
-	existing, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
-	if err != nil {
-		return nil, fmt.Errorf("checking existing function: %w", err)
-	}
-
 	// Step 6b: Code deployment — only when source hash changes.
 	sourceZip := earlySourceZip
 	sourceHash := sha256Hex(sourceZip)
@@ -747,6 +824,12 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		}
 		if err := p.EnsureOrgInMint(ctx, mintURL, org, perOrgAppIDs); err != nil {
 			return nil, fmt.Errorf("registering org %s in mint: %w", org, err)
+		}
+	}
+
+	if p.cfg.Repo != "" {
+		if err := p.RegisterPerRepoWIF(ctx, p.cfg.Repo); err != nil {
+			return nil, fmt.Errorf("registering per-repo WIF: %w", err)
 		}
 	}
 
@@ -1118,18 +1201,14 @@ func sha256Hex(data []byte) string {
 // needsCodeDeploy determines whether the Cloud Function code needs (re)deployment.
 // Only checks the source hash — env var changes are handled by EnsureOrgInMint.
 func (p *Provisioner) needsCodeDeploy(existing *FunctionInfo, sourceHash string) bool {
-	switch p.cfg.DeployMode {
-	case DeployForce:
-		return true
-	case DeploySkip:
+	if p.cfg.DeployMode == DeploySkip {
 		return false
-	default: // DeployAuto
-		if existing == nil {
-			return true
-		}
-		if existing.State != "ACTIVE" || existing.URI == "" {
-			return true
-		}
-		return existing.EnvVars["FULLSEND_SOURCE_HASH"] != sourceHash
 	}
+	if existing == nil {
+		return true
+	}
+	if existing.State != "ACTIVE" || existing.URI == "" {
+		return true
+	}
+	return existing.EnvVars["FULLSEND_SOURCE_HASH"] != sourceHash
 }
