@@ -490,6 +490,7 @@ func (s *Setup) handleExistingApp(ctx context.Context, inst *forge.Installation,
 				Slug:     inst.AppSlug,
 				Name:     inst.AppSlug,
 				ClientID: clientID,
+				// Empty PEM signals reuse of existing credentials.
 			}, nil
 		}
 
