@@ -1369,10 +1369,73 @@ func TestBundleFunctionSource_SkipsTestFiles(t *testing.T) {
 	assert.NotContains(t, names, ".hidden")
 }
 
-func TestBundleFunctionSource_EmptyPath(t *testing.T) {
-	_, err := bundleFunctionSource("")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "function source directory not configured")
+func TestBundleFunctionSource_EmptyPath_UsesEmbedded(t *testing.T) {
+	data, err := bundleFunctionSource("")
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	assert.Contains(t, names, "go.mod")
+	assert.Contains(t, names, "main.go")
+	assert.Contains(t, names, "go.sum")
+	assert.NotContains(t, names, "main_test.go")
+}
+
+func TestBundleFunctionSource_NonexistentDir_UsesEmbedded(t *testing.T) {
+	data, err := bundleFunctionSource("/nonexistent/path/to/mint")
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	assert.Contains(t, names, "go.mod")
+	assert.Contains(t, names, "main.go")
+}
+
+func TestBundleEmbeddedMintSource(t *testing.T) {
+	data, err := bundleEmbeddedMintSource()
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	assert.Contains(t, names, "go.mod")
+	assert.Contains(t, names, "go.sum")
+	assert.Contains(t, names, "main.go")
+	assert.Len(t, names, 3)
+}
+
+func TestEmbeddedMintSource_MatchesOriginal(t *testing.T) {
+	origDir := filepath.Join("..", "..", "mint")
+	for embeddedName, realName := range embeddedMintFiles {
+		orig, err := os.ReadFile(filepath.Join(origDir, realName))
+		if os.IsNotExist(err) {
+			t.Skipf("original mint source not available at %s (running outside repo)", origDir)
+		}
+		require.NoError(t, err, "reading original %s", realName)
+
+		embedded, err := embeddedMintSource.ReadFile("mintsrc/" + embeddedName)
+		require.NoError(t, err, "reading embedded %s", embeddedName)
+
+		assert.Equal(t, string(orig), string(embedded),
+			"mintsrc/%s is out of sync with internal/mint/%s — copy the file to update", embeddedName, realName)
+	}
 }
 
 // --- multi-org tests ---
