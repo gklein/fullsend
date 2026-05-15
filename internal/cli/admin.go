@@ -107,9 +107,6 @@ var perOrgOnlyFlags = []string{
 	"skip-mint-deploy", "public",
 }
 
-// perRepoOnlyFlags are flags that only apply to per-repo mode.
-var perRepoOnlyFlags []string
-
 // parseAgentRoles splits a comma-separated agents string into a validated role list.
 func parseAgentRoles(agents string) ([]string, error) {
 	var roles []string
@@ -142,7 +139,6 @@ func newInstallCmd() *cobra.Command {
 	var publicApps bool
 	// Per-repo flags.
 	var mintURL string
-	var scaffoldCustomized bool
 
 	cmd := &cobra.Command{
 		Use:   "install <org-or-owner/repo>",
@@ -175,13 +171,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 				}
 				return runPerRepoInstall(cmd.Context(), arg, perRepoAgents, mintURL, inferenceRegion,
 					inferenceProject, inferenceWIFProvider, perRepoMintProject, mintRegion,
-					scaffoldCustomized, dryRun)
-			}
-
-			for _, name := range perRepoOnlyFlags {
-				if cmd.Flags().Changed(name) {
-					return fmt.Errorf("--%s is only valid for per-repo installation (fullsend admin install <owner/repo>)", name)
-				}
+					dryRun)
 			}
 
 			org := arg
@@ -395,16 +385,15 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 	cmd.Flags().StringVar(&mintSourceDir, "mint-source-dir", "", "path to mint function source (default: internal/mint/)")
 	cmd.Flags().BoolVar(&mintSkipDeploy, "skip-mint-deploy", false, "skip Cloud Function deployment, reuse existing mint URL")
 	cmd.Flags().BoolVar(&publicApps, "public", false, "create public (unlisted) GitHub Apps installable by other orgs")
-	// Per-repo flags.
-	cmd.Flags().StringVar(&mintURL, "mint-url", "", "token mint URL for OIDC token exchange (per-repo mode)")
-	cmd.Flags().BoolVar(&scaffoldCustomized, "scaffold-customized", false, "create .fullsend/customized/ directory structure for agent runtime")
+	// Shared flags.
+	cmd.Flags().StringVar(&mintURL, "mint-url", "", "token mint URL for OIDC token exchange")
 
 	return cmd
 }
 
 func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, inferenceRegion,
 	inferenceProject, inferenceWIFProvider, mintProject, mintRegion string,
-	scaffoldCustomized, dryRun bool) error {
+	dryRun bool) error {
 	if strings.Contains(repoFullName, "://") || strings.HasPrefix(repoFullName, "www.") {
 		return fmt.Errorf("expected owner/repo format, got a URL — use just the owner/repo portion (e.g. acme/widget)")
 	}
@@ -480,14 +469,12 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 		Mode:    "100644",
 	})
 
-	if scaffoldCustomized {
-		for _, dir := range scaffold.PerRepoCustomizedDirs() {
-			files = append(files, forge.TreeFile{
-				Path:    dir + "/.gitkeep",
-				Content: []byte(""),
-				Mode:    "100644",
-			})
-		}
+	for _, dir := range scaffold.PerRepoCustomizedDirs() {
+		files = append(files, forge.TreeFile{
+			Path:    dir + "/.gitkeep",
+			Content: []byte(""),
+			Mode:    "100644",
+		})
 	}
 
 	needsWIFProvision := inferenceWIFProvider == ""

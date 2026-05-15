@@ -93,7 +93,6 @@ func TestInstallCmd_Flags(t *testing.T) {
 	mintSourceDirFlag := cmd.Flags().Lookup("mint-source-dir")
 	require.NotNil(t, mintSourceDirFlag, "expected --mint-source-dir flag")
 
-	// Per-repo flags.
 	mintURLFlag := cmd.Flags().Lookup("mint-url")
 	require.NotNil(t, mintURLFlag, "expected --mint-url flag")
 
@@ -101,9 +100,9 @@ func TestInstallCmd_Flags(t *testing.T) {
 	gcpAuthModeFlag := cmd.Flags().Lookup("gcp-auth-mode")
 	assert.Nil(t, gcpAuthModeFlag, "--gcp-auth-mode flag should have been removed")
 
+	// --scaffold-customized removed (customized dirs always included)
 	scaffoldCustomizedFlag := cmd.Flags().Lookup("scaffold-customized")
-	require.NotNil(t, scaffoldCustomizedFlag, "expected --scaffold-customized flag")
-	assert.Equal(t, "false", scaffoldCustomizedFlag.DefValue)
+	assert.Nil(t, scaffoldCustomizedFlag, "--scaffold-customized flag should have been removed")
 }
 
 func TestInstallCmd_PerRepoRequiresMintURLOrProject(t *testing.T) {
