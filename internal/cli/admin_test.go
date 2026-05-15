@@ -1275,14 +1275,42 @@ func TestInstallCmd_SkipMintCheckAcceptsNonCloudRunURL(t *testing.T) {
 }
 
 func TestInstallCmd_SkipMintCheckSkipsMintProject(t *testing.T) {
+	// Without --skip-mint-check and without --mint-project/--mint-url, an error is returned.
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+	cmd.SetArgs([]string{"admin", "install", "acme/widget"})
+	err := cmd.Execute()
+	require.Error(t, err)
+
+	// With --skip-mint-check, --mint-project is not required.
+	cmd2 := newRootCmd()
+	cmd2.SetArgs([]string{"admin", "install", "acme/widget",
 		"--skip-mint-check",
 		"--mint-url", "https://mint.example.com/v1/token",
 		"--inference-project", "my-project",
 		"--dry-run"})
+	err2 := cmd2.Execute()
+	require.NoError(t, err2)
+}
+
+func TestInstallCmd_SkipMintCheckRejectsPerOrg(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme",
+		"--skip-mint-check",
+		"--mint-url", "https://mint.example.com/v1/token"})
 	err := cmd.Execute()
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--skip-mint-check is only valid for per-repo")
+}
+
+func TestInstallCmd_SkipMintCheckRejectsUserinfo(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--skip-mint-check",
+		"--mint-url", "https://user:pass@mint.example.com/v1/token",
+		"--inference-project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not contain embedded credentials")
 }
 
 func TestInstallCmd_SkipMintCheckRejectsHTTP(t *testing.T) {

@@ -128,7 +128,10 @@ func validateMintURL(raw string) error {
 	if err := validateMintURLHTTPS(raw); err != nil {
 		return err
 	}
-	parsed, _ := url.Parse(raw)
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
 	if !strings.HasSuffix(parsed.Host, ".run.app") &&
 		!strings.HasSuffix(parsed.Host, ".cloudfunctions.net") {
 		return fmt.Errorf("--mint-url must be a Cloud Run URL (.run.app or .cloudfunctions.net), got host %q", parsed.Host)
@@ -144,6 +147,9 @@ func validateMintURLHTTPS(raw string) error {
 			scheme = parsed.Scheme
 		}
 		return fmt.Errorf("--mint-url must be a valid HTTPS URL (got scheme=%q)", scheme)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("--mint-url must not contain embedded credentials (userinfo)")
 	}
 	return nil
 }
@@ -228,6 +234,10 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 					MintSkipDeploy:      mintSkipDeploy,
 					SkipMintCheck:       skipMintCheck,
 				})
+			}
+
+			if cmd.Flags().Changed("skip-mint-check") {
+				return fmt.Errorf("--skip-mint-check is only valid for per-repo installation (fullsend admin install <owner/repo>)")
 			}
 
 			org := arg
