@@ -27,10 +27,12 @@ The table below lists every scope the installer may request and why. You are nev
 
 | Scope | When needed | Why |
 |-------|-------------|-----|
-| `repo` | install, analyze | Read/write repository contents, manage repo-level secrets |
+| `repo` | install, analyze | Read/write repository contents, manage repo-level secrets and variables |
 | `workflow` | install | Create and update GitHub Actions workflow files in `.github/workflows/` |
-| `admin:org` | install, uninstall, analyze | Manage organization-level Actions variables (the mint URL) |
+| `admin:org` | install (per-org), uninstall, analyze | Manage organization-level Actions variables and app installations |
 | `delete_repo` | uninstall | Delete the `.fullsend` config repository |
+
+> **Per-repo scope note:** Per-repo install (`fullsend admin install <owner/repo>`) only requires `repo` and `workflow` when reusing existing GitHub Apps. Creating new apps requires `admin:org`.
 
 The `--inference-region` flag defaults to `global` for the broadest model availability. For a list of all available regions, see the [Agent Platform documentation](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/use-claude).
 
@@ -56,16 +58,30 @@ The installer automatically provisions [Workload Identity Federation (WIF)](http
 
 `--mint-project` specifies the GCP project where the OIDC token mint Cloud Function is deployed. It can be the same project as `--inference-project` or a separate project. The installer automatically provisions a Cloud Function, WIF pool (`fullsend-pool`), WIF provider (`github-oidc`), and Secret Manager secrets in the mint project. A service account (`fullsend-mint`) is also created as the Cloud Function's runtime identity to access Secret Manager — this is internal infrastructure and does not require any admin setup.
 
-Additional mint flags:
+### `admin install` flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--agents` | `fullsend,triage,coder,review,fix` | Comma-separated agent roles to provision |
+| `--dry-run` | `false` | Preview changes without making them |
+| `--inference-project` | | GCP project ID for inference (Agent Platform) |
+| `--inference-region` | `global` | GCP region for inference |
+| `--inference-wif-provider` | | Full WIF provider resource name (`projects/{number}/locations/global/.../providers/{id}`); skips auto-provisioning when set |
+| `--mint-project` | | GCP project for the token mint Cloud Function |
 | `--mint-region` | `us-central1` | Cloud region for the token mint function |
 | `--mint-url` | | Use an existing mint at this URL instead of deploying one |
+| `--mint-provider` | `gcf` | Token mint provider backend |
+| `--mint-source-dir` | `internal/mint/` | Path to mint function source directory |
 | `--public` | `false` | Create public unlisted GitHub Apps (for multi-org) |
 | `--app-set` | `fullsend` | App set name prefix for GitHub Apps (see [Custom app sets](#custom-app-sets)) |
 | `--skip-app-setup` | `false` | Skip GitHub App creation (reuse existing apps) |
 | `--skip-mint-deploy` | `false` | Skip Cloud Function deployment, reuse existing mint URL |
+| `--skip-mint-check` | `false` | Skip mint validation, GCP provisioning, and app setup; requires `--mint-url` |
+| `--enroll-all` | `false` | Enroll all repositories without prompting (per-org only) |
+| `--enroll-none` | `false` | Skip repository enrollment without prompting (per-org only) |
+| `--vendor-fullsend-binary` | `false` | Cross-compile and upload the fullsend binary into `.fullsend/bin/` for development iteration (per-org only) |
+
+The `--skip-mint-check` flag bypasses all mint validation, GCP provisioning, and app setup. It requires `--mint-url` to be set and only validates that the URL uses HTTPS. This is useful when the mint infrastructure is managed externally or you want to skip GCP API calls entirely.
 
 The installer automatically detects when the deployed mint function is up-to-date (same source hash) and skips code redeployment, only updating WIF infrastructure, org registration, and PEM secrets. Use `--skip-mint-deploy` when running from a machine without the function source code.
 
@@ -183,6 +199,31 @@ Once a repo is enrolled (enrollment PR merged):
 1. Create an issue in the enrolled repo
 2. The triage agent picks it up automatically — check the Actions tab in both the target repo and `.fullsend` for workflow run logs
 
+## 5. Analyze installation status
+
+The `analyze` command checks the current state of a fullsend installation and reports what is installed, missing, or needs updating. It requires `repo` and `admin:org` scopes.
+
+```bash
+fullsend admin analyze "$ORG_NAME"
+```
+
+This is a read-only operation — it makes no changes.
+
+## 6. Uninstall
+
+The `uninstall` command tears down the fullsend installation for a GitHub organization, removing the `.fullsend` config repo and associated resources. It prompts for confirmation by requiring you to type the exact organization name.
+
+```bash
+fullsend admin uninstall "$ORG_NAME"
+```
+
+The uninstall preflight will prompt you to add the `delete_repo` scope if it is missing.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--yolo` | `false` | Skip the confirmation prompt |
+| `--app-set` | `fullsend` | App set name prefix for GitHub Apps (used for fallback slug generation when config is unavailable) |
+
 ---
 
 ## Per-repo installation
@@ -224,7 +265,7 @@ fullsend admin install "$ORG_NAME/$REPO_NAME" \
 
 ### Per-repo flags
 
-Per-repo accepts all flags except `--vendor-fullsend-binary`, `--enroll-all`, and `--enroll-none` (which only apply to org-wide enrollment).
+Per-repo accepts all `admin install` flags except `--vendor-fullsend-binary`, `--enroll-all`, and `--enroll-none` (which only apply to org-wide enrollment). Per-repo install requires only `repo` and `workflow` OAuth scopes when reusing existing apps. Creating new apps requires `admin:org`.
 
 > **`--mint-region` note:** Per-repo uses the same `--mint-region` default (`us-central1`) as per-org. When reusing a mint deployed to a non-default region, pass `--mint-region` explicitly so auto-discovery finds the correct function.
 
