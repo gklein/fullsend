@@ -90,7 +90,9 @@ check_per_repo_guard() {
     return 1
   fi
   # Non-404 error (permissions, network) — skip to be safe.
-  echo "::warning::Skipping $action of $repo — could not check per-repo guard variable (exit code $rc)"
+  local api_msg
+  api_msg=$(printf '%s' "$resp" | jq -r '.message // empty' 2>/dev/null | tr -d '\n\r')
+  echo "::warning::Skipping $action of $repo — could not check per-repo guard variable (exit code $rc${api_msg:+: $api_msg})"
   return 0
 }
 

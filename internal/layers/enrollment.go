@@ -243,7 +243,7 @@ func (l *EnrollmentLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	totalRepos := len(l.enabledRepos) + len(l.disabledRepos)
 	if totalRepos > 0 && len(guardFailed) == totalRepos {
 		report.Details = append(report.Details,
-			fmt.Sprintf("all %d repos failed guard check — verify your token has actions:read scope", totalRepos))
+			fmt.Sprintf("all %d repos failed guard check — verify your token has variables:read scope", totalRepos))
 	}
 
 	for _, r := range perRepo {
