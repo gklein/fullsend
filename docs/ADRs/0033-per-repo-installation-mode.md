@@ -254,7 +254,7 @@ Shared flags (valid for both per-org and per-repo):
 - `--mint-url` — token mint URL for OIDC token exchange (optional; auto-discovered from `--mint-project`/`--mint-region` if omitted)
 - `--mint-project` — GCP project containing the mint function (defaults to `--inference-project` in per-repo)
 - `--mint-region` — cloud region for the mint function (default: `us-central1`)
-- `--agents` — comma-separated agent roles (default: `triage,coder,review`)
+- `--agents` — comma-separated agent roles (default: `fullsend,triage,coder,review,fix`)
 - `--dry-run` — preview changes without making them
 - `--skip-app-setup` — skip GitHub App creation (reuse existing apps)
 - `--skip-mint-deploy` — skip Cloud Function deployment, reuse existing mint URL
