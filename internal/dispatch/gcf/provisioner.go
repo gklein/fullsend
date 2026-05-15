@@ -36,6 +36,9 @@ const (
 	DeploySkip
 )
 
+// ErrFunctionNotFound is returned when the mint function does not exist.
+var ErrFunctionNotFound = errors.New("mint function not found")
+
 // Compile-time check that Provisioner implements dispatch.Dispatcher.
 var _ dispatch.Dispatcher = (*Provisioner)(nil)
 
@@ -232,47 +235,68 @@ func (p *Provisioner) ensureSecretIAM(ctx context.Context, secretName string) er
 	return nil
 }
 
-// GetFunctionURL returns the URL of the deployed mint function.
-// Used for auto-discovering the mint URL when --mint-url is not provided.
-func (p *Provisioner) GetFunctionURL(ctx context.Context) (string, error) {
+// MintDiscovery holds the results of a single GetFunction call, providing
+// both the URL and existing role-to-app-ID mappings.
+type MintDiscovery struct {
+	URL        string
+	RoleAppIDs map[string]string
+}
+
+// DiscoverMint fetches the mint function once and returns its URL and
+// ROLE_APP_IDS in a single API call. Returns ErrFunctionNotFound (wrapped)
+// if the function does not exist.
+func (p *Provisioner) DiscoverMint(ctx context.Context) (*MintDiscovery, error) {
 	fn, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
 	if err != nil {
-		return "", fmt.Errorf("checking mint function: %w", err)
+		return nil, fmt.Errorf("checking mint function: %w", err)
 	}
 	if fn == nil || fn.URI == "" {
-		return "", fmt.Errorf("mint function %s not found in project %s region %s",
-			functionName, p.cfg.ProjectID, p.cfg.Region)
+		return nil, fmt.Errorf("%w: %s in project %s region %s",
+			ErrFunctionNotFound, functionName, p.cfg.ProjectID, p.cfg.Region)
 	}
-	return fn.URI, nil
+
+	result := &MintDiscovery{URL: fn.URI}
+	if fn.EnvVars != nil {
+		if raw := fn.EnvVars["ROLE_APP_IDS"]; raw != "" {
+			var m map[string]string
+			if err := json.Unmarshal([]byte(raw), &m); err == nil {
+				result.RoleAppIDs = m
+			}
+		}
+	}
+	return result, nil
+}
+
+// GetFunctionURL returns the URL of the deployed mint function.
+func (p *Provisioner) GetFunctionURL(ctx context.Context) (string, error) {
+	d, err := p.DiscoverMint(ctx)
+	if err != nil {
+		return "", err
+	}
+	return d.URL, nil
 }
 
 // GetExistingRoleAppIDs reads ROLE_APP_IDS from the deployed mint function.
 // Returns (nil, nil) if the function doesn't exist or has no ROLE_APP_IDS.
-// Returns (nil, err) if the API call fails (auth/network error).
 func (p *Provisioner) GetExistingRoleAppIDs(ctx context.Context) (map[string]string, error) {
-	fn, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+	d, err := p.DiscoverMint(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("reading mint function: %w", err)
+		if errors.Is(err, ErrFunctionNotFound) {
+			return nil, nil
+		}
+		return nil, err
 	}
-	if fn == nil || fn.EnvVars == nil {
-		return nil, nil
-	}
-	raw := fn.EnvVars["ROLE_APP_IDS"]
-	if raw == "" {
-		return nil, nil
-	}
-	var m map[string]string
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return nil, nil
-	}
-	return m, nil
+	return d.RoleAppIDs, nil
 }
 
 // EnsureOrgInMint validates that a mint function exists at expectedURL and
 // that the given org is registered in ALLOWED_ORGS and ROLE_APP_IDS. If the
 // org is missing, it updates the function's env vars to include it.
-// Not safe for concurrent calls — run per-repo installs sequentially when
-// sharing a mint.
+//
+// WARNING: read-modify-write without locking — concurrent calls from
+// parallel per-repo installs sharing the same mint can race, causing one
+// update to overwrite the other. Run installs sequentially when sharing
+// a mint, or accept that a lost update will be corrected on the next run.
 func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, org string, roleAppIDs map[string]string) error {
 	org = strings.ToLower(org)
 
@@ -474,8 +498,10 @@ func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string
 	}
 
 	parsedURL, err := url.Parse(p.cfg.MintURL)
-	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" {
-		return nil, fmt.Errorf("MintURL %q must be a valid HTTPS URL", p.cfg.MintURL)
+	if err != nil || parsedURL.Scheme != "https" ||
+		(!strings.HasSuffix(parsedURL.Host, ".run.app") &&
+			!strings.HasSuffix(parsedURL.Host, ".cloudfunctions.net")) {
+		return nil, fmt.Errorf("MintURL %q must be a valid Cloud Run URL (.run.app or .cloudfunctions.net)", p.cfg.MintURL)
 	}
 
 	// Fetch existing role/app ID mappings once for PEM auto-copy decisions.
@@ -515,11 +541,15 @@ func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string
 			if existingIDsErr != nil {
 				return nil, fmt.Errorf("reading existing role app IDs for PEM auto-copy: %w", existingIDsErr)
 			}
-			// PEM doesn't exist — try to copy from another org that has this role.
+			// PEM doesn't exist — try to copy from another org that has the
+			// same app (matched by app ID) for this role.
 			copied := false
 			for _, key := range sortedStringMapKeys(existingIDs) {
 				parts := strings.SplitN(key, "/", 2)
 				if len(parts) != 2 || parts[1] != role || parts[0] == org {
+					continue
+				}
+				if p.cfg.AgentAppIDs[role] != "" && existingIDs[key] != p.cfg.AgentAppIDs[role] {
 					continue
 				}
 				if copyErr := p.CopyAgentPEM(ctx, parts[0], org, role); copyErr == nil {
@@ -668,23 +698,32 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	needsDeploy := true
 	var earlySourceZip []byte
 
-	if existing != nil && existing.URI != "" && existing.State == "ACTIVE" {
-		switch {
-		case p.cfg.DeployMode == DeploySkip:
-			needsDeploy = false
-		case p.cfg.FunctionSourceDir == "":
-			needsDeploy = false
-		default: // DeployAuto
-			earlySourceZip, err = bundleFunctionSource(p.cfg.FunctionSourceDir)
-			if err != nil {
-				return nil, fmt.Errorf("validating function source: %w", err)
-			}
-			needsDeploy = existing.EnvVars["FULLSEND_SOURCE_HASH"] != sha256Hex(earlySourceZip)
+	if existing != nil && existing.URI != "" {
+		if existing.State != "ACTIVE" && p.cfg.DeployMode == DeploySkip {
+			return nil, fmt.Errorf("mint function exists but is in %s state; cannot proceed with --skip-mint-deploy", existing.State)
 		}
 
-		if !needsDeploy {
-			p.cfg.MintURL = existing.URI
-			return p.provisionWithExistingMint(ctx)
+		if existing.State == "ACTIVE" {
+			switch {
+			case p.cfg.DeployMode == DeploySkip:
+				needsDeploy = false
+			case p.cfg.FunctionSourceDir == "":
+				needsDeploy = false
+			default: // DeployAuto
+				earlySourceZip, err = bundleFunctionSource(p.cfg.FunctionSourceDir)
+				if err != nil {
+					return nil, fmt.Errorf("validating function source: %w", err)
+				}
+				needsDeploy = existing.EnvVars["FULLSEND_SOURCE_HASH"] != sha256Hex(earlySourceZip)
+			}
+
+			if !needsDeploy {
+				if err := p.gcpAPI.SetCloudRunInvoker(ctx, p.cfg.ProjectID, p.cfg.Region, functionName); err != nil {
+					return nil, fmt.Errorf("setting function invoker policy: %w", err)
+				}
+				p.cfg.MintURL = existing.URI
+				return p.provisionWithExistingMint(ctx)
+			}
 		}
 	}
 
@@ -1227,7 +1266,10 @@ func sha256Hex(data []byte) string {
 }
 
 // needsCodeDeploy determines whether the Cloud Function code needs (re)deployment.
-// Only checks the source hash — env var changes are handled by EnsureOrgInMint.
+// Only checks the source hash — org-level env vars (ALLOWED_ORGS, ROLE_APP_IDS)
+// are handled separately by EnsureOrgInMint. Infrastructure env vars set during
+// initial deploy (FULLSEND_SOURCE_HASH, GCP_PROJECT_ID) are NOT reconciled on
+// subsequent runs; a code redeploy is required to update them.
 func (p *Provisioner) needsCodeDeploy(existing *FunctionInfo, sourceHash string) bool {
 	if p.cfg.DeployMode == DeploySkip {
 		return false

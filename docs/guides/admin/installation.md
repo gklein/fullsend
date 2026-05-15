@@ -63,6 +63,7 @@ Additional mint flags:
 | `--mint-region` | `us-central1` | Cloud region for the token mint function |
 | `--mint-url` | | Use an existing mint at this URL instead of deploying one |
 | `--public` | `false` | Create public unlisted GitHub Apps (for multi-org) |
+| `--skip-app-setup` | `false` | Skip GitHub App creation (reuse existing apps) |
 | `--skip-mint-deploy` | `false` | Skip Cloud Function deployment, reuse existing mint URL |
 
 The installer automatically detects when the deployed mint function is up-to-date (same source hash) and skips code redeployment, only updating WIF infrastructure, org registration, and PEM secrets. Use `--skip-mint-deploy` when running from a machine without the function source code.
@@ -200,6 +201,8 @@ fullsend admin install "$ORG_NAME/$REPO_NAME" \
 ### Per-repo flags
 
 Per-repo accepts all flags except `--vendor-fullsend-binary`, `--enroll-all`, and `--enroll-none` (which only apply to org-wide enrollment).
+
+> **`--mint-region` note:** Per-repo uses the same `--mint-region` default (`us-central1`) as per-org. When reusing a mint deployed to a non-default region, pass `--mint-region` explicitly so auto-discovery finds the correct function.
 
 ---
 

@@ -842,7 +842,7 @@ func TestProvisioner_Provision_BundledMode_InvalidMintURL(t *testing.T) {
 
 			_, err := p.Provision(context.Background())
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "must be a valid HTTPS URL")
+			assert.Contains(t, err.Error(), "must be a valid Cloud Run URL")
 		})
 	}
 }
@@ -1933,7 +1933,7 @@ func TestGetExistingRoleAppIDs_GetFunctionError(t *testing.T) {
 	m, err := p.GetExistingRoleAppIDs(context.Background())
 	require.Error(t, err)
 	assert.Nil(t, m)
-	assert.Contains(t, err.Error(), "reading mint function")
+	assert.Contains(t, err.Error(), "checking mint function")
 }
 
 // --- GetFunctionURL tests ---
@@ -2007,7 +2007,7 @@ func TestProvisioner_Provision_NonActiveFunction_TriggersDeploy(t *testing.T) {
 func TestProvisioner_Provision_BundledMode_PEMAutoCopy(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.functionInfo = &FunctionInfo{
-		URI: "https://mint.example.com",
+		URI: "https://fullsend-mint-abc123.run.app",
 		EnvVars: map[string]string{
 			"ROLE_APP_IDS":  `{"source-org/coder":"12345"}`,
 			"ALLOWED_ORGS":  "source-org",
@@ -2028,12 +2028,12 @@ func TestProvisioner_Provision_BundledMode_PEMAutoCopy(t *testing.T) {
 		ProjectID:   "my-project",
 		GitHubOrgs:  []string{"target-org"},
 		AgentAppIDs: map[string]string{"coder": "12345"},
-		MintURL:     "https://mint.example.com",
+		MintURL:     "https://fullsend-mint-abc123.run.app",
 	}, fake)
 
 	vars, err := p.Provision(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, "https://mint.example.com", vars["FULLSEND_MINT_URL"])
+	assert.Equal(t, "https://fullsend-mint-abc123.run.app", vars["FULLSEND_MINT_URL"])
 
 	// Verify CopyAgentPEM was called (AccessSecretVersion + AddSecretVersion).
 	assert.Contains(t, fake.calls, "AccessSecretVersion")

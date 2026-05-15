@@ -203,6 +203,18 @@ func TestInstallCmd_PerRepoAcceptsSharedFlags(t *testing.T) {
 	}
 }
 
+func TestInstallCmd_ForceMintDeployFlagRemoved(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme",
+		"--force-mint-deploy",
+		"--inference-project", "my-project",
+		"--mint-project", "my-project",
+		"--dry-run"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "force-mint-deploy")
+}
+
 func TestInstallCmd_PerRepoAcceptsMintRegion(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "acme/widget",
