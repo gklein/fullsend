@@ -62,7 +62,7 @@ The installer automatically provisions [Workload Identity Federation (WIF)](http
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--agents` | `fullsend,triage,coder,review,fix` | Comma-separated agent roles to provision |
+| `--agents` | `fullsend,triage,coder,review,retro,prioritize` | Comma-separated agent roles to provision |
 | `--dry-run` | `false` | Preview changes without making them |
 | `--inference-project` | | GCP project ID for inference (Agent Platform) |
 | `--inference-region` | `global` | GCP region for inference |
