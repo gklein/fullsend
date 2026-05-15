@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -1239,7 +1240,7 @@ func bundleFunctionSource(dir string) ([]byte, error) {
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return bundleEmbeddedMintSource()
 		}
 		return nil, fmt.Errorf("reading function source dir: %w", err)
@@ -1290,13 +1291,21 @@ func bundleFunctionSource(dir string) ([]byte, error) {
 }
 
 // bundleEmbeddedMintSource creates a zip archive from the mint source files
-// embedded in the binary. Files are stored with underscore names to avoid
-// Go's module boundary detection and renamed to their real names in the zip.
+// embedded in the binary. Files use a .embed suffix to prevent the Go
+// toolchain from treating the directory as a module root, and are renamed
+// to their real names in the zip.
 func bundleEmbeddedMintSource() ([]byte, error) {
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
 
-	for embeddedName, realName := range embeddedMintFiles {
+	keys := make([]string, 0, len(embeddedMintFiles))
+	for k := range embeddedMintFiles {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, embeddedName := range keys {
+		realName := embeddedMintFiles[embeddedName]
 		data, err := embeddedMintSource.ReadFile("mintsrc/" + embeddedName)
 		if err != nil {
 			return nil, fmt.Errorf("reading embedded file %s: %w", embeddedName, err)
