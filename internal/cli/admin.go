@@ -155,6 +155,13 @@ func validateMintURL(raw string) error {
 	return nil
 }
 
+func validateSkipMintCheck(mintURL string) error {
+	if mintURL == "" {
+		return fmt.Errorf("--mint-url is required when using --skip-mint-check")
+	}
+	return validateMintURLHTTPS(mintURL)
+}
+
 func validateMintURLHTTPS(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
@@ -277,10 +284,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 			}
 
 			if skipMintCheck {
-				if mintURL == "" {
-					return fmt.Errorf("--mint-url is required when using --skip-mint-check")
-				}
-				if err := validateMintURLHTTPS(mintURL); err != nil {
+				if err := validateSkipMintCheck(mintURL); err != nil {
 					return err
 				}
 			} else {
@@ -429,7 +433,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 			printer.Blank()
 
 			if dryRun {
-				return runDryRun(ctx, client, printer, org, repos, roles, inferenceProvider, inferenceProviderName, allRepos)
+				return runDryRun(ctx, client, printer, org, repos, roles, inferenceProvider, inferenceProviderName, skipMintCheck, mintURL, allRepos)
 			}
 
 			if err := checkInstallScopes(ctx, client, printer); err != nil {
@@ -478,7 +482,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 	cmd.Flags().StringVar(&mintRegion, "mint-region", "us-central1", "cloud region for token mint")
 	cmd.Flags().StringVar(&mintSourceDir, "mint-source-dir", "", "path to mint function source (default: internal/mint/)")
 	cmd.Flags().BoolVar(&mintSkipDeploy, "skip-mint-deploy", false, "skip Cloud Function deployment, reuse existing mint URL")
-	cmd.Flags().BoolVar(&skipMintCheck, "skip-mint-check", false, "skip all GCP-based mint validation and app setup; trust the provided --mint-url")
+	cmd.Flags().BoolVar(&skipMintCheck, "skip-mint-check", false, "skip mint validation, GCP provisioning, and app setup; requires --mint-url")
 	cmd.Flags().BoolVar(&publicApps, "public", false, "create public (unlisted) GitHub Apps installable by other orgs")
 	// Shared flags.
 	cmd.Flags().StringVar(&mintURL, "mint-url", "", "token mint URL for OIDC token exchange")
@@ -519,10 +523,7 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 	}
 
 	if skipMintCheck {
-		if mintURL == "" {
-			return fmt.Errorf("--mint-url is required when using --skip-mint-check")
-		}
-		if err := validateMintURLHTTPS(mintURL); err != nil {
+		if err := validateSkipMintCheck(mintURL); err != nil {
 			return err
 		}
 	} else if mintURL != "" {
@@ -1044,7 +1045,7 @@ func newAnalyzeCmd() *cobra.Command {
 
 // runDryRun builds a layer stack with empty credentials and analyzes.
 // If discoveredRepos is non-nil, it will be used instead of calling ListOrgRepos.
-func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, inferenceProvider inference.Provider, inferenceProviderName string, discoveredRepos []forge.Repository) error {
+func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, org string, enabledRepos, roles []string, inferenceProvider inference.Provider, inferenceProviderName string, skipMintCheck bool, mintURL string, discoveredRepos []forge.Repository) error {
 	printer.Header("Dry run - analyzing what install would do")
 	printer.Blank()
 
@@ -1099,7 +1100,12 @@ func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, or
 	}
 
 	enrolledRepoIDs := collectEnrolledRepoIDs(allRepos, enabledRepos)
-	dispatcher := gcf.NewProvisioner(gcf.Config{}, nil)
+	var dispatcher dispatch.Dispatcher
+	if skipMintCheck {
+		dispatcher = &skipMintDispatcher{mintURL: mintURL}
+	} else {
+		dispatcher = gcf.NewProvisioner(gcf.Config{}, nil)
+	}
 	stack := buildLayerStack(org, client, cfg, printer, user, privateRepo, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, false, nil, dispatcher)
 
 	if err := runPreflight(ctx, stack, layers.OpInstall, client, printer); err != nil {

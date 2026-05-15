@@ -103,6 +103,13 @@ func TestInstallCmd_Flags(t *testing.T) {
 	// --scaffold-customized removed (customized dirs always included)
 	scaffoldCustomizedFlag := cmd.Flags().Lookup("scaffold-customized")
 	assert.Nil(t, scaffoldCustomizedFlag, "--scaffold-customized flag should have been removed")
+
+	skipMintCheckFlag := cmd.Flags().Lookup("skip-mint-check")
+	require.NotNil(t, skipMintCheckFlag, "expected --skip-mint-check flag")
+	assert.Equal(t, "false", skipMintCheckFlag.DefValue)
+
+	skipMintDeployFlag := cmd.Flags().Lookup("skip-mint-deploy")
+	require.NotNil(t, skipMintDeployFlag, "expected --skip-mint-deploy flag")
 }
 
 func TestInstallCmd_PerRepoRequiresMintProject(t *testing.T) {
@@ -1321,4 +1328,48 @@ func TestInstallCmd_SkipMintCheckRejectsHTTP(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--mint-url must be a valid HTTPS URL")
+}
+
+func TestSkipMintDispatcher(t *testing.T) {
+	d := &skipMintDispatcher{mintURL: "https://mint.example.com/v1/token"}
+	assert.Equal(t, "skip-mint-check", d.Name())
+	assert.Nil(t, d.OrgSecretNames())
+	assert.Equal(t, []string{"FULLSEND_MINT_URL"}, d.OrgVariableNames())
+	assert.NoError(t, d.StoreAgentPEM(context.Background(), "org", "role", []byte("pem")))
+	vars, err := d.Provision(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"FULLSEND_MINT_URL": "https://mint.example.com/v1/token"}, vars)
+}
+
+func TestValidateMintURLHTTPS(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{"valid URL", "https://mint.example.com/v1/token", ""},
+		{"valid with port", "https://mint.example.com:8443/v1", ""},
+		{"http rejected", "http://mint.example.com", "HTTPS URL"},
+		{"empty string", "", "HTTPS URL"},
+		{"no host", "https://", "HTTPS URL"},
+		{"userinfo", "https://user:pass@host.com", "embedded credentials"},
+		{"username only", "https://user@host.com", "embedded credentials"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateMintURLHTTPS(tc.input)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateSkipMintCheck(t *testing.T) {
+	require.Error(t, validateSkipMintCheck(""))
+	require.Error(t, validateSkipMintCheck("http://example.com"))
+	require.NoError(t, validateSkipMintCheck("https://mint.example.com/v1/token"))
 }
