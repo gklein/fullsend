@@ -540,6 +540,7 @@ func TestSetup_CorrectPermissions_NoError(t *testing.T) {
 				Permissions: map[string]string{
 					"actions":               "write",
 					"contents":              "write",
+					"variables":             "read",
 					"workflows":             "write",
 					"issues":                "read",
 					"pull_requests":         "write",
