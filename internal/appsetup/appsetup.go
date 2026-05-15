@@ -781,7 +781,7 @@ func (s *Setup) ensureInstalled(ctx context.Context, org, slug string) error {
 }
 
 // DefaultAppSet is the default app set prefix for GitHub Apps.
-// Orgs that created apps under a different prefix (e.g., "konflux-ci")
+// Orgs that created apps under a different prefix (e.g., "fullsend-ai")
 // pass --app-set explicitly.
 const DefaultAppSet = "fullsend"
 
