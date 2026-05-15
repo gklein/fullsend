@@ -63,12 +63,12 @@ Additional mint flags:
 | `--mint-region` | `us-central1` | Cloud region for the token mint function |
 | `--mint-url` | | Use an existing mint at this URL instead of deploying one |
 | `--public` | `false` | Create public unlisted GitHub Apps (for multi-org) |
+| `--skip-app-setup` | `false` | Skip GitHub App creation (reuse existing apps) |
 | `--skip-mint-deploy` | `false` | Skip Cloud Function deployment, reuse existing mint URL |
-| `--force-mint-deploy` | `false` | Force Cloud Function redeployment even if unchanged |
 
-`--skip-mint-deploy` and `--force-mint-deploy` are mutually exclusive.
+The installer automatically detects when the deployed mint function is up-to-date (same source hash) and skips code redeployment, only updating WIF infrastructure, org registration, and PEM secrets. Use `--skip-mint-deploy` when running from a machine without the function source code.
 
-> **Mint URL stability:** The mint URL is stable across redeploys within the same project and region — updating the Cloud Function does not change its URL. Adding a new org or per-repo enrollment triggers a redeploy (to update env vars like `ROLE_APP_IDS` and `ALLOWED_ORGS`), but this is an in-place update that preserves the URL. Existing enrolled repos continue working with no changes. However, deploying to a **different region** (e.g., changing `--mint-region` from `us-central1` to `us-east5`) creates a new Cloud Run service with a different URL. All enrolled repos store the mint URL in a repo variable (`FULLSEND_MINT_URL`) or org variable, so changing the region requires updating every enrolled repo's variable to the new URL. Avoid changing `--mint-region` after initial deployment unless you plan to update all consumers.
+> **Mint URL stability:** The mint URL is stable across redeploys within the same project and region — updating the Cloud Function does not change its URL. Adding a new org to an existing mint only updates env vars (`ROLE_APP_IDS`, `ALLOWED_ORGS`) without redeploying the function. Existing enrolled repos continue working with no changes. However, deploying to a **different region** (e.g., changing `--mint-region` from `us-central1` to `us-east5`) creates a new Cloud Run service with a different URL. All enrolled repos store the mint URL in a repo variable (`FULLSEND_MINT_URL`) or org variable, so changing the region requires updating every enrolled repo's variable to the new URL. Avoid changing `--mint-region` after initial deployment unless you plan to update all consumers.
 
 ### Multi-org setup
 
@@ -90,10 +90,10 @@ The `--public` flag creates GitHub Apps as public unlisted — they won't appear
 ```bash
 fullsend admin install "$ADDITIONAL_ORG" \
   --inference-project "$GCP_PROJECT" \
-  --mint-url "$MINT_URL"
+  --mint-project "$GCP_PROJECT"
 ```
 
-`--mint-url` skips Cloud Function deployment and stores PEMs in the existing mint's GCP project. PEMs use org-scoped naming (`fullsend-{org}--{role}-app-pem`), so each org's secrets are stored independently. For public apps (shared across orgs), the provisioner stores the same PEM under each org's scoped key.
+The installer auto-detects the existing mint function and skips code redeployment. WIF infrastructure is always updated (adding the new org to the WIF provider's attribute condition and granting Vertex AI IAM access), and the new org is registered in the mint's env vars. You can also pass `--mint-url "$MINT_URL"` explicitly to skip the auto-discovery step. PEMs use org-scoped naming (`fullsend-{org}--{role}-app-pem`), so each org's secrets are stored independently. For public apps (shared across orgs), the provisioner stores the same PEM under each org's scoped key.
 
 > **Note:** Multi-org with `--public` requires all orgs to share the same GitHub Apps. Private apps (the default) are single-org only.
 
@@ -158,6 +158,51 @@ Once a repo is enrolled (enrollment PR merged):
 
 1. Create an issue in the enrolled repo
 2. The triage agent picks it up automatically — check the Actions tab in both the target repo and `.fullsend` for workflow run logs
+
+---
+
+## Per-repo installation
+
+Per-repo mode installs fullsend for a single repository without requiring an org-wide `.fullsend` config repo. It's fully self-contained — creating GitHub Apps, deploying a token mint, and configuring WIF as needed.
+
+### First-time install (no prior infrastructure)
+
+```bash
+fullsend admin install "$ORG_NAME/$REPO_NAME" \
+  --inference-project "$GCP_PROJECT" \
+  --mint-project "$GCP_PROJECT"
+```
+
+This discovers existing infrastructure and creates what's missing:
+- If no GitHub Apps exist, opens browser windows to create them (same manifest flow as per-org)
+- If no token mint exists, deploys a Cloud Function
+- If both exist from a prior per-org install, reuses them
+
+Creating apps requires `admin:org` OAuth scope (the installer prompts for it). Reusing existing apps only requires `repo` and `workflow` scopes.
+
+### Reusing existing infrastructure
+
+When a per-org install already exists, per-repo reuses the apps and mint:
+
+```bash
+fullsend admin install "$ORG_NAME/$REPO_NAME" \
+  --inference-project "$GCP_PROJECT" \
+  --mint-url "$MINT_URL"
+```
+
+Or let it auto-discover the mint from the GCP project:
+
+```bash
+fullsend admin install "$ORG_NAME/$REPO_NAME" \
+  --inference-project "$GCP_PROJECT" \
+  --mint-project "$GCP_PROJECT"
+```
+
+### Per-repo flags
+
+Per-repo accepts all flags except `--vendor-fullsend-binary`, `--enroll-all`, and `--enroll-none` (which only apply to org-wide enrollment).
+
+> **`--mint-region` note:** Per-repo uses the same `--mint-region` default (`us-central1`) as per-org. When reusing a mint deployed to a non-default region, pass `--mint-region` explicitly so auto-discovery finds the correct function.
 
 ---
 

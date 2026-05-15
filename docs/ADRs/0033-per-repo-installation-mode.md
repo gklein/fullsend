@@ -245,26 +245,31 @@ fullsend admin install <org>            # per-org installation
 fullsend admin install <owner/repo>     # per-repo installation
 ```
 
-Per-repo flags (only valid with `owner/repo` argument):
-- `--mint-url` — token mint URL for OIDC token exchange (required)
+Per-repo flags:
 - `--inference-project` — GCP project for Vertex AI inference (required)
 - `--inference-region` — GCP region for Vertex AI inference (default: `global`)
 - `--inference-wif-provider` — pre-existing WIF provider (auto-provisioned if omitted)
-- `--scaffold-customized` — create `.fullsend/customized/` directory structure
 
-Per-org-only flags (`--mint-region`, `--public`, `--enroll-all`, `--enroll-none`, `--skip-app-setup`, `--vendor-fullsend-binary`, etc.) are rejected when an `owner/repo` argument is given. `--mint-project` is accepted in both modes (defaults to `--inference-project` in per-repo).
+Shared flags (valid for both per-org and per-repo):
+- `--mint-url` — token mint URL for OIDC token exchange (optional; auto-discovered from `--mint-project`/`--mint-region` if omitted)
+- `--mint-project` — GCP project containing the mint function (defaults to `--inference-project` in per-repo)
+- `--mint-region` — cloud region for the mint function (default: `us-central1`)
+
+Per-org-only flags (`--vendor-fullsend-binary`, `--enroll-all`, `--enroll-none`) are rejected when an `owner/repo` argument is given. All other flags are shared between per-org and per-repo modes — per-repo can create GitHub Apps, deploy a mint, and manage public apps when existing infrastructure is not found.
 
 **Per-repo install steps**:
 
-1. Generates `.github/workflows/fullsend.yml` from the per-repo shim template.
-2. Generates `.fullsend/config.yaml` with agent roles and kill switch.
-3. Optionally creates `.fullsend/customized/` directory structure (`--scaffold-customized`).
-4. Commits all scaffold files to the target repo via the GitHub API.
-5. Sets repository variables (`FULLSEND_MINT_URL`, `FULLSEND_GCP_REGION`, `FULLSEND_PER_REPO_INSTALL`).
-6. Sets repository secrets (`FULLSEND_GCP_PROJECT_ID`, WIF credentials).
-7. Auto-provisions WIF pool/provider if `--inference-wif-provider` is omitted.
+1. Discovers existing infrastructure: auto-discovers mint URL and app IDs from `--mint-project`/`--mint-region` in a single API call.
+2. If apps are missing and `--skip-app-setup` is not set: creates GitHub Apps via the browser-based manifest flow (same as per-org). PEMs are stored in Secret Manager.
+3. If no mint exists: deploys the token mint Cloud Function (same provisioner path as per-org).
+4. If a mint already exists: validates PEMs, registers the org, and sets up per-repo WIF.
+5. Auto-provisions inference WIF pool/provider if `--inference-wif-provider` is omitted.
+6. Generates scaffold files (`.github/workflows/fullsend.yaml`, `.fullsend/config.yaml`, `.fullsend/customized/` directories).
+7. Commits all scaffold files to the target repo via the GitHub API.
+8. Sets repository variables (`FULLSEND_MINT_URL`, `FULLSEND_GCP_REGION`, `FULLSEND_PER_REPO_INSTALL`).
+9. Sets repository secrets (`FULLSEND_GCP_PROJECT_ID`, WIF credentials).
 
-Per-repo install requires only `repo` and `workflow` OAuth scopes (no `admin:org`).
+Per-repo install requires only `repo` and `workflow` OAuth scopes when reusing existing infrastructure. When creating apps, scope escalation to `admin:org` is required (same as per-org).
 
 ### 8. Coexistence
 

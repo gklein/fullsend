@@ -30,13 +30,14 @@ import (
 type DeployMode int
 
 const (
-	// DeployAuto compares source hash and env vars; skips deploy if unchanged.
+	// DeployAuto compares source hash; skips deploy if unchanged.
 	DeployAuto DeployMode = iota
 	// DeploySkip never redeploys; reuses the existing function URL.
 	DeploySkip
-	// DeployForce always redeploys regardless of changes.
-	DeployForce
 )
+
+// ErrFunctionNotFound is returned when the mint function does not exist.
+var ErrFunctionNotFound = errors.New("mint function not found")
 
 // Compile-time check that Provisioner implements dispatch.Dispatcher.
 var _ dispatch.Dispatcher = (*Provisioner)(nil)
@@ -87,10 +88,11 @@ type Config struct {
 	AgentAppIDs map[string]string
 
 	// MintURL, if set, skips infrastructure deployment and uses the
-	// existing mint at this URL. Only PEMs are stored.
+	// existing mint at this URL for PEM storage, org registration,
+	// per-repo WIF, and PEM auto-copy.
 	MintURL string
 
-	// DeployMode controls function deployment: auto (default), skip, or force.
+	// DeployMode controls function deployment: auto (default) or skip.
 	DeployMode DeployMode
 }
 
@@ -234,29 +236,70 @@ func (p *Provisioner) ensureSecretIAM(ctx context.Context, secretName string) er
 	return nil
 }
 
-// GetExistingRoleAppIDs reads ROLE_APP_IDS from the deployed mint function.
-// Returns nil if the function doesn't exist or has no ROLE_APP_IDS.
-func (p *Provisioner) GetExistingRoleAppIDs(ctx context.Context) (map[string]string, error) {
+// MintDiscovery holds the results of a single GetFunction call, providing
+// both the URL and existing role-to-app-ID mappings.
+type MintDiscovery struct {
+	URL        string
+	RoleAppIDs map[string]string
+}
+
+// DiscoverMint fetches the mint function once and returns its URL and
+// ROLE_APP_IDS in a single API call. Returns ErrFunctionNotFound (wrapped)
+// if the function does not exist.
+func (p *Provisioner) DiscoverMint(ctx context.Context) (*MintDiscovery, error) {
 	fn, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
-	if err != nil || fn == nil || fn.EnvVars == nil {
-		return nil, nil
+	if err != nil {
+		return nil, fmt.Errorf("checking mint function: %w", err)
 	}
-	raw := fn.EnvVars["ROLE_APP_IDS"]
-	if raw == "" {
-		return nil, nil
+	if fn == nil || fn.URI == "" {
+		return nil, fmt.Errorf("%w: %s in project %s region %s",
+			ErrFunctionNotFound, functionName, p.cfg.ProjectID, p.cfg.Region)
 	}
-	var m map[string]string
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return nil, nil
+
+	result := &MintDiscovery{URL: fn.URI}
+	if fn.EnvVars != nil {
+		if raw := fn.EnvVars["ROLE_APP_IDS"]; raw != "" {
+			var m map[string]string
+			if err := json.Unmarshal([]byte(raw), &m); err != nil {
+				log.Printf("warning: malformed ROLE_APP_IDS in mint function: %v", err)
+			} else {
+				result.RoleAppIDs = m
+			}
+		}
 	}
-	return m, nil
+	return result, nil
+}
+
+// GetFunctionURL returns the URL of the deployed mint function.
+func (p *Provisioner) GetFunctionURL(ctx context.Context) (string, error) {
+	d, err := p.DiscoverMint(ctx)
+	if err != nil {
+		return "", err
+	}
+	return d.URL, nil
+}
+
+// GetExistingRoleAppIDs reads ROLE_APP_IDS from the deployed mint function.
+// Returns (nil, nil) if the function doesn't exist or has no ROLE_APP_IDS.
+func (p *Provisioner) GetExistingRoleAppIDs(ctx context.Context) (map[string]string, error) {
+	d, err := p.DiscoverMint(ctx)
+	if err != nil {
+		if errors.Is(err, ErrFunctionNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return d.RoleAppIDs, nil
 }
 
 // EnsureOrgInMint validates that a mint function exists at expectedURL and
 // that the given org is registered in ALLOWED_ORGS and ROLE_APP_IDS. If the
 // org is missing, it updates the function's env vars to include it.
-// Not safe for concurrent calls — run per-repo installs sequentially when
-// sharing a mint.
+//
+// WARNING: read-modify-write without locking — concurrent calls from
+// parallel per-repo installs sharing the same mint can race, causing one
+// update to overwrite the other. Run installs sequentially when sharing
+// a mint, or accept that a lost update will be corrected on the next run.
 func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, org string, roleAppIDs map[string]string) error {
 	org = strings.ToLower(org)
 
@@ -446,7 +489,9 @@ func (p *Provisioner) Provision(ctx context.Context) (map[string]string, error) 
 	return p.provisionSelfManaged(ctx)
 }
 
-// provisionWithExistingMint stores PEMs in an existing mint's Secret Manager.
+// provisionWithExistingMint handles PEM storage, org registration, and
+// per-repo WIF registration for an existing mint. Shared by both per-org
+// (when auto-routed from provisionSelfManaged) and per-repo flows.
 func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string]string, error) {
 	if p.cfg.ProjectID == "" {
 		return nil, fmt.Errorf("GCP project ID is required for PEM storage")
@@ -456,29 +501,95 @@ func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string
 	}
 
 	parsedURL, err := url.Parse(p.cfg.MintURL)
-	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" {
-		return nil, fmt.Errorf("MintURL %q must be a valid HTTPS URL", p.cfg.MintURL)
+	if err != nil || parsedURL.Scheme != "https" ||
+		(!strings.HasSuffix(parsedURL.Host, ".run.app") &&
+			!strings.HasSuffix(parsedURL.Host, ".cloudfunctions.net")) {
+		return nil, fmt.Errorf("MintURL %q must be a valid Cloud Run URL (.run.app or .cloudfunctions.net)", p.cfg.MintURL)
+	}
+
+	// Fetch existing role/app ID mappings once for PEM auto-copy decisions.
+	var existingIDs map[string]string
+	existingIDsErr := error(nil)
+	needsCopy := false
+	for _, role := range sortedStringMapKeys(p.cfg.AgentAppIDs) {
+		if _, hasPEM := p.cfg.AgentPEMs[role]; !hasPEM {
+			needsCopy = true
+			break
+		}
+	}
+	if needsCopy {
+		existingIDs, existingIDsErr = p.GetExistingRoleAppIDs(ctx)
 	}
 
 	for _, org := range p.cfg.GitHubOrgs {
+		// Store new PEMs (per-org with fresh apps).
 		for _, role := range sortedByteMapKeys(p.cfg.AgentPEMs) {
 			if err := p.StoreAgentPEM(ctx, org, role, p.cfg.AgentPEMs[role]); err != nil {
 				return nil, fmt.Errorf("storing PEM for %s/%s: %w", org, role, err)
 			}
 		}
 
+		// Check and auto-copy PEMs for roles without fresh PEMs.
 		for _, role := range sortedStringMapKeys(p.cfg.AgentAppIDs) {
 			if _, hasPEM := p.cfg.AgentPEMs[role]; hasPEM {
 				continue
 			}
-			sid := secretID(org, role)
-			if err := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, sid); err != nil {
-				if errors.Is(err, ErrSecretNotFound) {
-					return nil, fmt.Errorf("role %q has no PEM and secret %s not found in project %s",
-						role, sid, p.cfg.ProjectID)
-				}
-				return nil, fmt.Errorf("checking secret %s for role %q: %w", sid, role, err)
+			exists, err := p.SecretExists(ctx, org, role)
+			if err != nil {
+				return nil, fmt.Errorf("checking PEM for %s/%s: %w", org, role, err)
 			}
+			if exists {
+				continue
+			}
+			if existingIDsErr != nil {
+				return nil, fmt.Errorf("reading existing role app IDs for PEM auto-copy: %w", existingIDsErr)
+			}
+			// PEM doesn't exist — try to copy from another org that has the
+			// same app (matched by app ID) for this role.
+			copied := false
+			var lastCopyErr error
+			for _, key := range sortedStringMapKeys(existingIDs) {
+				parts := strings.SplitN(key, "/", 2)
+				if len(parts) != 2 || parts[1] != role || parts[0] == org {
+					continue
+				}
+				if p.cfg.AgentAppIDs[role] != "" && existingIDs[key] != p.cfg.AgentAppIDs[role] {
+					continue
+				}
+				if copyErr := p.CopyAgentPEM(ctx, parts[0], org, role); copyErr == nil {
+					log.Printf("copied PEM for %s/%s from %s", org, role, parts[0])
+					copied = true
+					break
+				} else {
+					log.Printf("failed to copy PEM for %s/%s from %s: %v", org, role, parts[0], copyErr)
+					lastCopyErr = copyErr
+				}
+			}
+			if !copied {
+				msg := fmt.Sprintf("role %q: no PEM provided and no existing PEM found to copy for %s", role, org)
+				if lastCopyErr != nil {
+					msg += fmt.Sprintf(" (last error: %v)", lastCopyErr)
+				}
+				return nil, fmt.Errorf("%s", msg)
+			}
+		}
+	}
+
+	// Register org env vars via EnsureOrgInMint (additive, no-op if already present).
+	for _, org := range p.cfg.GitHubOrgs {
+		perOrgAppIDs := make(map[string]string, len(p.cfg.AgentAppIDs))
+		for role, appID := range p.cfg.AgentAppIDs {
+			perOrgAppIDs[org+"/"+role] = appID
+		}
+		if err := p.EnsureOrgInMint(ctx, p.cfg.MintURL, org, perOrgAppIDs); err != nil {
+			return nil, fmt.Errorf("registering org %s in mint: %w", org, err)
+		}
+	}
+
+	// Per-repo WIF registration — when cfg.Repo is set.
+	if p.cfg.Repo != "" {
+		if err := p.RegisterPerRepoWIF(ctx, p.cfg.Repo); err != nil {
+			return nil, fmt.Errorf("registering per-repo WIF: %w", err)
 		}
 	}
 
@@ -507,15 +618,18 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		}
 	}
 
-	// Bundle function source early to fail fast before provisioning GCP
-	// resources. The result is reused at deployment time to avoid redundant
-	// I/O and a TOCTOU window.
-	earlySourceZip, err := bundleFunctionSource(p.cfg.FunctionSourceDir)
+	// Check existing function state before infrastructure setup.
+	existing, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
 	if err != nil {
-		return nil, fmt.Errorf("validating function source: %w", err)
+		return nil, fmt.Errorf("checking existing function: %w", err)
 	}
 
-	// Step 1: Get project number.
+	// Early guard: --skip-mint-deploy requires an existing function.
+	if existing == nil && p.cfg.DeployMode == DeploySkip {
+		return nil, fmt.Errorf("function %s not found — cannot use --skip-mint-deploy without an existing deployment", functionName)
+	}
+
+	// Step 1: Get project number (always needed for WIF).
 	projectNumber, err := p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("getting project number: %w", err)
@@ -545,23 +659,26 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	copy(installingOrgs, p.cfg.GitHubOrgs)
 
 	// Merge with existing WIF provider orgs if provider already exists.
+	// Use a local variable to avoid mutating p.cfg.GitHubOrgs.
+	allOrgs := make([]string, len(p.cfg.GitHubOrgs))
+	copy(allOrgs, p.cfg.GitHubOrgs)
 	existingProvider, getErr := p.gcpAPI.GetWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)
 	if getErr == nil && existingProvider != nil {
 		existingOrgs := parseConditionOrgs(existingProvider.AttributeCondition)
 		seen := make(map[string]bool)
-		for _, org := range p.cfg.GitHubOrgs {
+		for _, org := range allOrgs {
 			seen[org] = true
 		}
 		for _, org := range existingOrgs {
 			if !seen[org] {
-				p.cfg.GitHubOrgs = append(p.cfg.GitHubOrgs, org)
+				allOrgs = append(allOrgs, org)
 				seen[org] = true
 			}
 		}
-		sort.Strings(p.cfg.GitHubOrgs)
+		sort.Strings(allOrgs)
 	}
 
-	attrCondition := buildAttributeCondition(p.cfg.GitHubOrgs)
+	attrCondition := buildAttributeCondition(allOrgs)
 	audiences := []string{oidcAudience, iamAudience(projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)}
 	if err := p.gcpAPI.CreateWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider, OIDCProviderConfig{
 		IssuerURI:          oidcIssuer,
@@ -582,6 +699,50 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		}
 	}
 	log.Printf("granted roles/aiplatform.user to %d org(s) (propagation may take several minutes)", len(installingOrgs))
+
+	// Determine if code deployment is needed. When the function already
+	// exists and is active with the same source hash, skip the code deploy
+	// path and use the lightweight provisionWithExistingMint for PEM + org
+	// registration. WIF infrastructure above always runs regardless.
+	needsDeploy := true
+	var earlySourceZip []byte
+
+	if existing != nil && existing.URI != "" {
+		if existing.State != "ACTIVE" && p.cfg.DeployMode == DeploySkip {
+			return nil, fmt.Errorf("mint function exists but is in %s state; cannot proceed with --skip-mint-deploy", existing.State)
+		}
+
+		if existing.State == "ACTIVE" {
+			switch {
+			case p.cfg.DeployMode == DeploySkip:
+				needsDeploy = false
+			case p.cfg.FunctionSourceDir == "":
+				needsDeploy = false
+			default: // DeployAuto
+				earlySourceZip, err = bundleFunctionSource(p.cfg.FunctionSourceDir)
+				if err != nil {
+					return nil, fmt.Errorf("validating function source: %w", err)
+				}
+				needsDeploy = existing.EnvVars["FULLSEND_SOURCE_HASH"] != sha256Hex(earlySourceZip)
+			}
+
+			if !needsDeploy {
+				if err := p.gcpAPI.SetCloudRunInvoker(ctx, p.cfg.ProjectID, p.cfg.Region, functionName); err != nil {
+					return nil, fmt.Errorf("setting function invoker policy: %w", err)
+				}
+				p.cfg.MintURL = existing.URI
+				return p.provisionWithExistingMint(ctx)
+			}
+		}
+	}
+
+	// Code deployment path — bundle source.
+	if earlySourceZip == nil {
+		earlySourceZip, err = bundleFunctionSource(p.cfg.FunctionSourceDir)
+		if err != nil {
+			return nil, fmt.Errorf("validating function source: %w", err)
+		}
+	}
 
 	// Step 5a: Store new agent PEMs only for installing orgs.
 	for _, org := range installingOrgs {
@@ -612,7 +773,7 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 
 	// Step 6: Build org-scoped env vars and deploy Cloud Function.
 	// Only create entries for installing orgs; existing orgs' entries are
-	// preserved by mergeRoleAppIDs below.
+	// preserved by EnsureOrgInMint's merge logic.
 	orgScopedAppIDs := make(map[string]string)
 	for _, org := range installingOrgs {
 		for role, appID := range p.cfg.AgentAppIDs {
@@ -629,87 +790,124 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		"GCP_PROJECT_NUMBER": projectNumber,
 		"WIF_POOL_NAME":      p.cfg.WIFPoolName,
 		"WIF_PROVIDER_NAME":  p.cfg.WIFProvider,
-		"ALLOWED_ORGS":       strings.Join(p.cfg.GitHubOrgs, ","),
+		"ALLOWED_ORGS":       strings.Join(allOrgs, ","),
 		"OIDC_AUDIENCE":      oidcAudience,
 		"ROLE_APP_IDS":       string(roleAppIDsJSON),
 	}
 
-	existing, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
-	if err != nil {
-		return nil, fmt.Errorf("checking existing function: %w", err)
-	}
+	// Step 6b: Code deployment — only when source hash changes.
+	sourceZip := earlySourceZip
+	sourceHash := sha256Hex(sourceZip)
 
-	// Merge with existing function config (additive multi-org support).
-	if existing != nil && existing.EnvVars != nil {
-		mergeAllowedOrgs(existing.EnvVars, envVars)
-		mergeRoleAppIDs(existing.EnvVars, envVars)
-		if v := existing.EnvVars["ALLOWED_WORKFLOW_FILES"]; v != "" {
-			envVars["ALLOWED_WORKFLOW_FILES"] = v
+	if existing == nil && p.cfg.DeployMode != DeploySkip {
+		// First deploy: CreateFunction with full env vars including org registration.
+		// Mint's init() fatals on missing env vars, so we must set them all at once.
+		envVars["ALLOWED_ROLES"] = deriveAllowedRoles(envVars["ROLE_APP_IDS"])
+		if envVars["ALLOWED_WORKFLOW_FILES"] == "" {
+			envVars["ALLOWED_WORKFLOW_FILES"] = "*"
 		}
-		if v := existing.EnvVars["PER_REPO_WIF_REPOS"]; v != "" {
-			envVars["PER_REPO_WIF_REPOS"] = v
-		}
-	}
-
-	envVars["ALLOWED_ROLES"] = deriveAllowedRoles(envVars["ROLE_APP_IDS"])
-
-	if envVars["ALLOWED_WORKFLOW_FILES"] == "" {
-		envVars["ALLOWED_WORKFLOW_FILES"] = "*"
-	}
-
-	if p.cfg.DeployMode == DeploySkip {
-		if existing == nil || existing.URI == "" {
-			return nil, fmt.Errorf("function %s not found — cannot use --skip-mint-deploy without an existing deployment", functionName)
-		}
-	} else {
-		sourceZip := earlySourceZip
-		sourceHash := sha256Hex(sourceZip)
 		envVars["FULLSEND_SOURCE_HASH"] = sourceHash
 
-		needsDeploy := p.shouldDeploy(existing, envVars)
+		storageSource, err := p.gcpAPI.UploadFunctionSource(ctx, p.cfg.ProjectID, p.cfg.Region, sourceZip)
+		if err != nil {
+			return nil, fmt.Errorf("uploading function source: %w", err)
+		}
 
-		if needsDeploy {
-			storageSource, err := p.gcpAPI.UploadFunctionSource(ctx, p.cfg.ProjectID, p.cfg.Region, sourceZip)
-			if err != nil {
-				return nil, fmt.Errorf("uploading function source: %w", err)
-			}
+		saEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, p.cfg.ProjectID)
+		fnCfg := FunctionConfig{
+			ServiceAccount: saEmail,
+			EnvVars:        envVars,
+			StorageSource:  storageSource,
+			EntryPoint:     "ServeHTTP",
+			Runtime:        "go126",
+		}
 
-			saEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, p.cfg.ProjectID)
-			fnCfg := FunctionConfig{
-				ServiceAccount: saEmail,
-				EnvVars:        envVars,
-				StorageSource:  storageSource,
-				EntryPoint:     "ServeHTTP",
-				Runtime:        "go126",
-			}
+		opName, err := p.gcpAPI.CreateFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, fnCfg)
+		if err != nil {
+			return nil, fmt.Errorf("deploying function: %w", err)
+		}
+		if err := p.gcpAPI.WaitForOperation(ctx, opName); err != nil {
+			return nil, fmt.Errorf("waiting for function deployment: %w", err)
+		}
 
-			var opName string
-			if existing != nil {
-				opName, err = p.gcpAPI.UpdateFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, fnCfg)
-				if err != nil {
-					return nil, fmt.Errorf("updating function: %w", err)
-				}
-			} else {
-				opName, err = p.gcpAPI.CreateFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, fnCfg)
-				if err != nil {
-					return nil, fmt.Errorf("deploying function: %w", err)
-				}
-			}
-
-			if err := p.gcpAPI.WaitForOperation(ctx, opName); err != nil {
-				return nil, fmt.Errorf("waiting for function deployment: %w", err)
-			}
-
-			existing, err = p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
-			if err != nil {
-				return nil, fmt.Errorf("querying function URL: %w", err)
-			}
-			if existing == nil || existing.URI == "" {
-				return nil, fmt.Errorf("function %s deployed but not found or has no URI", functionName)
+		existing, err = p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+		if err != nil {
+			return nil, fmt.Errorf("querying function URL: %w", err)
+		}
+		if existing == nil || existing.URI == "" {
+			return nil, fmt.Errorf("function %s deployed but not found or has no URI", functionName)
+		}
+	} else if p.needsCodeDeploy(existing, sourceHash) {
+		// Code changed: start from existing env vars (preserves org data,
+		// PER_REPO_WIF_REPOS, etc.), then override infrastructure keys
+		// with current config values. EnsureOrgInMint handles org registration.
+		deployEnvVars := make(map[string]string, len(existing.EnvVars)+6)
+		for k, v := range existing.EnvVars {
+			deployEnvVars[k] = v
+		}
+		for _, k := range []string{"GCP_PROJECT_NUMBER", "WIF_POOL_NAME", "WIF_PROVIDER_NAME", "OIDC_AUDIENCE"} {
+			if v, ok := envVars[k]; ok {
+				deployEnvVars[k] = v
 			}
 		}
+		deployEnvVars["ALLOWED_ROLES"] = deriveAllowedRoles(deployEnvVars["ROLE_APP_IDS"])
+		if deployEnvVars["ALLOWED_WORKFLOW_FILES"] == "" {
+			deployEnvVars["ALLOWED_WORKFLOW_FILES"] = "*"
+		}
+		deployEnvVars["FULLSEND_SOURCE_HASH"] = sourceHash
+
+		storageSource, err := p.gcpAPI.UploadFunctionSource(ctx, p.cfg.ProjectID, p.cfg.Region, sourceZip)
+		if err != nil {
+			return nil, fmt.Errorf("uploading function source: %w", err)
+		}
+
+		saEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, p.cfg.ProjectID)
+		fnCfg := FunctionConfig{
+			ServiceAccount: saEmail,
+			EnvVars:        deployEnvVars,
+			StorageSource:  storageSource,
+			EntryPoint:     "ServeHTTP",
+			Runtime:        "go126",
+		}
+
+		opName, err := p.gcpAPI.UpdateFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, fnCfg)
+		if err != nil {
+			return nil, fmt.Errorf("updating function: %w", err)
+		}
+		if err := p.gcpAPI.WaitForOperation(ctx, opName); err != nil {
+			return nil, fmt.Errorf("waiting for function deployment: %w", err)
+		}
+
+		existing, err = p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+		if err != nil {
+			return nil, fmt.Errorf("querying function URL: %w", err)
+		}
+		if existing == nil || existing.URI == "" {
+			return nil, fmt.Errorf("function %s deployed but not found or has no URI", functionName)
+		}
+	}
+
+	if existing == nil || existing.URI == "" {
+		return nil, fmt.Errorf("function %s not found or has no URI", functionName)
 	}
 	mintURL := existing.URI
+
+	// Register org env vars via EnsureOrgInMint (additive, no-op if already present).
+	for _, org := range installingOrgs {
+		perOrgAppIDs := make(map[string]string, len(p.cfg.AgentAppIDs))
+		for role, appID := range p.cfg.AgentAppIDs {
+			perOrgAppIDs[org+"/"+role] = appID
+		}
+		if err := p.EnsureOrgInMint(ctx, mintURL, org, perOrgAppIDs); err != nil {
+			return nil, fmt.Errorf("registering org %s in mint: %w", org, err)
+		}
+	}
+
+	if p.cfg.Repo != "" {
+		if err := p.RegisterPerRepoWIF(ctx, p.cfg.Repo); err != nil {
+			return nil, fmt.Errorf("registering per-repo WIF: %w", err)
+		}
+	}
 
 	parsedURL, err := url.Parse(mintURL)
 	if err != nil || parsedURL.Scheme != "https" ||
@@ -1071,37 +1269,25 @@ func bundleFunctionSource(dir string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func envVarsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
 func sha256Hex(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
 }
 
-// shouldDeploy determines whether the Cloud Function needs (re)deployment.
-func (p *Provisioner) shouldDeploy(existing *FunctionInfo, desiredEnvVars map[string]string) bool {
-	switch p.cfg.DeployMode {
-	case DeployForce:
-		return true
-	case DeploySkip:
+// needsCodeDeploy determines whether the Cloud Function code needs (re)deployment.
+// Only checks the source hash — org-level env vars (ALLOWED_ORGS, ROLE_APP_IDS)
+// are handled separately by EnsureOrgInMint. Infrastructure env vars set during
+// initial deploy (FULLSEND_SOURCE_HASH, GCP_PROJECT_ID) are NOT reconciled on
+// subsequent runs; a code redeploy is required to update them.
+func (p *Provisioner) needsCodeDeploy(existing *FunctionInfo, sourceHash string) bool {
+	if p.cfg.DeployMode == DeploySkip {
 		return false
-	default: // DeployAuto
-		if existing == nil {
-			return true
-		}
-		if existing.State != "ACTIVE" || existing.URI == "" {
-			return true
-		}
-		return !envVarsEqual(existing.EnvVars, desiredEnvVars)
 	}
+	if existing == nil {
+		return true
+	}
+	if existing.State != "ACTIVE" || existing.URI == "" {
+		return true
+	}
+	return existing.EnvVars["FULLSEND_SOURCE_HASH"] != sourceHash
 }
