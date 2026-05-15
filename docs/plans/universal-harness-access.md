@@ -857,8 +857,14 @@ func CacheGet(workspaceRoot, hash string) ([]byte, *CacheEntry, error) {
     metaPath := filepath.Join(dir, "metadata.json")
     contentPath := filepath.Join(dir, "content")
 
+    // Check metadata file exists
     if _, err := os.Stat(metaPath); os.IsNotExist(err) {
         return nil, nil, nil // not cached
+    }
+
+    // Check content file exists (handle partial cache entries from CachePut crashes)
+    if _, err := os.Stat(contentPath); os.IsNotExist(err) {
+        return nil, nil, nil // treat partial entry as cache miss
     }
 
     metaData, err := os.ReadFile(metaPath)

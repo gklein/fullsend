@@ -84,7 +84,7 @@ When the runner encounters a URL, it fetches the resource, caches it locally (co
 Like Option A, but all URLs must include an integrity hash:
 
 ```yaml
-agent: https://github.com/fullsend-ai/library/agents/code.md#sha256=abc123...
+agent: https://raw.githubusercontent.com/fullsend-ai/library/8cd3799.../agents/code.md#sha256=abc123...
 ```
 
 The runner verifies the fetched content matches the declared hash before using it. This prevents TOCTOU attacks at the cost of requiring hash management for every remote resource.
@@ -227,7 +227,7 @@ To support community sharing and provide a trusted source for harness components
 
 Instead, the model applies **uniform security to all remote resources:**
 
-- **All remote resources require hash pinning**, regardless of source. `https://github.com/fullsend-ai/library/agents/code.md#sha256=abc123...` and `https://example.com/my-skill.md#sha256=def456...` have the same verification requirements.
+- **All remote resources require hash pinning**, regardless of source. `https://raw.githubusercontent.com/fullsend-ai/library/8cd3799.../agents/code.md#sha256=abc123...` and `https://example.com/my-skill.md#sha256=def456...` have the same verification requirements.
 
 - **User-controlled allowlist with sensible defaults.** Organizations configure allowed URL prefixes in `config.yaml`:
   ```yaml
