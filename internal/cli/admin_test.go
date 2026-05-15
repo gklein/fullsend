@@ -1377,8 +1377,9 @@ func TestValidateSkipMintCheck(t *testing.T) {
 func TestValidateWIFProvider_Valid(t *testing.T) {
 	valid := []string{
 		"projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/gh-acme-widget",
-		"projects/1/locations/global/workloadIdentityPools/a/providers/b",
 		"projects/999999999999/locations/global/workloadIdentityPools/my-pool-123/providers/my-provider-456",
+		"projects/1/locations/global/workloadIdentityPools/abcd/providers/efgh",
+		"projects/1/locations/global/workloadIdentityPools/a-very-long-pool-name-32-chars1/providers/a-very-long-prov-name-32-chars1",
 	}
 	for _, v := range valid {
 		t.Run(v, func(t *testing.T) {
@@ -1400,6 +1401,13 @@ func TestValidateWIFProvider_Invalid(t *testing.T) {
 		{"empty string", ""},
 		{"trailing slash", "projects/123/locations/global/workloadIdentityPools/pool/providers/prov/"},
 		{"uppercase pool", "projects/123/locations/global/workloadIdentityPools/Pool/providers/prov"},
+		{"pool too short (1 char)", "projects/123/locations/global/workloadIdentityPools/a/providers/abcd"},
+		{"pool too short (3 chars)", "projects/123/locations/global/workloadIdentityPools/abc/providers/abcd"},
+		{"provider too short (1 char)", "projects/123/locations/global/workloadIdentityPools/abcd/providers/a"},
+		{"pool trailing hyphen", "projects/123/locations/global/workloadIdentityPools/abcd-/providers/abcd"},
+		{"provider trailing hyphen", "projects/123/locations/global/workloadIdentityPools/abcd/providers/abcd-"},
+		{"pool too long (33 chars)", "projects/123/locations/global/workloadIdentityPools/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/providers/abcd"},
+		{"provider too long (33 chars)", "projects/123/locations/global/workloadIdentityPools/abcd/providers/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1427,6 +1435,45 @@ func TestInstallCmd_PerRepoRejectsInvalidWIFProvider(t *testing.T) {
 		"--mint-url", "https://mint-test-abc123.run.app",
 		"--inference-project", "my-project",
 		"--inference-wif-provider", "just-a-name"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--inference-wif-provider must be a full WIF provider resource name")
+}
+
+func TestInstallCmd_PerOrgAcceptsValidWIFProvider(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme",
+		"--dry-run",
+		"--enroll-none",
+		"--inference-project", "my-project",
+		"--inference-wif-provider", "projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc"})
+	err := cmd.Execute()
+	// Per-org dry-run hits live GitHub API for repo listing; expect a downstream
+	// error but NOT a WIF validation error — proving validation passed.
+	if err != nil {
+		assert.NotContains(t, err.Error(), "--inference-wif-provider must be")
+	}
+}
+
+func TestInstallCmd_PerRepoAcceptsValidWIFProvider(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--mint-url", "https://mint-test-abc123.run.app",
+		"--inference-project", "my-project",
+		"--inference-wif-provider", "projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc",
+		"--dry-run"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
+func TestInstallCmd_SkipMintCheckStillValidatesWIFProvider(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme",
+		"--dry-run",
+		"--skip-mint-check",
+		"--mint-url", "https://mint.example.com/v1/token",
+		"--inference-project", "my-project",
+		"--inference-wif-provider", "standalone-fullsend"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--inference-wif-provider must be a full WIF provider resource name")

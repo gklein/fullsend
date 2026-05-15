@@ -142,8 +142,9 @@ type perRepoInstallConfig struct {
 
 // wifProviderPattern validates the full WIF provider resource name format
 // required by google-github-actions/auth@v3.
+// GCP pool/provider IDs: 4-32 chars, [a-z0-9-], start with letter, no trailing hyphen.
 var wifProviderPattern = regexp.MustCompile(
-	`^projects/\d+/locations/global/workloadIdentityPools/[a-z][a-z0-9-]*/providers/[a-z][a-z0-9-]*$`,
+	`^projects/\d+/locations/global/workloadIdentityPools/[a-z][a-z0-9-]{2,30}[a-z0-9]/providers/[a-z][a-z0-9-]{2,30}[a-z0-9]$`,
 )
 
 func validateWIFProvider(raw string) error {
@@ -247,7 +248,7 @@ Inference authentication:
   (requires project access with AI Platform permissions).
 
   If --inference-wif-provider is also provided with the full resource
-  name (projects/{num}/locations/global/workloadIdentityPools/{pool}/providers/{id}),
+  name (projects/{number}/locations/global/workloadIdentityPools/{pool}/providers/{id}),
   auto-provisioning is skipped and the value is used as-is. This is
   useful when a GCP admin has already provisioned WIF and shared the
   provider resource name.`,
@@ -512,7 +513,7 @@ Inference authentication:
 	cmd.Flags().BoolVar(&enrollNoneFlag, "enroll-none", false, "skip repository enrollment without prompting")
 	cmd.Flags().StringVar(&inferenceProject, "inference-project", "", "GCP project ID for inference (Agent Platform)")
 	cmd.Flags().StringVar(&inferenceRegion, "inference-region", "global", "GCP region for inference (default: global)")
-	cmd.Flags().StringVar(&inferenceWIFProvider, "inference-wif-provider", "", "full WIF provider resource name (projects/{num}/locations/global/workloadIdentityPools/{pool}/providers/{id}); skips auto-provisioning when set")
+	cmd.Flags().StringVar(&inferenceWIFProvider, "inference-wif-provider", "", "full WIF provider resource name (projects/{number}/locations/global/workloadIdentityPools/{pool}/providers/{id}); skips auto-provisioning when set")
 	cmd.Flags().StringVar(&mintProvider, "mint-provider", "gcf", "token mint provider (gcf)")
 	cmd.Flags().StringVar(&mintProject, "mint-project", "", "cloud project for token mint (e.g. GCP project ID)")
 	cmd.Flags().StringVar(&mintRegion, "mint-region", "us-central1", "cloud region for token mint")
