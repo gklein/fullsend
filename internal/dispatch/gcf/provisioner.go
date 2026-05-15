@@ -566,7 +566,11 @@ func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string
 				}
 			}
 			if !copied {
-				return nil, fmt.Errorf("role %q: no PEM provided and no existing PEM found to copy for %s (last error: %v)", role, org, lastCopyErr)
+				msg := fmt.Sprintf("role %q: no PEM provided and no existing PEM found to copy for %s", role, org)
+				if lastCopyErr != nil {
+					msg += fmt.Sprintf(" (last error: %v)", lastCopyErr)
+				}
+				return nil, fmt.Errorf("%s", msg)
 			}
 		}
 	}
