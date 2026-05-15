@@ -9,6 +9,7 @@ type AppPermissions struct {
 	PullRequests         string `json:"pull_requests,omitempty"`
 	Checks               string `json:"checks,omitempty"`
 	Contents             string `json:"contents,omitempty"`
+	Variables            string `json:"variables,omitempty"`
 	Workflows            string `json:"workflows,omitempty"`
 	Administration       string `json:"administration,omitempty"`
 	Members              string `json:"members,omitempty"`
@@ -66,6 +67,7 @@ func AgentAppConfig(org, role string) AppConfig {
 		base.Permissions = AppPermissions{
 			Actions:              "write",
 			Contents:             "write",
+			Variables:            "read",
 			Workflows:            "write",
 			Issues:               "read",
 			PullRequests:         "write",
