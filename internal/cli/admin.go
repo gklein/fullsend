@@ -140,6 +140,23 @@ type perRepoInstallConfig struct {
 	SkipMintCheck       bool
 }
 
+// wifProviderPattern validates the full WIF provider resource name format
+// required by google-github-actions/auth@v3.
+var wifProviderPattern = regexp.MustCompile(
+	`^projects/\d+/locations/global/workloadIdentityPools/[a-z][a-z0-9-]*/providers/[a-z][a-z0-9-]*$`,
+)
+
+func validateWIFProvider(raw string) error {
+	if !wifProviderPattern.MatchString(raw) {
+		return fmt.Errorf(
+			"--inference-wif-provider must be a full WIF provider resource name "+
+				"(projects/{number}/locations/global/workloadIdentityPools/{pool}/providers/{id}), got %q",
+			raw,
+		)
+	}
+	return nil
+}
+
 func validateMintURL(raw string) error {
 	if err := validateMintURLHTTPS(raw); err != nil {
 		return err
@@ -222,7 +239,18 @@ Per-org mode (argument is an org name, e.g. "acme"):
 
 Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
   Bootstraps a single repository with the shim workflow and .fullsend/
-  configuration directory. No config repo or cross-repo dispatch needed.`,
+  configuration directory. No config repo or cross-repo dispatch needed.
+
+Inference authentication:
+  If --inference-project is provided without --inference-wif-provider,
+  fullsend auto-provisions WIF infrastructure in the GCP project
+  (requires project access with AI Platform permissions).
+
+  If --inference-wif-provider is also provided with the full resource
+  name (projects/{num}/locations/global/workloadIdentityPools/{pool}/providers/{id}),
+  auto-provisioning is skipped and the value is used as-is. This is
+  useful when a GCP admin has already provisioned WIF and shared the
+  provider resource name.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			arg := args[0]
@@ -309,6 +337,14 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 			// Validate inference flag dependencies.
 			if inferenceProject == "" && (cmd.Flags().Changed("inference-region") || inferenceWIFProvider != "") {
 				return fmt.Errorf("--inference-wif-provider and --inference-region require --inference-project to be set")
+			}
+
+			// Validate WIF provider format when explicitly given.
+			if inferenceWIFProvider != "" {
+				if err := validateWIFProvider(inferenceWIFProvider); err != nil {
+					return err
+				}
+				printer.StepWarn("Using provided WIF provider value — skipping inference provider auto-provisioning")
 			}
 
 			// Auto-provision WIF when not explicitly given (idempotent: safe to re-run).
@@ -476,7 +512,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 	cmd.Flags().BoolVar(&enrollNoneFlag, "enroll-none", false, "skip repository enrollment without prompting")
 	cmd.Flags().StringVar(&inferenceProject, "inference-project", "", "GCP project ID for inference (Agent Platform)")
 	cmd.Flags().StringVar(&inferenceRegion, "inference-region", "global", "GCP region for inference (default: global)")
-	cmd.Flags().StringVar(&inferenceWIFProvider, "inference-wif-provider", "", "WIF provider resource name (optional; auto-provisioned if omitted)")
+	cmd.Flags().StringVar(&inferenceWIFProvider, "inference-wif-provider", "", "full WIF provider resource name (projects/{num}/locations/global/workloadIdentityPools/{pool}/providers/{id}); skips auto-provisioning when set")
 	cmd.Flags().StringVar(&mintProvider, "mint-provider", "gcf", "token mint provider (gcf)")
 	cmd.Flags().StringVar(&mintProject, "mint-project", "", "cloud project for token mint (e.g. GCP project ID)")
 	cmd.Flags().StringVar(&mintRegion, "mint-region", "us-central1", "cloud region for token mint")
@@ -537,6 +573,12 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 	if inferenceProject == "" {
 		return fmt.Errorf("--inference-project is required for per-repo installation")
 	}
+	// Validate WIF provider format when explicitly given.
+	if inferenceWIFProvider != "" {
+		if err := validateWIFProvider(inferenceWIFProvider); err != nil {
+			return err
+		}
+	}
 	roles, err := parseAgentRoles(agents)
 	if err != nil {
 		return err
@@ -554,6 +596,10 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 	printer.Blank()
 	printer.Header("Installing per-repo fullsend for " + repoFullName)
 	printer.Blank()
+
+	if inferenceWIFProvider != "" {
+		printer.StepWarn("Using provided WIF provider value — skipping inference provider auto-provisioning")
+	}
 
 	cfg := config.NewPerRepoConfig(roles)
 	if err := cfg.Validate(); err != nil {

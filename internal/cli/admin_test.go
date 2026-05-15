@@ -1373,3 +1373,61 @@ func TestValidateSkipMintCheck(t *testing.T) {
 	require.Error(t, validateSkipMintCheck("http://example.com"))
 	require.NoError(t, validateSkipMintCheck("https://mint.example.com/v1/token"))
 }
+
+func TestValidateWIFProvider_Valid(t *testing.T) {
+	valid := []string{
+		"projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/gh-acme-widget",
+		"projects/1/locations/global/workloadIdentityPools/a/providers/b",
+		"projects/999999999999/locations/global/workloadIdentityPools/my-pool-123/providers/my-provider-456",
+	}
+	for _, v := range valid {
+		t.Run(v, func(t *testing.T) {
+			require.NoError(t, validateWIFProvider(v))
+		})
+	}
+}
+
+func TestValidateWIFProvider_Invalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"bare name", "standalone-fullsend"},
+		{"missing projects prefix", "123/locations/global/workloadIdentityPools/pool/providers/prov"},
+		{"partial path", "projects/123/locations/global/workloadIdentityPools/pool"},
+		{"wrong location", "projects/123/locations/us-east1/workloadIdentityPools/pool/providers/prov"},
+		{"non-numeric project", "projects/my-project/locations/global/workloadIdentityPools/pool/providers/prov"},
+		{"empty string", ""},
+		{"trailing slash", "projects/123/locations/global/workloadIdentityPools/pool/providers/prov/"},
+		{"uppercase pool", "projects/123/locations/global/workloadIdentityPools/Pool/providers/prov"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateWIFProvider(tc.input)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "--inference-wif-provider must be a full WIF provider resource name")
+		})
+	}
+}
+
+func TestInstallCmd_PerOrgRejectsInvalidWIFProvider(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme",
+		"--dry-run",
+		"--inference-project", "my-project",
+		"--inference-wif-provider", "standalone-fullsend"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--inference-wif-provider must be a full WIF provider resource name")
+}
+
+func TestInstallCmd_PerRepoRejectsInvalidWIFProvider(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--mint-url", "https://mint-test-abc123.run.app",
+		"--inference-project", "my-project",
+		"--inference-wif-provider", "just-a-name"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--inference-wif-provider must be a full WIF provider resource name")
+}
