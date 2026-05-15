@@ -255,19 +255,21 @@ Shared flags (valid for both per-org and per-repo):
 - `--mint-project` — GCP project containing the mint function (defaults to `--inference-project` in per-repo)
 - `--mint-region` — cloud region for the mint function (default: `us-central1`)
 
-Per-org-only flags (`--public`, `--enroll-all`, `--enroll-none`, `--skip-app-setup`, `--vendor-fullsend-binary`, `--skip-mint-deploy`, `--mint-provider`, `--mint-source-dir`) are rejected when an `owner/repo` argument is given.
+Per-org-only flags (`--vendor-fullsend-binary`, `--enroll-all`, `--enroll-none`) are rejected when an `owner/repo` argument is given. Other flags (`--public`, `--skip-app-setup`, `--mint-provider`, `--mint-source-dir`, `--skip-mint-deploy`) are shared between per-org and per-repo modes — per-repo can create GitHub Apps and deploy a mint when existing infrastructure is not found.
 
 **Per-repo install steps**:
 
-1. Generates `.github/workflows/fullsend.yml` from the per-repo shim template.
-2. Generates `.fullsend/config.yaml` with agent roles and kill switch.
-3. Creates `.fullsend/customized/` directory structure (agents, skills, schemas, harness, policies, scripts, env).
-4. Commits all scaffold files to the target repo via the GitHub API.
-5. Sets repository variables (`FULLSEND_MINT_URL`, `FULLSEND_GCP_REGION`, `FULLSEND_PER_REPO_INSTALL`).
-6. Sets repository secrets (`FULLSEND_GCP_PROJECT_ID`, WIF credentials).
-7. Auto-provisions WIF pool/provider if `--inference-wif-provider` is omitted.
+1. Discovers existing infrastructure: auto-discovers mint URL from `--mint-project`/`--mint-region`, resolves app IDs from the mint's env vars.
+2. If apps are missing and `--skip-app-setup` is not set: creates GitHub Apps via the browser-based manifest flow (same as per-org). PEMs are stored in Secret Manager.
+3. If no mint exists: deploys the token mint Cloud Function (same provisioner path as per-org).
+4. If a mint already exists: validates PEMs, registers the org, and sets up per-repo WIF.
+5. Generates scaffold files (`.github/workflows/fullsend.yml`, `.fullsend/config.yaml`, `.fullsend/customized/` directories).
+6. Commits all scaffold files to the target repo via the GitHub API.
+7. Sets repository variables (`FULLSEND_MINT_URL`, `FULLSEND_GCP_REGION`, `FULLSEND_PER_REPO_INSTALL`).
+8. Sets repository secrets (`FULLSEND_GCP_PROJECT_ID`, WIF credentials).
+9. Auto-provisions WIF pool/provider if `--inference-wif-provider` is omitted.
 
-Per-repo install requires only `repo` and `workflow` OAuth scopes (no `admin:org`).
+Per-repo install requires only `repo` and `workflow` OAuth scopes when reusing existing infrastructure. When creating apps, scope escalation to `admin:org` is required (same as per-org).
 
 ### 8. Coexistence
 

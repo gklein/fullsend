@@ -160,6 +160,49 @@ Once a repo is enrolled (enrollment PR merged):
 
 ---
 
+## Per-repo installation
+
+Per-repo mode installs fullsend for a single repository without requiring an org-wide `.fullsend` config repo. It's fully self-contained — creating GitHub Apps, deploying a token mint, and configuring WIF as needed.
+
+### First-time install (no prior infrastructure)
+
+```bash
+fullsend admin install "$ORG_NAME/$REPO_NAME" \
+  --inference-project "$GCP_PROJECT" \
+  --mint-project "$GCP_PROJECT"
+```
+
+This discovers existing infrastructure and creates what's missing:
+- If no GitHub Apps exist, opens browser windows to create them (same manifest flow as per-org)
+- If no token mint exists, deploys a Cloud Function
+- If both exist from a prior per-org install, reuses them
+
+Creating apps requires `admin:org` OAuth scope (the installer prompts for it). Reusing existing apps only requires `repo` and `workflow` scopes.
+
+### Reusing existing infrastructure
+
+When a per-org install already exists, per-repo reuses the apps and mint:
+
+```bash
+fullsend admin install "$ORG_NAME/$REPO_NAME" \
+  --inference-project "$GCP_PROJECT" \
+  --mint-url "$MINT_URL"
+```
+
+Or let it auto-discover the mint from the GCP project:
+
+```bash
+fullsend admin install "$ORG_NAME/$REPO_NAME" \
+  --inference-project "$GCP_PROJECT" \
+  --mint-project "$GCP_PROJECT"
+```
+
+### Per-repo flags
+
+Per-repo accepts all flags except `--vendor-fullsend-binary`, `--enroll-all`, and `--enroll-none` (which only apply to org-wide enrollment).
+
+---
+
 ## Advanced: pre-configure WIF
 
 The installer auto-provisions WIF infrastructure, but you can create it manually if you need custom pool names, attribute conditions, or want to share a provider across tools.
