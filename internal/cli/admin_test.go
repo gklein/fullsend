@@ -1292,14 +1292,13 @@ func TestInstallCmd_SkipMintCheckSkipsMintProject(t *testing.T) {
 	require.NoError(t, err2)
 }
 
-func TestInstallCmd_SkipMintCheckRejectsPerOrg(t *testing.T) {
+func TestInstallCmd_SkipMintCheckPerOrgRequiresMintURL(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "acme",
-		"--skip-mint-check",
-		"--mint-url", "https://mint.example.com/v1/token"})
+		"--skip-mint-check"})
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--skip-mint-check is only valid for per-repo")
+	assert.Contains(t, err.Error(), "--mint-url is required when using --skip-mint-check")
 }
 
 func TestInstallCmd_SkipMintCheckRejectsUserinfo(t *testing.T) {
