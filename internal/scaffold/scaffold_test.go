@@ -142,6 +142,37 @@ func TestShimWorkflowCallTemplateContent(t *testing.T) {
 	assert.NotContains(t, s, "curl")
 }
 
+func TestShimTriggerParity(t *testing.T) {
+	// Both shim templates must declare the same event trigger types so that
+	// per-repo and workflow-call installation modes have identical behavior.
+	perRepo, err := FullsendRepoFile("templates/shim-per-repo.yaml")
+	require.NoError(t, err)
+	workflowCall, err := FullsendRepoFile("templates/shim-workflow-call.yaml")
+	require.NoError(t, err)
+
+	type onSection struct {
+		On map[string]struct {
+			Types []string `yaml:"types"`
+		} `yaml:"on"`
+	}
+
+	var prOn, wcOn onSection
+	require.NoError(t, yaml.Unmarshal(perRepo, &prOn))
+	require.NoError(t, yaml.Unmarshal(workflowCall, &wcOn))
+
+	// Check that each shared event has matching sub-types.
+	for event, wcTrigger := range wcOn.On {
+		prTrigger, ok := prOn.On[event]
+		require.True(t, ok, "per-repo shim is missing event trigger %q", event)
+		assert.ElementsMatch(t, wcTrigger.Types, prTrigger.Types,
+			"event %q types differ between shim templates", event)
+	}
+	for event := range prOn.On {
+		_, ok := wcOn.On[event]
+		assert.True(t, ok, "per-repo shim has extra event trigger %q not in workflow-call shim", event)
+	}
+}
+
 func TestDispatchWorkflowContent(t *testing.T) {
 	content, err := FullsendRepoFile(".github/workflows/dispatch.yml")
 	require.NoError(t, err)
