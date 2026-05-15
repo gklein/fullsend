@@ -520,7 +520,7 @@ func (h *Harness) Validate(orgAllowlist []string) error {
     }
 
     // Validate harness-level allowed_remote_resources is a subset of org-level allowlist
-    // (per ADR-0037 lines 254-258: prevents insider attacks by requiring CODEOWNERS approval
+    // (per ADR-0038 lines 254-258: prevents insider attacks by requiring CODEOWNERS approval
     // for org-level config.yaml changes before new domains can be referenced)
     for _, harnessPrefix := range h.AllowedRemoteResources {
         found := false
@@ -908,7 +908,10 @@ func CachePut(workspaceRoot, url string, content []byte) error {
     if err != nil {
         return fmt.Errorf("marshaling cache metadata: %w", err)
     }
-    // TODO: implement atomic writes (write to temp, then rename) before Phase 1 ships
+    // REQUIRED for Phase 1: Production implementation must use atomic writes
+    // (write to temp file, then os.Rename) as specified in Phase 1 requirements.
+    // This illustrative code writes separately for clarity but would leave partial
+    // cache entries on crash.
     if err := os.WriteFile(filepath.Join(dir, "metadata.json"), metaData, 0600); err != nil {
         return err
     }
@@ -1076,11 +1079,11 @@ func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, a
 // IMPORTANT: This relies on the Validate() method enforcing trailing slashes on
 // allowed_remote_resources entries to prevent prefix confusion attacks
 // (e.g., "https://github.com/org/library-evil/" won't match prefix
-// "https://github.com/org/library/"). See ADR-0037 security analysis.
-// TODO: url.Parse only decodes percent-encoding once (e.g., %2F → /), so
-// double-encoded attacks (%252F → %2F → /) are not handled. This must be
-// addressed before Phase 1 ships - either apply recursive decoding with a
-// depth limit or document the boundary and accept the risk for known URL sources.
+// "https://github.com/org/library/"). See ADR-0038 security analysis.
+// REQUIRED for Phase 1: Production implementation must handle double-encoded
+// percent attacks (%252F → %2F → /). Phase 1 requirements specify either
+// iterative decoding (max 3 iterations) or rejecting URLs containing %25.
+// This illustrative code uses url.Parse which only decodes once.
 func matchesAllowedPrefix(rawURL string, allowedPrefixes []string) bool {
     // Parse and canonicalize the URL to prevent percent-encoding bypass
     u, err := url.Parse(rawURL)
@@ -1256,6 +1259,8 @@ resolved, err := resolve.ResolveHarness(ctx, workspaceRoot, h, fetchPolicy)
 - No runtime fetch—all resources resolved at harness load time
 - **No transitive dependency resolution** (skills/policies cannot themselves reference URL-based dependencies)
 - **No cycle detection needed** — only single-level references are supported (harness → resource, but resource cannot → another resource)
+- **Atomic cache writes required:** Cache implementation must use write-to-temp-then-rename pattern (via `os.WriteFile` + `os.Rename`) to prevent partial cache entries from crashes
+- **Double-encoding mitigation required:** URL canonicalization must either apply iterative percent-decoding (max 3 iterations) or reject URLs containing `%25` (encoded percent sign) to prevent bypass of prefix checks
 
 **Deliverable:** `fullsend run` can load a harness that references `agent: https://...#sha256=abc123...`
 
@@ -1374,9 +1379,9 @@ The cache grows unbounded. When should cached resources be evicted?
 
 ## Resolved Questions
 
-The following questions have been resolved at the architecture level in ADR-0037's "Resolved design questions" section. The options and recommendations below reflect those ADR decisions and are included here for implementation reference:
+The following questions have been resolved at the architecture level in ADR-0038's "Resolved design questions" section. The options and recommendations below reflect those ADR decisions and are included here for implementation reference:
 
-### Signature verification [RESOLVED in ADR-0037]
+### Signature verification [RESOLVED in ADR-0038]
 
 Should remote resources be cryptographically signed by their publisher?
 
@@ -1384,7 +1389,7 @@ Should remote resources be cryptographically signed by their publisher?
 
 **Rationale:** Hash pinning prevents content substitution attacks. Signatures add provenance (proving who published the resource) but require PKI infrastructure. For MVP, HTTPS transport security + domain allowlists + integrity hashes provide sufficient protection.
 
-### Namespace governance [RESOLVED in ADR-0037]
+### Namespace governance [RESOLVED in ADR-0038]
 
 Who controls `https://cdn.fullsend.ai/skills/`? How do community contributors publish skills?
 
@@ -1392,7 +1397,7 @@ Who controls `https://cdn.fullsend.ai/skills/`? How do community contributors pu
 
 **Rationale:** Avoids central gatekeeping and single point of failure. Aligns with the threat model: organizations control what they trust via allowlists.
 
-### Version resolution [RESOLVED in ADR-0037]
+### Version resolution [RESOLVED in ADR-0038]
 
 If a skill references `policy: rust-sandbox@v2` (a name+version, not a URL), how is that resolved to a URL?
 
@@ -1420,4 +1425,4 @@ Universal harness access enables a composable, shareable ecosystem of agents, sk
 4. **Transitive closure applies uniformly**
 5. **Offline mode supports CI/CD environments**
 
-This design should be reviewed for security implications before acceptance. See [ADR-0037](../ADRs/0037-universal-harness-access.md) for the decision record.
+This design should be reviewed for security implications before acceptance. See [ADR-0038](../ADRs/0038-universal-harness-access.md) for the decision record.
