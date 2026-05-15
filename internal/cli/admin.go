@@ -487,12 +487,19 @@ Inference authentication:
 
 			// Pre-copy PEM secrets for shared public apps before app setup.
 			var sharedSlugs map[string]string
+			var perOrgStoredIDs map[string]string
 			if mintProject != "" && !skipAppSetup && !skipMintCheck {
 				slugs, err := copySharedAppPEMs(ctx, client, printer, org, roles, mintProject, mintRegion)
 				if err != nil {
 					return err
 				}
 				sharedSlugs = slugs
+
+				prov := gcf.NewProvisioner(gcf.Config{
+					ProjectID:  mintProject,
+					GitHubOrgs: []string{org},
+				}, gcf.NewLiveGCFClient())
+				perOrgStoredIDs, _ = prov.GetExistingRoleAppIDs(ctx)
 			}
 
 			// Collect agent credentials via app setup.
@@ -501,7 +508,7 @@ Inference authentication:
 				if err := ensureConfigRepoExists(ctx, client, printer, org); err != nil {
 					return err
 				}
-				creds, err := runAppSetup(ctx, client, printer, org, roles, mintProject, publicApps, sharedSlugs, appSet)
+				creds, err := runAppSetup(ctx, client, printer, org, roles, mintProject, publicApps, sharedSlugs, appSet, perOrgStoredIDs)
 				if err != nil {
 					return err
 				}
@@ -839,7 +846,7 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 			sharedSlugs = slugs
 		}
 
-		creds, credErr := runAppSetup(ctx, client, printer, owner, roles, mintProject, publicApps, sharedSlugs, c.AppSet)
+		creds, credErr := runAppSetup(ctx, client, printer, owner, roles, mintProject, publicApps, sharedSlugs, c.AppSet, existingIDs)
 		if credErr != nil {
 			return credErr
 		}
@@ -1291,13 +1298,14 @@ func copySharedAppPEMs(ctx context.Context, client forge.Client, printer *ui.Pri
 // runAppSetup creates or reuses GitHub Apps for each role. When mintProject is
 // non-empty, PEMs are also stored in GCP Secret Manager during app creation so
 // they survive partial provisioning failures.
-func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject string, publicApps bool, sharedSlugs map[string]string, appSet string) ([]layers.AgentCredentials, error) {
+func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject string, publicApps bool, sharedSlugs map[string]string, appSet string, storedAppIDs map[string]string) ([]layers.AgentCredentials, error) {
 	printer.Header("Setting up GitHub Apps")
 	printer.Blank()
 
 	setup := appsetup.NewSetup(client, appsetup.StdinPrompter{}, appsetup.DefaultBrowser{}, printer).
 		WithPublicApps(publicApps).
-		WithAppSet(appSet)
+		WithAppSet(appSet).
+		WithStoredAppIDs(storedAppIDs)
 
 	// Merge known slugs: config-based first, then shared app overrides.
 	knownSlugs := loadKnownSlugs(ctx, client, org)

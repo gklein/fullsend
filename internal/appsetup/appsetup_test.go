@@ -676,6 +676,87 @@ func TestSetup_ExistingApp_PEMRecovery_FileNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "checking PEM file")
 }
 
+func TestSetup_ExistingApp_StaleAppID_TriggersRecovery(t *testing.T) {
+	pemData := generateTestPEM(t)
+	pemPath := writeTempPEM(t, pemData)
+
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{
+			{ID: 100, AppID: 20, AppSlug: "fullsend-fullsend"},
+		},
+		AppClientIDs: map[string]string{
+			"fullsend-fullsend": "Iv1.fullsend123",
+		},
+	}
+	prompter := &fakePrompter{confirmResult: true, readLineResult: pemPath}
+	printer := ui.New(&discardWriter{})
+
+	var storedPEM string
+	s := NewSetup(client, prompter, newFakeBrowser(), printer).
+		WithAppSet("fullsend").
+		WithSecretExists(func(_ string) (bool, error) { return true, nil }).
+		WithStoredAppIDs(map[string]string{"myorg/fullsend": "10"}).
+		WithStoreSecret(func(_ context.Context, _, p string) error {
+			storedPEM = p
+			return nil
+		})
+
+	creds, err := s.Run(context.Background(), "myorg", "fullsend")
+	require.NoError(t, err)
+	assert.Equal(t, 20, creds.AppID)
+	assert.NotEmpty(t, creds.PEM, "should have new PEM from recovery")
+	assert.NotEmpty(t, storedPEM, "should have stored new PEM")
+	assert.True(t, prompter.confirmCalled, "should prompt for PEM recovery")
+}
+
+func TestSetup_ExistingApp_MatchingAppID_Reuses(t *testing.T) {
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{
+			{ID: 100, AppID: 10, AppSlug: "fullsend-fullsend"},
+		},
+		AppClientIDs: map[string]string{
+			"fullsend-fullsend": "Iv1.fullsend123",
+		},
+	}
+	prompter := &fakePrompter{}
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, prompter, newFakeBrowser(), printer).
+		WithAppSet("fullsend").
+		WithSecretExists(func(_ string) (bool, error) { return true, nil }).
+		WithStoredAppIDs(map[string]string{"myorg/fullsend": "10"})
+
+	creds, err := s.Run(context.Background(), "myorg", "fullsend")
+	require.NoError(t, err)
+	assert.Equal(t, 10, creds.AppID)
+	assert.Empty(t, creds.PEM, "PEM should be empty to signal reuse")
+	assert.False(t, prompter.confirmCalled, "should not prompt — IDs match")
+}
+
+func TestSetup_ExistingApp_NoStoredIDs_Reuses(t *testing.T) {
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{
+			{ID: 100, AppID: 10, AppSlug: "fullsend-fullsend"},
+		},
+		AppClientIDs: map[string]string{
+			"fullsend-fullsend": "Iv1.fullsend123",
+		},
+	}
+	prompter := &fakePrompter{}
+	printer := ui.New(&discardWriter{})
+
+	// No WithStoredAppIDs — backwards compatible behavior.
+	s := NewSetup(client, prompter, newFakeBrowser(), printer).
+		WithAppSet("fullsend").
+		WithSecretExists(func(_ string) (bool, error) { return true, nil })
+
+	creds, err := s.Run(context.Background(), "myorg", "fullsend")
+	require.NoError(t, err)
+	assert.Equal(t, 10, creds.AppID)
+	assert.Empty(t, creds.PEM, "PEM should be empty to signal reuse")
+	assert.False(t, prompter.confirmCalled, "should not prompt — no stored IDs to compare")
+}
+
 func TestValidateRSAPEM_Valid(t *testing.T) {
 	assert.NoError(t, ValidateRSAPEM(generateTestPEM(t)))
 }
