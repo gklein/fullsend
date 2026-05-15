@@ -91,7 +91,7 @@ The review stage runs N independent review agents in parallel. One is randomly s
 
 Every push to a PR in the review stage triggers a new review round. This means `ready-for-merge` is never stale — it always reflects the current PR head.
 
-> **Planned:** The **fix agent** ([#197](https://github.com/fullsend-ai/fullsend/issues/197)) will handle the rework loop automatically. When a review agent requests changes or a human posts `/fix-agent [instruction]`, the fix agent reads the review feedback and pushes fixes to the existing PR — no manual coding required. The fix agent is a separate workflow from the code agent, with its own prompt scoped to "read review feedback, fix existing PR."
+> **Planned:** The **fix agent** ([#197](https://github.com/fullsend-ai/fullsend/issues/197)) will handle the rework loop automatically. When a review agent requests changes or a human posts `/fs-fix [instruction]`, the fix agent reads the review feedback and pushes fixes to the existing PR — no manual coding required. The fix agent is a separate workflow from the code agent, with its own prompt scoped to "read review feedback, fix existing PR."
 
 ## The stages in detail
 
