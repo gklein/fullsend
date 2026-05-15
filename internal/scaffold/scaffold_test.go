@@ -122,7 +122,7 @@ func TestShimWorkflowCallTemplateContent(t *testing.T) {
 	// Bot filter
 	assert.Contains(t, s, "comment.user.type != 'Bot'")
 	// stop-fix authorization
-	assert.Contains(t, s, "/stop-fix")
+	assert.Contains(t, s, "/fs-fix-stop")
 	assert.Contains(t, s, "fullsend-no-fix")
 	// Per-stage jobs removed
 	assert.NotContains(t, s, "dispatch-triage")
@@ -152,13 +152,12 @@ func TestDispatchWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "required: true")
 	// Routing logic
 	assert.Contains(t, s, "Determine stage")
-	assert.Contains(t, s, "/triage")
-	assert.Contains(t, s, "/code")
-	assert.Contains(t, s, "/review")
-	assert.Contains(t, s, "/fix")
-	assert.Contains(t, s, "/retro")
-	assert.Contains(t, s, "/fullsend")
-	assert.Contains(t, s, "/prioritize")
+	assert.Contains(t, s, "/fs-triage")
+	assert.Contains(t, s, "/fs-code")
+	assert.Contains(t, s, "/fs-review")
+	assert.Contains(t, s, "/fs-fix")
+	assert.Contains(t, s, "/fs-retro")
+	assert.Contains(t, s, "/fs-prioritize")
 	assert.Contains(t, s, "ready-to-code")
 	assert.Contains(t, s, "ready-for-review")
 	assert.Contains(t, s, "TRIGGERING_LABEL")
