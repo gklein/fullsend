@@ -368,7 +368,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 				// If every eligible repo was skipped due to guard-check errors,
 				// the token likely lacks the required scope — fail loudly.
 				if eligibleCount > 0 && skippedErrors == eligibleCount {
-					return fmt.Errorf("all %d repos were skipped due to guard-check errors — verify your token has actions:read scope", eligibleCount)
+					return fmt.Errorf("all %d repos were skipped due to guard-check errors — verify your token has variables:read scope", eligibleCount)
 				}
 				msg := fmt.Sprintf("Enrolling %d repositories (excluding %s)", len(repos), forge.ConfigRepoName)
 				if skippedPerRepo-skippedErrors > 0 {
