@@ -754,9 +754,12 @@ func FetchURL(ctx context.Context, rawURL string, policy FetchPolicy) ([]byte, e
 
 // isAllowedDomain returns true if hostname matches any allowed domain.
 // Supports exact matches and explicit wildcard syntax (*.example.com).
-// Wildcard matching follows TLS certificate conventions: *.example.com matches
-// subdomains only (foo.example.com, bar.example.com) but NOT the bare domain
+// Wildcard matching matches hostname and all sub-levels: *.example.com matches
+// foo.example.com, bar.baz.example.com, etc., but NOT the bare domain
 // (example.com). To allow both, add both patterns: ["example.com", "*.example.com"].
+// Note: This differs from TLS wildcard certificates (RFC 6125) which only match
+// single-level subdomains. The more permissive matching here is acceptable since
+// the security boundary is enforced by allowed_remote_resources prefix checks.
 func isAllowedDomain(hostname string, allowed []string) bool {
     for _, pattern := range allowed {
         // Explicit wildcard: *.example.com matches subdomains only
@@ -1067,6 +1070,10 @@ func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, a
 // allowed_remote_resources entries to prevent prefix confusion attacks
 // (e.g., "https://github.com/org/library-evil/" won't match prefix
 // "https://github.com/org/library/"). See ADR-0037 security analysis.
+// Note: url.Parse only decodes percent-encoding once (e.g., %2F → /), so
+// double-encoded attacks (%252F → %2F → /) are not handled. Production
+// implementations should document this boundary or apply recursive decoding
+// with a depth limit if GitHub or other URL sources exhibit double-encoding.
 func matchesAllowedPrefix(rawURL string, allowedPrefixes []string) bool {
     // Parse and canonicalize the URL to prevent percent-encoding bypass
     u, err := url.Parse(rawURL)
