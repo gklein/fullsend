@@ -48,7 +48,7 @@ func DefaultAgentRoles() []string {
 // issues:read permission. Subscribing to "issue_comment" requires issues:read
 // or issues:write. Mismatches cause the manifest to be rejected. Every Events
 // entry below must have a corresponding permission.
-func AgentAppConfig(org, role string) AppConfig {
+func AgentAppConfig(org, role, appSet string) AppConfig {
 	base := AppConfig{
 		URL: fmt.Sprintf("https://github.com/%s", org),
 		// hook_attributes is required by the manifest spec even when we
@@ -59,7 +59,7 @@ func AgentAppConfig(org, role string) AppConfig {
 		},
 	}
 
-	base.Name = fmt.Sprintf("fullsend-%s", role)
+	base.Name = fmt.Sprintf("%s-%s", appSet, role)
 
 	switch role{
 	case "fullsend":

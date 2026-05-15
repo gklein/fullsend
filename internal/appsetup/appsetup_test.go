@@ -66,10 +66,10 @@ func (f *fakeBrowser) Open(_ context.Context, url string) error {
 // --- tests ---
 
 func TestAppSlug(t *testing.T) {
-	assert.Equal(t, "fullsend-fullsend", AppSlug("fullsend"))
-	assert.Equal(t, "fullsend-triage", AppSlug("triage"))
-	assert.Equal(t, "fullsend-coder", AppSlug("coder"))
-	assert.Equal(t, "fullsend-review", AppSlug("review"))
+	assert.Equal(t, "fullsend-ai-fullsend", AppSlug("fullsend-ai", "fullsend"))
+	assert.Equal(t, "fullsend-ai-triage", AppSlug("fullsend-ai", "triage"))
+	assert.Equal(t, "custom-coder", AppSlug("custom", "coder"))
+	assert.Equal(t, "fullsend-review", AppSlug("fullsend", "review"))
 }
 
 func TestSetup_ExistingApp_SecretExists_AutoReuse(t *testing.T) {
@@ -86,6 +86,7 @@ func TestSetup_ExistingApp_SecretExists_AutoReuse(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	s := NewSetup(client, prompter, browser, printer).
+		WithAppSet("fullsend").
 		WithSecretExists(func(_ string) (bool, error) {
 			return true, nil
 		})
@@ -115,6 +116,7 @@ func TestSetup_ExistingApp_Reuse_StoreSecretNotCalled(t *testing.T) {
 
 	storeCalled := false
 	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithAppSet("fullsend").
 		WithSecretExists(func(_ string) (bool, error) { return true, nil }).
 		WithStoreSecret(func(_ context.Context, _, _ string) error {
 			storeCalled = true
@@ -136,6 +138,7 @@ func TestSetup_RecoverCreatedApp_PEMExists(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithAppSet("fullsend").
 		WithSecretExists(func(_ string) (bool, error) { return true, nil })
 
 	creds, err := s.recoverCreatedApp(context.Background(), "myorg", "coder", "fullsend-coder")
@@ -155,6 +158,7 @@ func TestSetup_RecoverCreatedApp_KnownSlug(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithAppSet("fullsend").
 		WithKnownSlugs(map[string]string{"coder": "custom-coder-app"}).
 		WithSecretExists(func(_ string) (bool, error) { return true, nil })
 
@@ -170,6 +174,7 @@ func TestSetup_RecoverCreatedApp_NoPEM(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithAppSet("fullsend").
 		WithSecretExists(func(_ string) (bool, error) { return false, nil })
 
 	creds, err := s.recoverCreatedApp(context.Background(), "myorg", "coder", "fullsend-coder")
@@ -181,7 +186,8 @@ func TestSetup_RecoverCreatedApp_NoSecretExistsFunc(t *testing.T) {
 	client := &forge.FakeClient{}
 	printer := ui.New(&discardWriter{})
 
-	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer)
+	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithAppSet("fullsend")
 
 	creds, err := s.recoverCreatedApp(context.Background(), "myorg", "coder", "fullsend-coder")
 	require.NoError(t, err)
@@ -202,6 +208,7 @@ func TestSetup_ExistingApp_NoSecret(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	s := NewSetup(client, prompter, browser, printer).
+		WithAppSet("fullsend").
 		WithSecretExists(func(_ string) (bool, error) {
 			return false, nil
 		})
@@ -223,6 +230,7 @@ func TestSetup_ExistingApp_ClientIDLookupFails(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	s := NewSetup(client, prompter, browser, printer).
+		WithAppSet("fullsend").
 		WithSecretExists(func(_ string) (bool, error) {
 			return true, nil
 		})
@@ -246,6 +254,7 @@ func TestSetup_KnownSlug_Match(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	s := NewSetup(client, prompter, browser, printer).
+		WithAppSet("fullsend").
 		WithKnownSlugs(map[string]string{"coder": "custom-slug-name"}).
 		WithSecretExists(func(_ string) (bool, error) {
 			return true, nil
@@ -269,7 +278,8 @@ func TestSetup_NoExistingApp(t *testing.T) {
 	browser := newFakeBrowser()
 	printer := ui.New(&discardWriter{})
 
-	s := NewSetup(client, prompter, browser, printer)
+	s := NewSetup(client, prompter, browser, printer).
+		WithAppSet("fullsend")
 
 	// No existing app → manifest flow is started. Use a short context
 	// timeout so the test doesn't hang waiting for a GitHub callback.
@@ -297,7 +307,8 @@ func TestManifestFlow_HTMLForm(t *testing.T) {
 	browser := newFakeBrowser()
 	printer := ui.New(&discardWriter{})
 
-	s := NewSetup(client, &fakePrompter{}, browser, printer)
+	s := NewSetup(client, &fakePrompter{}, browser, printer).
+		WithAppSet("fullsend")
 
 	// Use a short timeout — we only need the server to start and serve the
 	// HTML page, not complete the full manifest flow.
@@ -403,6 +414,7 @@ func TestSetup_StalePermissions_AllRolesChecked(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	setup := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithAppSet("fullsend").
 		WithSecretExists(func(_ string) (bool, error) { return true, nil })
 
 	// Run both roles — each should succeed individually.
@@ -439,6 +451,7 @@ func TestSetup_StalePermissions_IncludesInstallationURL(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	setup := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithAppSet("fullsend").
 		WithSecretExists(func(_ string) (bool, error) { return true, nil })
 
 	_, err := setup.Run(context.Background(), "myorg", "fullsend")
@@ -480,6 +493,7 @@ func TestSetup_CorrectPermissions_NoError(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	setup := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithAppSet("fullsend").
 		WithSecretExists(func(_ string) (bool, error) { return true, nil })
 
 	_, err := setup.Run(context.Background(), "myorg", "fullsend")
@@ -520,6 +534,7 @@ func existingAppSetup(t *testing.T, prompter *fakePrompter) (*Setup, *forge.Fake
 	}
 	printer := ui.New(&discardWriter{})
 	s := NewSetup(client, prompter, newFakeBrowser(), printer).
+		WithAppSet("fullsend").
 		WithSecretExists(func(_ string) (bool, error) { return false, nil })
 	return s, client
 }

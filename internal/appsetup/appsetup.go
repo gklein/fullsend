@@ -127,6 +127,7 @@ type Setup struct {
 	storeSecret  StoreSecretFunc
 	permErrors   []string
 	publicApps   bool
+	appSet       string
 }
 
 // NewSetup creates a new Setup instance.
@@ -136,6 +137,7 @@ func NewSetup(client forge.Client, prompter Prompter, browser BrowserOpener, pri
 		prompter: prompter,
 		browser:  browser,
 		ui:       printer,
+		appSet:   DefaultAppSet,
 	}
 }
 
@@ -167,6 +169,13 @@ func (s *Setup) WithPublicApps(public bool) *Setup {
 	return s
 }
 
+// WithAppSet sets the app set prefix for GitHub App naming.
+// Apps are named "{appSet}-{role}" (e.g., "fullsend-ai-coder").
+func (s *Setup) WithAppSet(appSet string) *Setup {
+	s.appSet = appSet
+	return s
+}
+
 // Run creates or reuses a GitHub App for the given org and role.
 //
 // The flow:
@@ -178,7 +187,7 @@ func (s *Setup) WithPublicApps(public bool) *Setup {
 //  5. If not found, run the manifest flow to create a new app.
 //  6. After creation, store the PEM immediately, then install on the org.
 func (s *Setup) Run(ctx context.Context, org, role string) (*AppCredentials, error) {
-	slug := AppSlug(role)
+	slug := AppSlug(s.appSet, role)
 	s.ui.StepStart(fmt.Sprintf("Checking for existing app: %s", slug))
 
 	inst, found, err := s.findExistingInstallation(ctx, org, role, slug)
@@ -489,7 +498,7 @@ func (s *Setup) checkPermissions(inst *forge.Installation, org, role string) {
 		s.ui.StepWarn(fmt.Sprintf("app %s: permissions not available, skipping check", inst.AppSlug))
 		return
 	}
-	expected := ghTypes.AgentAppConfig(org, role).Permissions
+	expected := ghTypes.AgentAppConfig(org, role, s.appSet).Permissions
 	data, _ := json.Marshal(expected)
 	var want map[string]string
 	_ = json.Unmarshal(data, &want)
@@ -544,7 +553,7 @@ func (s *Setup) runManifestFlow(ctx context.Context, org, role string) (*AppCred
 
 	// Build the manifest with redirect_url included — GitHub requires it
 	// inside the JSON manifest, not as a separate form field.
-	appCfg := ghTypes.AgentAppConfig(org, role)
+	appCfg := ghTypes.AgentAppConfig(org, role, s.appSet)
 	appCfg.RedirectURL = callbackURL
 	appCfg.Public = s.publicApps
 	manifest, err := json.Marshal(appCfg)
@@ -750,7 +759,13 @@ func (s *Setup) ensureInstalled(ctx context.Context, org, slug string) error {
 	}
 }
 
-// AppSlug returns the conventional app slug for a given role.
-func AppSlug(role string) string {
-	return "fullsend-" + role
+// DefaultAppSet is the default app set prefix for GitHub Apps.
+// A SaaS multi-org deployment uses this prefix so that the same set of
+// public apps (e.g., fullsend-ai-fullsend, fullsend-ai-coder) can be
+// installed across multiple organizations.
+const DefaultAppSet = "fullsend-ai"
+
+// AppSlug returns the conventional app slug for a given app set and role.
+func AppSlug(appSet, role string) string {
+	return appSet + "-" + role
 }
