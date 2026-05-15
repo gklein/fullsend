@@ -228,7 +228,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := appsetup.ValidateAppSet(appSet); err != nil {
-				return fmt.Errorf("invalid --app-set value: %w", err)
+				return fmt.Errorf("invalid --app-set: %w", err)
 			}
 
 			arg := args[0]
@@ -983,6 +983,9 @@ func newUninstallCmd() *cobra.Command {
 			if err := validateOrgName(org); err != nil {
 				return err
 			}
+			if err := appsetup.ValidateAppSet(appSet); err != nil {
+				return fmt.Errorf("invalid --app-set: %w", err)
+			}
 
 			if err := appsetup.ValidateAppSet(appSet); err != nil {
 				return fmt.Errorf("invalid --app-set value: %w", err)
@@ -1019,7 +1022,7 @@ func newUninstallCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&yolo, "yolo", false, "skip confirmation prompt")
-	cmd.Flags().StringVar(&appSet, "app-set", appsetup.DefaultAppSet, "app set name prefix for GitHub Apps (must match the value used during install)")
+	cmd.Flags().StringVar(&appSet, "app-set", appsetup.DefaultAppSet, "app set name prefix for GitHub Apps (used for fallback slug generation when config is unavailable)")
 
 	return cmd
 }

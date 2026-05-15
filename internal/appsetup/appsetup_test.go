@@ -73,15 +73,37 @@ func TestAppSlug(t *testing.T) {
 }
 
 func TestValidateAppSet(t *testing.T) {
-	assert.NoError(t, ValidateAppSet("fullsend-ai"))
-	assert.NoError(t, ValidateAppSet("custom"))
-	assert.NoError(t, ValidateAppSet("my-org-apps"))
-	assert.Error(t, ValidateAppSet(""))
-	assert.Error(t, ValidateAppSet("-leading"))
-	assert.Error(t, ValidateAppSet("trailing-"))
-	assert.Error(t, ValidateAppSet("has spaces"))
-	assert.Error(t, ValidateAppSet("UPPERCASE"))
-	assert.Error(t, ValidateAppSet("special!chars"))
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"valid simple", "fullsend", false},
+		{"valid with hyphen", "fullsend-ai", false},
+		{"valid multi hyphen", "my-custom-app", false},
+		{"valid numeric", "app2", false},
+		{"valid starts with number", "42apps", false},
+		{"empty", "", true},
+		{"uppercase", "FullSend", true},
+		{"leading hyphen", "-fullsend", true},
+		{"trailing hyphen", "fullsend-", true},
+		{"consecutive hyphens", "full--send", true},
+		{"underscore", "full_send", true},
+		{"space", "full send", true},
+		{"special chars", "special!chars", true},
+		{"too long", "a23456789012345678901234567890123456789x", true},
+		{"max length ok", "a2345678901234567890123456789012345678x", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateAppSet(tc.input)
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestSetup_NonDefaultAppSet_FlowsThrough(t *testing.T) {
@@ -539,6 +561,26 @@ func TestSetup_CorrectPermissions_NoError(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NoError(t, setup.PermissionErrors())
+}
+
+func TestSetup_DefaultAppSet(t *testing.T) {
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{
+			{ID: 100, AppID: 10, AppSlug: "fullsend-ai-coder"},
+		},
+		AppClientIDs: map[string]string{
+			"fullsend-ai-coder": "Iv1.default123",
+		},
+	}
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, &fakePrompter{}, newFakeBrowser(), printer).
+		WithSecretExists(func(_ string) (bool, error) { return true, nil })
+
+	creds, err := s.Run(context.Background(), "myorg", "coder")
+	require.NoError(t, err)
+	assert.Equal(t, "fullsend-ai-coder", creds.Slug)
+	assert.Equal(t, "Iv1.default123", creds.ClientID)
 }
 
 // --- PEM recovery tests ---

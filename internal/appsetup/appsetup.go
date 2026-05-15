@@ -170,18 +170,20 @@ func (s *Setup) WithPublicApps(public bool) *Setup {
 	return s
 }
 
-// validAppSet matches lowercase alphanumeric strings with optional hyphens,
-// not starting or ending with a hyphen.
-var validAppSet = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+// appSetPattern validates app set slugs: lowercase alphanumeric with hyphens,
+// must start with a letter or digit, no leading/trailing/consecutive hyphens.
+var appSetPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-// ValidateAppSet checks that an app set prefix is non-empty and contains only
-// lowercase alphanumeric characters and hyphens (no leading/trailing hyphens).
+// ValidateAppSet checks that an app set slug is well-formed.
 func ValidateAppSet(appSet string) error {
 	if appSet == "" {
-		return fmt.Errorf("app set prefix must not be empty")
+		return fmt.Errorf("app set must not be empty")
 	}
-	if !validAppSet.MatchString(appSet) {
-		return fmt.Errorf("app set prefix %q must contain only lowercase alphanumeric characters and hyphens", appSet)
+	if len(appSet) > 39 {
+		return fmt.Errorf("app set %q exceeds max length of 39 characters", appSet)
+	}
+	if !appSetPattern.MatchString(appSet) {
+		return fmt.Errorf("app set %q must be lowercase alphanumeric with hyphens (e.g., fullsend-ai)", appSet)
 	}
 	return nil
 }

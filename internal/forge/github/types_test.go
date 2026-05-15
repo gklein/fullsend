@@ -113,6 +113,14 @@ func TestAgentAppConfig_UnknownRole(t *testing.T) {
 	assert.Contains(t, cfg.Events, "issues")
 }
 
+func TestAgentAppConfig_DefaultAppSet(t *testing.T) {
+	cfg := AgentAppConfig("myorg", "coder", "fullsend-ai")
+	assert.Equal(t, "fullsend-ai-coder", cfg.Name)
+
+	cfg = AgentAppConfig("myorg", "fullsend", "fullsend-ai")
+	assert.Equal(t, "fullsend-ai-fullsend", cfg.Name)
+}
+
 func TestAppConfig_RedirectURL_InJSON(t *testing.T) {
 	cfg := AgentAppConfig("myorg", "fullsend", "fullsend")
 	cfg.RedirectURL = "http://127.0.0.1:12345/callback"
