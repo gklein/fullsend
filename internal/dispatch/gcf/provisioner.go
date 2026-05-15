@@ -247,10 +247,14 @@ func (p *Provisioner) GetFunctionURL(ctx context.Context) (string, error) {
 }
 
 // GetExistingRoleAppIDs reads ROLE_APP_IDS from the deployed mint function.
-// Returns nil if the function doesn't exist or has no ROLE_APP_IDS.
+// Returns (nil, nil) if the function doesn't exist or has no ROLE_APP_IDS.
+// Returns (nil, err) if the API call fails (auth/network error).
 func (p *Provisioner) GetExistingRoleAppIDs(ctx context.Context) (map[string]string, error) {
 	fn, err := p.gcpAPI.GetFunction(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
-	if err != nil || fn == nil || fn.EnvVars == nil {
+	if err != nil {
+		return nil, fmt.Errorf("reading mint function: %w", err)
+	}
+	if fn == nil || fn.EnvVars == nil {
 		return nil, nil
 	}
 	raw := fn.EnvVars["ROLE_APP_IDS"]
@@ -616,23 +620,26 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	copy(installingOrgs, p.cfg.GitHubOrgs)
 
 	// Merge with existing WIF provider orgs if provider already exists.
+	// Use a local variable to avoid mutating p.cfg.GitHubOrgs.
+	allOrgs := make([]string, len(p.cfg.GitHubOrgs))
+	copy(allOrgs, p.cfg.GitHubOrgs)
 	existingProvider, getErr := p.gcpAPI.GetWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)
 	if getErr == nil && existingProvider != nil {
 		existingOrgs := parseConditionOrgs(existingProvider.AttributeCondition)
 		seen := make(map[string]bool)
-		for _, org := range p.cfg.GitHubOrgs {
+		for _, org := range allOrgs {
 			seen[org] = true
 		}
 		for _, org := range existingOrgs {
 			if !seen[org] {
-				p.cfg.GitHubOrgs = append(p.cfg.GitHubOrgs, org)
+				allOrgs = append(allOrgs, org)
 				seen[org] = true
 			}
 		}
-		sort.Strings(p.cfg.GitHubOrgs)
+		sort.Strings(allOrgs)
 	}
 
-	attrCondition := buildAttributeCondition(p.cfg.GitHubOrgs)
+	attrCondition := buildAttributeCondition(allOrgs)
 	audiences := []string{oidcAudience, iamAudience(projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)}
 	if err := p.gcpAPI.CreateWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider, OIDCProviderConfig{
 		IssuerURI:          oidcIssuer,
@@ -735,7 +742,7 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		"GCP_PROJECT_NUMBER": projectNumber,
 		"WIF_POOL_NAME":      p.cfg.WIFPoolName,
 		"WIF_PROVIDER_NAME":  p.cfg.WIFProvider,
-		"ALLOWED_ORGS":       strings.Join(p.cfg.GitHubOrgs, ","),
+		"ALLOWED_ORGS":       strings.Join(allOrgs, ","),
 		"OIDC_AUDIENCE":      oidcAudience,
 		"ROLE_APP_IDS":       string(roleAppIDsJSON),
 	}

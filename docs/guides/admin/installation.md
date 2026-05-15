@@ -65,7 +65,7 @@ Additional mint flags:
 | `--public` | `false` | Create public unlisted GitHub Apps (for multi-org) |
 | `--skip-mint-deploy` | `false` | Skip Cloud Function deployment, reuse existing mint URL |
 
-The installer automatically detects when the deployed mint function is up-to-date (same source hash) and skips redeployment, only updating org registration and PEM secrets. Use `--skip-mint-deploy` when running from a machine without the function source code.
+The installer automatically detects when the deployed mint function is up-to-date (same source hash) and skips code redeployment, only updating WIF infrastructure, org registration, and PEM secrets. Use `--skip-mint-deploy` when running from a machine without the function source code.
 
 > **Mint URL stability:** The mint URL is stable across redeploys within the same project and region — updating the Cloud Function does not change its URL. Adding a new org to an existing mint only updates env vars (`ROLE_APP_IDS`, `ALLOWED_ORGS`) without redeploying the function. Existing enrolled repos continue working with no changes. However, deploying to a **different region** (e.g., changing `--mint-region` from `us-central1` to `us-east5`) creates a new Cloud Run service with a different URL. All enrolled repos store the mint URL in a repo variable (`FULLSEND_MINT_URL`) or org variable, so changing the region requires updating every enrolled repo's variable to the new URL. Avoid changing `--mint-region` after initial deployment unless you plan to update all consumers.
 
@@ -92,7 +92,7 @@ fullsend admin install "$ADDITIONAL_ORG" \
   --mint-project "$GCP_PROJECT"
 ```
 
-The installer auto-detects the existing mint function and skips infrastructure deployment, only registering the new org and storing its PEM secrets. You can also pass `--mint-url "$MINT_URL"` explicitly to skip the auto-discovery step. PEMs use org-scoped naming (`fullsend-{org}--{role}-app-pem`), so each org's secrets are stored independently. For public apps (shared across orgs), the provisioner stores the same PEM under each org's scoped key.
+The installer auto-detects the existing mint function and skips code redeployment. WIF infrastructure is always updated (adding the new org to the WIF provider's attribute condition and granting Vertex AI IAM access), and the new org is registered in the mint's env vars. You can also pass `--mint-url "$MINT_URL"` explicitly to skip the auto-discovery step. PEMs use org-scoped naming (`fullsend-{org}--{role}-app-pem`), so each org's secrets are stored independently. For public apps (shared across orgs), the provisioner stores the same PEM under each org's scoped key.
 
 > **Note:** Multi-org with `--public` requires all orgs to share the same GitHub Apps. Private apps (the default) are single-org only.
 

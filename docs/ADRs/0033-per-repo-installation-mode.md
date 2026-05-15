@@ -255,7 +255,7 @@ Shared flags (valid for both per-org and per-repo):
 - `--mint-project` — GCP project containing the mint function (defaults to `--inference-project` in per-repo)
 - `--mint-region` — cloud region for the mint function (default: `us-central1`)
 
-Per-org-only flags (`--public`, `--enroll-all`, `--enroll-none`, `--skip-app-setup`, `--vendor-fullsend-binary`, `--skip-mint-deploy`, etc.) are rejected when an `owner/repo` argument is given.
+Per-org-only flags (`--public`, `--enroll-all`, `--enroll-none`, `--skip-app-setup`, `--vendor-fullsend-binary`, `--skip-mint-deploy`, `--mint-provider`, `--mint-source-dir`) are rejected when an `owner/repo` argument is given.
 
 **Per-repo install steps**:
 
