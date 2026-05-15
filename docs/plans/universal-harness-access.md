@@ -570,8 +570,10 @@ func IsURL(s string) bool {
     // Reject malformed URLs that url.Parse accepts but shouldn't be allowed:
     // - Empty host (https:, https://, https:///path)
     // - Userinfo (e.g., https://user:pass@host/ - credentials in URL)
-    // Note: url.Parse sets u.User for standard userinfo forms, though not all edge cases.
-    // Implementations should consider additional validation if strict userinfo rejection is required.
+    // Note: url.Parse sets u.User for standard userinfo forms (https://user@host/), but may
+    // not catch all edge cases (e.g., https://@host/ on some Go versions). Production
+    // implementation should add strings.Contains(s, "@") check before hostname validation
+    // as belt-and-suspenders defense.
     if u.Host == "" || u.User != nil {
         return false
     }
@@ -881,6 +883,11 @@ func CacheGet(workspaceRoot, hash string) ([]byte, *CacheEntry, error) {
         return nil, nil, err
     }
 
+    // REQUIRED for Phase 1: Production implementation must re-verify integrity on every read.
+    // If CachePut crashes after writing metadata but during content write, the content file
+    // may exist but be truncated/corrupted. Always verify: SHA256(content) == entry.SHA256
+    // This illustrative code omits the check for brevity but production must include it.
+
     return content, &entry, nil
 }
 
@@ -1085,6 +1092,12 @@ func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, a
 // iterative decoding (max 3 iterations) or rejecting URLs containing %25.
 // This illustrative code uses url.Parse which only decodes once.
 func matchesAllowedPrefix(rawURL string, allowedPrefixes []string) bool {
+    // REQUIRED for Phase 1: Reject double-encoded URLs to prevent prefix bypass
+    // url.Parse only decodes once, so %252F (double-encoded /) would bypass prefix checks
+    if strings.Contains(rawURL, "%25") {
+        return false
+    }
+
     // Parse and canonicalize the URL to prevent percent-encoding bypass
     u, err := url.Parse(rawURL)
     if err != nil {
