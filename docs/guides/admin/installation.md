@@ -86,7 +86,19 @@ fullsend admin install "$FIRST_ORG" \
 
 The `--public` flag creates GitHub Apps as public unlisted — they won't appear in the marketplace but can be installed by other organizations via their installation URL.
 
-**Additional orgs (reuse existing mint):**
+When the first org uses a custom app set prefix, pass `--app-set` so the apps are named accordingly:
+
+```bash
+fullsend admin install "$FIRST_ORG" \
+  --inference-project "$GCP_PROJECT" \
+  --mint-project "$GCP_PROJECT" \
+  --public \
+  --app-set "$FIRST_ORG"
+```
+
+This creates public apps named `{first-org}-fullsend`, `{first-org}-coder`, etc.
+
+**Additional orgs (install existing public apps):**
 
 ```bash
 fullsend admin install "$ADDITIONAL_ORG" \
@@ -94,7 +106,18 @@ fullsend admin install "$ADDITIONAL_ORG" \
   --mint-project "$GCP_PROJECT"
 ```
 
-The installer auto-detects the existing mint function and skips code redeployment. WIF infrastructure is always updated (adding the new org to the WIF provider's attribute condition and granting Vertex AI IAM access), and the new org is registered in the mint's env vars. You can also pass `--mint-url "$MINT_URL"` explicitly to skip the auto-discovery step. PEMs use org-scoped naming (`fullsend-{org}--{role}-app-pem`), so each org's secrets are stored independently. For public apps (shared across orgs), the provisioner stores the same PEM under each org's scoped key.
+The installer auto-detects shared public apps by matching installed app IDs against the mint's `ROLE_APP_IDS`. It copies PEM secrets from the source org to the new org's scoped key and records the actual app slug in `config.yaml`, so subsequent operations find the correct app regardless of naming convention.
+
+If the public apps were created with a custom `--app-set`, pass the same value so the CLI uses the correct slug prefix for convention-based lookups:
+
+```bash
+fullsend admin install "$ADDITIONAL_ORG" \
+  --inference-project "$GCP_PROJECT" \
+  --mint-project "$GCP_PROJECT" \
+  --app-set "$FIRST_ORG"
+```
+
+You can also pass `--mint-url "$MINT_URL"` explicitly to skip the auto-discovery step. PEMs use org-scoped naming (`fullsend-{org}--{role}-app-pem`), so each org's secrets are stored independently. For public apps (shared across orgs), the provisioner copies the same PEM under each org's scoped key.
 
 > **Note:** Multi-org with `--public` requires all orgs to share the same GitHub Apps. Private apps (the default) are single-org only.
 
@@ -211,7 +234,7 @@ Per-repo accepts all flags except `--vendor-fullsend-binary`, `--enroll-all`, an
 
 By default, the installer creates GitHub Apps with the `fullsend` prefix (e.g., `fullsend-fullsend`, `fullsend-coder`, `fullsend-review`). Organizations that need their own set of apps — for example, to use org-specific permissions or to register multiple app sets on the same mint — can pass `--app-set` to override the prefix.
 
-**Install with a custom app set:**
+### Creating a custom app set
 
 ```bash
 fullsend admin install "$ORG_NAME" \
@@ -222,7 +245,20 @@ fullsend admin install "$ORG_NAME" \
 
 This creates apps named `{org}-fullsend`, `{org}-coder`, `{org}-review`, etc. The app set prefix is stored in the `.fullsend/config.yaml` slug mappings, so subsequent operations (permission checks, PEM recovery) find the correct apps automatically.
 
-**Uninstall with a custom app set:**
+### Using existing public apps from another app set
+
+When a mint already has public apps registered under a custom app set (e.g., `konflux-ci-fullsend`, `konflux-ci-coder`), additional orgs installing those apps must pass the same `--app-set` so the CLI resolves the correct slugs:
+
+```bash
+fullsend admin install "$NEW_ORG" \
+  --inference-project "$GCP_PROJECT" \
+  --mint-project "$GCP_PROJECT" \
+  --app-set konflux-ci
+```
+
+The installer detects that the public apps are already installed in the org (matched by app ID from the mint's `ROLE_APP_IDS`), copies PEM secrets to the new org's scoped key, and skips app creation. The `--app-set` value ensures convention-based slug lookups match the existing apps.
+
+### Uninstalling a custom app set
 
 When uninstalling an org that used a custom app set, pass the same `--app-set` value so the CLI generates the correct fallback slugs if the config repo is unavailable:
 
@@ -230,7 +266,8 @@ When uninstalling an org that used a custom app set, pass the same `--app-set` v
 fullsend admin uninstall "$ORG_NAME" --app-set "$ORG_NAME"
 ```
 
-**Constraints:**
+### Constraints
+
 - App set names must be lowercase alphanumeric with optional hyphens (no leading/trailing hyphens, no consecutive hyphens), max 39 characters
 - The app set prefix only affects GitHub App slugs — GCP secret naming (`fullsend-{org}--{role}-app-pem`) and mint `ROLE_APP_IDS` keys (`{org}/{role}`) are independent of the app set
 
