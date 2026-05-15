@@ -81,6 +81,15 @@ type PullRequestReview struct {
 	SubmittedAt string
 }
 
+// ReviewComment represents an inline comment on a specific line of a
+// pull request diff. These are submitted as part of a formal PR review
+// via the GitHub "Create a review" API.
+type ReviewComment struct {
+	Path string // relative file path in the repository
+	Line int    // line number in the diff (right side)
+	Body string // comment body (Markdown)
+}
+
 // Installation represents an app installation on an org.
 type Installation struct {
 	ID          int
@@ -206,7 +215,8 @@ type Client interface {
 	// Pull request review operations.
 	// commitSHA, when non-empty, pins the review to a specific commit.
 	// GitHub rejects the request if the commit is not the PR's current HEAD.
-	CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body, commitSHA string) error
+	// comments, when non-nil, attaches inline diff comments to the review.
+	CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body, commitSHA string, comments []ReviewComment) error
 	ListPullRequestReviews(ctx context.Context, owner, repo string, number int) ([]PullRequestReview, error)
 	DismissPullRequestReview(ctx context.Context, owner, repo string, number, reviewID int, message string) error
 
