@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -129,6 +130,7 @@ type Setup struct {
 	permErrors   []string
 	publicApps   bool
 	appSet       string
+	storedAppIDs map[string]string // org/role → app_id from ROLE_APP_IDS
 }
 
 // NewSetup creates a new Setup instance.
@@ -167,6 +169,13 @@ func (s *Setup) WithStoreSecret(fn StoreSecretFunc) *Setup {
 // Public apps can be installed by any org via URL.
 func (s *Setup) WithPublicApps(public bool) *Setup {
 	s.publicApps = public
+	return s
+}
+
+// WithStoredAppIDs sets the stored ROLE_APP_IDS mapping (org/role → app_id)
+// used to detect stale credentials when an app is deleted and recreated.
+func (s *Setup) WithStoredAppIDs(ids map[string]string) *Setup {
+	s.storedAppIDs = ids
 	return s
 }
 
@@ -431,6 +440,19 @@ func (s *Setup) recoverPEM(ctx context.Context, org, slug, role string) (string,
 	return pemStr, nil
 }
 
+// isAppIDStale checks whether the live installation's app ID differs from the
+// stored ROLE_APP_IDS value, indicating the app was deleted and recreated.
+func (s *Setup) isAppIDStale(org, role string, liveID int) bool {
+	if s.storedAppIDs == nil {
+		return false
+	}
+	storedID, ok := s.storedAppIDs[org+"/"+role]
+	if !ok {
+		return false
+	}
+	return storedID != strconv.Itoa(liveID)
+}
+
 // handleExistingApp reuses an existing app if its credentials are still
 // available, or reports that the private key is lost.
 //
@@ -438,6 +460,7 @@ func (s *Setup) recoverPEM(ctx context.Context, org, slug, role string) (string,
 // manifest code exchange (POST /app-manifests/{code}/conversions) is the
 // one and only time the PEM is returned. If the secret wasn't stored or
 // was deleted, the key is lost and the app must be deleted and recreated.
+//
 // The secretExists callback checks the appropriate backend (Secret Manager
 // in OIDC mint mode, GitHub repo secrets otherwise).
 //
@@ -457,7 +480,9 @@ func (s *Setup) handleExistingApp(ctx context.Context, inst *forge.Installation,
 			return nil, fmt.Errorf("checking secret for role %s: %w", role, err)
 		}
 
-		if exists {
+		stale := s.isAppIDStale(org, role, inst.AppID)
+
+		if exists && !stale {
 			s.checkPermissions(inst, org, role)
 			s.ui.StepDone(fmt.Sprintf("Reusing existing app %s (credentials present)", inst.AppSlug))
 			return &AppCredentials{
@@ -469,12 +494,26 @@ func (s *Setup) handleExistingApp(ctx context.Context, inst *forge.Installation,
 			}, nil
 		}
 
-		// Secret doesn't exist — try to recover by generating a new key.
+		if exists && stale {
+			s.ui.StepWarn(fmt.Sprintf(
+				"App %s was recreated (ID changed) — stored key is invalid",
+				inst.AppSlug))
+		}
+
+		// Secret doesn't exist or is stale — try to recover by generating a new key.
 		pemStr, recoverErr := s.recoverPEM(ctx, org, inst.AppSlug, role)
 		if recoverErr != nil {
 			return nil, fmt.Errorf("recovering PEM for %s: %w", inst.AppSlug, recoverErr)
 		}
 		if pemStr == "" {
+			if stale {
+				return nil, fmt.Errorf(
+					"app %s was recreated (ID changed) and needs a new private key; "+
+						"generate one at https://github.com/apps/%s "+
+						"or run 'fullsend admin uninstall' and re-run install",
+					inst.AppSlug, inst.AppSlug,
+				)
+			}
 			return nil, fmt.Errorf(
 				"app %s exists but its private key secret is missing; "+
 					"run 'fullsend admin uninstall' first, then delete the app at "+
