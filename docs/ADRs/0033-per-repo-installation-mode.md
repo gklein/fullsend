@@ -248,12 +248,21 @@ fullsend admin install <owner/repo>     # per-repo installation
 Per-repo flags:
 - `--inference-project` — GCP project for Vertex AI inference (required)
 - `--inference-region` — GCP region for Vertex AI inference (default: `global`)
-- `--inference-wif-provider` — pre-existing WIF provider (auto-provisioned if omitted)
+- `--inference-wif-provider` — full WIF provider resource name (`projects/{number}/locations/global/.../providers/{id}`); auto-provisioned if omitted
 
 Shared flags (valid for both per-org and per-repo):
 - `--mint-url` — token mint URL for OIDC token exchange (optional; auto-discovered from `--mint-project`/`--mint-region` if omitted)
 - `--mint-project` — GCP project containing the mint function (defaults to `--inference-project` in per-repo)
 - `--mint-region` — cloud region for the mint function (default: `us-central1`)
+- `--agents` — comma-separated agent roles (default: `triage,coder,review`)
+- `--dry-run` — preview changes without making them
+- `--skip-app-setup` — skip GitHub App creation (reuse existing apps)
+- `--skip-mint-deploy` — skip Cloud Function deployment, reuse existing mint URL
+- `--skip-mint-check` — skip mint validation, GCP provisioning, and app setup; requires `--mint-url`
+- `--public` — create public unlisted GitHub Apps (for multi-org)
+- `--mint-provider` — token mint provider backend (default: `gcf`)
+- `--mint-source-dir` — path to mint function source directory
+- `--app-set` — app set name prefix for GitHub Apps (default: `fullsend`)
 
 Per-org-only flags (`--vendor-fullsend-binary`, `--enroll-all`, `--enroll-none`) are rejected when an `owner/repo` argument is given. All other flags are shared between per-org and per-repo modes — per-repo can create GitHub Apps, deploy a mint, and manage public apps when existing infrastructure is not found.
 
