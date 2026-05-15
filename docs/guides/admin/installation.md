@@ -63,6 +63,7 @@ Additional mint flags:
 | `--mint-region` | `us-central1` | Cloud region for the token mint function |
 | `--mint-url` | | Use an existing mint at this URL instead of deploying one |
 | `--public` | `false` | Create public unlisted GitHub Apps (for multi-org) |
+| `--app-set` | `fullsend` | App set name prefix for GitHub Apps (see [Custom app sets](#custom-app-sets)) |
 | `--skip-app-setup` | `false` | Skip GitHub App creation (reuse existing apps) |
 | `--skip-mint-deploy` | `false` | Skip Cloud Function deployment, reuse existing mint URL |
 
@@ -203,6 +204,35 @@ fullsend admin install "$ORG_NAME/$REPO_NAME" \
 Per-repo accepts all flags except `--vendor-fullsend-binary`, `--enroll-all`, and `--enroll-none` (which only apply to org-wide enrollment).
 
 > **`--mint-region` note:** Per-repo uses the same `--mint-region` default (`us-central1`) as per-org. When reusing a mint deployed to a non-default region, pass `--mint-region` explicitly so auto-discovery finds the correct function.
+
+---
+
+## Custom app sets
+
+By default, the installer creates GitHub Apps with the `fullsend` prefix (e.g., `fullsend-fullsend`, `fullsend-coder`, `fullsend-review`). Organizations that need their own set of apps — for example, to use org-specific permissions or to register multiple app sets on the same mint — can pass `--app-set` to override the prefix.
+
+**Install with a custom app set:**
+
+```bash
+fullsend admin install "$ORG_NAME" \
+  --inference-project "$GCP_PROJECT" \
+  --mint-project "$GCP_PROJECT" \
+  --app-set "$ORG_NAME"
+```
+
+This creates apps named `{org}-fullsend`, `{org}-coder`, `{org}-review`, etc. The app set prefix is stored in the `.fullsend/config.yaml` slug mappings, so subsequent operations (permission checks, PEM recovery) find the correct apps automatically.
+
+**Uninstall with a custom app set:**
+
+When uninstalling an org that used a custom app set, pass the same `--app-set` value so the CLI generates the correct fallback slugs if the config repo is unavailable:
+
+```bash
+fullsend admin uninstall "$ORG_NAME" --app-set "$ORG_NAME"
+```
+
+**Constraints:**
+- App set names must be lowercase alphanumeric with optional hyphens (no leading/trailing hyphens, no consecutive hyphens), max 39 characters
+- The app set prefix only affects GitHub App slugs — GCP secret naming (`fullsend-{org}--{role}-app-pem`) and mint `ROLE_APP_IDS` keys (`{org}/{role}`) are independent of the app set
 
 ---
 
