@@ -208,6 +208,18 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 				}
 			}
 
+			// Validate --mint-url early (before app setup which is irreversible).
+			if mintURL != "" {
+				parsedMintURL, err := url.Parse(mintURL)
+				if err != nil || parsedMintURL.Scheme != "https" || parsedMintURL.Host == "" {
+					scheme := ""
+					if parsedMintURL != nil {
+						scheme = parsedMintURL.Scheme
+					}
+					return fmt.Errorf("--mint-url must be a valid HTTPS URL (got scheme=%q)", scheme)
+				}
+			}
+
 			// Validate inference flag dependencies.
 			if inferenceProject == "" && (cmd.Flags().Changed("inference-region") || inferenceWIFProvider != "") {
 				return fmt.Errorf("--inference-wif-provider and --inference-region require --inference-project to be set")
@@ -495,10 +507,14 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 	}
 
 	if dryRun {
+		mintDisplay := mintURL
+		if mintDisplay == "" {
+			mintDisplay = fmt.Sprintf("(auto-discover from project %s, region %s)", mintProject, mintRegion)
+		}
 		printer.StepInfo("Dry run — no changes will be made")
 		printer.Blank()
 		printer.StepInfo("Would validate mint infrastructure:")
-		printer.StepInfo(fmt.Sprintf("  Mint URL: %s", mintURL))
+		printer.StepInfo(fmt.Sprintf("  Mint URL: %s", mintDisplay))
 		printer.StepInfo(fmt.Sprintf("  Mint project: %s, region: %s", mintProject, mintRegion))
 		printer.StepInfo(fmt.Sprintf("  Check: function exists, URL matches, %s in ALLOWED_ORGS", owner))
 		printer.StepInfo(fmt.Sprintf("  Check: ROLE_APP_IDS has entries for %s/{%s}", owner, strings.Join(roles, ",")))
@@ -517,7 +533,7 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 		printer.Blank()
 		printer.StepInfo("Would set repository variables:")
 		dryRunVars := map[string]string{
-			"FULLSEND_MINT_URL":   mintURL,
+			"FULLSEND_MINT_URL":   mintDisplay,
 			"FULLSEND_GCP_REGION": inferenceRegion,
 			forge.PerRepoGuardVar: "true",
 		}
@@ -547,9 +563,13 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 		printer.StepStart("Discovering mint URL")
 		discovered, discoverErr := discoverer.GetFunctionURL(ctx)
 		if discoverErr != nil {
-			printer.StepFail("No mint function found")
-			return fmt.Errorf("no mint function found in project %s region %s — provide --mint-url or run per-org install first",
-				mintProject, mintRegion)
+			printer.StepFail("Mint discovery failed")
+			if strings.Contains(discoverErr.Error(), "not found") {
+				return fmt.Errorf("no mint function found in project %s region %s — provide --mint-url or run per-org install first",
+					mintProject, mintRegion)
+			}
+			return fmt.Errorf("failed to discover mint URL in project %s region %s: %w",
+				mintProject, mintRegion, discoverErr)
 		}
 		mintURL = discovered
 		printer.StepDone(fmt.Sprintf("Found mint at %s", mintURL))
@@ -572,9 +592,12 @@ func runPerRepoInstall(ctx context.Context, repoFullName, agents, mintURL, infer
 	// Convert org-scoped app IDs (owner/role → appID) to role-only (role → appID).
 	agentAppIDs := make(map[string]string, len(roles))
 	for _, role := range roles {
-		if appID, ok := roleAppIDs[owner+"/"+role]; ok {
-			agentAppIDs[role] = appID
+		appID, ok := roleAppIDs[owner+"/"+role]
+		if !ok {
+			printer.StepFail(fmt.Sprintf("Role %q not registered", role))
+			return fmt.Errorf("role %q is not registered for org %q in the mint — run per-org install first", role, owner)
 		}
+		agentAppIDs[role] = appID
 	}
 
 	// Provision: PEM validation + auto-copy + EnsureOrgInMint + RegisterPerRepoWIF.

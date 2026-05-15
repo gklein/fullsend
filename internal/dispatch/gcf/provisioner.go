@@ -88,7 +88,7 @@ type Config struct {
 	// existing mint at this URL. Only PEMs are stored.
 	MintURL string
 
-	// DeployMode controls function deployment: auto (default), skip, or force.
+	// DeployMode controls function deployment: auto (default) or skip.
 	DeployMode DeployMode
 }
 
@@ -474,6 +474,20 @@ func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string
 		return nil, fmt.Errorf("MintURL %q must be a valid HTTPS URL", p.cfg.MintURL)
 	}
 
+	// Fetch existing role/app ID mappings once for PEM auto-copy decisions.
+	var existingIDs map[string]string
+	existingIDsErr := error(nil)
+	needsCopy := false
+	for _, role := range sortedStringMapKeys(p.cfg.AgentAppIDs) {
+		if _, hasPEM := p.cfg.AgentPEMs[role]; !hasPEM {
+			needsCopy = true
+			break
+		}
+	}
+	if needsCopy {
+		existingIDs, existingIDsErr = p.GetExistingRoleAppIDs(ctx)
+	}
+
 	for _, org := range p.cfg.GitHubOrgs {
 		// Store new PEMs (per-org with fresh apps).
 		for _, role := range sortedByteMapKeys(p.cfg.AgentPEMs) {
@@ -494,18 +508,22 @@ func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string
 			if exists {
 				continue
 			}
+			if existingIDsErr != nil {
+				return nil, fmt.Errorf("reading existing role app IDs for PEM auto-copy: %w", existingIDsErr)
+			}
 			// PEM doesn't exist — try to copy from another org that has this role.
-			existingIDs, _ := p.GetExistingRoleAppIDs(ctx)
 			copied := false
 			for _, key := range sortedStringMapKeys(existingIDs) {
 				parts := strings.SplitN(key, "/", 2)
 				if len(parts) != 2 || parts[1] != role || parts[0] == org {
 					continue
 				}
-				if err := p.CopyAgentPEM(ctx, parts[0], org, role); err == nil {
+				if copyErr := p.CopyAgentPEM(ctx, parts[0], org, role); copyErr == nil {
 					log.Printf("copied PEM for %s/%s from %s", org, role, parts[0])
 					copied = true
 					break
+				} else {
+					log.Printf("failed to copy PEM for %s/%s from %s: %v", org, role, parts[0], copyErr)
 				}
 			}
 			if !copied {
@@ -563,41 +581,12 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		return nil, fmt.Errorf("checking existing function: %w", err)
 	}
 
-	// Determine if code deployment is needed. When the function already
-	// exists and is active with the same source hash, skip the full
-	// infrastructure path and use the lightweight provisionWithExistingMint.
-	needsDeploy := true
-	var earlySourceZip []byte
-
-	if existing != nil && existing.URI != "" && existing.State == "ACTIVE" {
-		switch {
-		case p.cfg.DeployMode == DeploySkip:
-			needsDeploy = false
-		case p.cfg.FunctionSourceDir == "":
-			needsDeploy = false
-		default: // DeployAuto
-			earlySourceZip, err = bundleFunctionSource(p.cfg.FunctionSourceDir)
-			if err != nil {
-				return nil, fmt.Errorf("validating function source: %w", err)
-			}
-			needsDeploy = existing.EnvVars["FULLSEND_SOURCE_HASH"] != sha256Hex(earlySourceZip)
-		}
-
-		if !needsDeploy {
-			p.cfg.MintURL = existing.URI
-			return p.provisionWithExistingMint(ctx)
-		}
+	// Early guard: --skip-mint-deploy requires an existing function.
+	if existing == nil && p.cfg.DeployMode == DeploySkip {
+		return nil, fmt.Errorf("function %s not found — cannot use --skip-mint-deploy without an existing deployment", functionName)
 	}
 
-	// Full infrastructure path — only when deploying code.
-	if earlySourceZip == nil {
-		earlySourceZip, err = bundleFunctionSource(p.cfg.FunctionSourceDir)
-		if err != nil {
-			return nil, fmt.Errorf("validating function source: %w", err)
-		}
-	}
-
-	// Step 1: Get project number.
+	// Step 1: Get project number (always needed for WIF).
 	projectNumber, err := p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("getting project number: %w", err)
@@ -664,6 +653,41 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		}
 	}
 	log.Printf("granted roles/aiplatform.user to %d org(s) (propagation may take several minutes)", len(installingOrgs))
+
+	// Determine if code deployment is needed. When the function already
+	// exists and is active with the same source hash, skip the code deploy
+	// path and use the lightweight provisionWithExistingMint for PEM + org
+	// registration. WIF infrastructure above always runs regardless.
+	needsDeploy := true
+	var earlySourceZip []byte
+
+	if existing != nil && existing.URI != "" && existing.State == "ACTIVE" {
+		switch {
+		case p.cfg.DeployMode == DeploySkip:
+			needsDeploy = false
+		case p.cfg.FunctionSourceDir == "":
+			needsDeploy = false
+		default: // DeployAuto
+			earlySourceZip, err = bundleFunctionSource(p.cfg.FunctionSourceDir)
+			if err != nil {
+				return nil, fmt.Errorf("validating function source: %w", err)
+			}
+			needsDeploy = existing.EnvVars["FULLSEND_SOURCE_HASH"] != sha256Hex(earlySourceZip)
+		}
+
+		if !needsDeploy {
+			p.cfg.MintURL = existing.URI
+			return p.provisionWithExistingMint(ctx)
+		}
+	}
+
+	// Code deployment path — bundle source.
+	if earlySourceZip == nil {
+		earlySourceZip, err = bundleFunctionSource(p.cfg.FunctionSourceDir)
+		if err != nil {
+			return nil, fmt.Errorf("validating function source: %w", err)
+		}
+	}
 
 	// Step 5a: Store new agent PEMs only for installing orgs.
 	for _, org := range installingOrgs {
@@ -809,9 +833,6 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	}
 
 	if existing == nil || existing.URI == "" {
-		if p.cfg.DeployMode == DeploySkip {
-			return nil, fmt.Errorf("function %s not found — cannot use --skip-mint-deploy without an existing deployment", functionName)
-		}
 		return nil, fmt.Errorf("function %s not found or has no URI", functionName)
 	}
 	mintURL := existing.URI

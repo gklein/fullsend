@@ -571,12 +571,16 @@ func TestProvisioner_Provision_SameHashAutoRoutesToExistingMint(t *testing.T) {
 	vars, err := p.Provision(context.Background())
 	require.NoError(t, err)
 
-	// Same hash → auto-routed to provisionWithExistingMint, skipping full infrastructure.
+	// Same hash → WIF infrastructure still runs, but code deploy is skipped.
+	assert.Contains(t, fake.calls, "GetProjectNumber")
+	assert.Contains(t, fake.calls, "CreateServiceAccount")
+	assert.Contains(t, fake.calls, "CreateWIFPool")
+	assert.Contains(t, fake.calls, "CreateWIFProvider")
+	assert.Contains(t, fake.calls, "SetProjectIAMBinding")
+	// Code deploy skipped — auto-routed to provisionWithExistingMint for PEM + org registration.
 	assert.NotContains(t, fake.calls, "UploadFunctionSource")
 	assert.NotContains(t, fake.calls, "CreateFunction")
 	assert.NotContains(t, fake.calls, "UpdateFunction")
-	assert.NotContains(t, fake.calls, "GetProjectNumber")
-	assert.NotContains(t, fake.calls, "CreateServiceAccount")
 	assert.Equal(t, "https://fullsend-mint-abc123.run.app", vars["FULLSEND_MINT_URL"])
 }
 
