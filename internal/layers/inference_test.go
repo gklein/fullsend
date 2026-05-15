@@ -114,6 +114,21 @@ func TestInferenceLayer_Install_SecretWriteError(t *testing.T) {
 	assert.Contains(t, err.Error(), "permission denied")
 }
 
+func TestInferenceLayer_Install_ProvisionErrorWithExistingSecrets(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.Secrets["test-org/.fullsend/FULLSEND_GCP_WIF_PROVIDER"] = true
+	client.Secrets["test-org/.fullsend/FULLSEND_GCP_PROJECT_ID"] = true
+	provider := vertexProvider()
+	provider.err = errors.New("gcp auth failed")
+	provider.secrets = nil
+	layer, _ := newInferenceLayer(t, client, provider)
+
+	err := layer.Install(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gcp auth failed")
+	assert.Empty(t, client.CreatedSecrets)
+}
+
 func TestInferenceLayer_Install_OverwritesExistingSecrets(t *testing.T) {
 	client := forge.NewFakeClient()
 	client.Secrets["test-org/.fullsend/FULLSEND_GCP_WIF_PROVIDER"] = true

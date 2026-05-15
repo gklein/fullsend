@@ -535,6 +535,10 @@ func (f *FakeClient) CreateRepoSecret(_ context.Context, owner, repo, name, valu
 		Name:  name,
 		Value: value,
 	})
+	if f.Secrets == nil {
+		f.Secrets = make(map[string]bool)
+	}
+	f.Secrets[owner+"/"+repo+"/"+name] = true
 	return nil
 }
 
