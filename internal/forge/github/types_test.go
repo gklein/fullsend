@@ -15,7 +15,7 @@ func TestDefaultAgentRoles(t *testing.T) {
 }
 
 func TestAgentAppConfig_Fullsend(t *testing.T) {
-	cfg := AgentAppConfig("myorg", "fullsend")
+	cfg := AgentAppConfig("myorg", "fullsend", "fullsend")
 
 	assert.Equal(t, "fullsend-fullsend", cfg.Name)
 	assert.NotEmpty(t, cfg.Description)
@@ -37,7 +37,7 @@ func TestAgentAppConfig_Fullsend(t *testing.T) {
 }
 
 func TestAgentAppConfig_Triage(t *testing.T) {
-	cfg := AgentAppConfig("myorg", "triage")
+	cfg := AgentAppConfig("myorg", "triage", "fullsend")
 
 	assert.Equal(t, "fullsend-triage", cfg.Name)
 	assert.Equal(t, "write", cfg.Permissions.Issues)
@@ -48,7 +48,7 @@ func TestAgentAppConfig_Triage(t *testing.T) {
 }
 
 func TestAgentAppConfig_Coder(t *testing.T) {
-	cfg := AgentAppConfig("myorg", "coder")
+	cfg := AgentAppConfig("myorg", "coder", "fullsend")
 
 	assert.Equal(t, "fullsend-coder", cfg.Name)
 	assert.Equal(t, "write", cfg.Permissions.Issues)
@@ -64,7 +64,7 @@ func TestAgentAppConfig_Coder(t *testing.T) {
 }
 
 func TestAgentAppConfig_Review(t *testing.T) {
-	cfg := AgentAppConfig("myorg", "review")
+	cfg := AgentAppConfig("myorg", "review", "fullsend")
 
 	assert.Equal(t, "fullsend-review", cfg.Name)
 	assert.Equal(t, "write", cfg.Permissions.PullRequests)
@@ -76,7 +76,7 @@ func TestAgentAppConfig_Review(t *testing.T) {
 }
 
 func TestAgentAppConfig_Prioritize(t *testing.T) {
-	cfg := AgentAppConfig("myorg", "prioritize")
+	cfg := AgentAppConfig("myorg", "prioritize", "fullsend")
 
 	assert.Equal(t, "fullsend-prioritize", cfg.Name)
 	assert.Equal(t, "write", cfg.Permissions.OrganizationProjects)
@@ -89,7 +89,7 @@ func TestAgentAppConfig_Prioritize(t *testing.T) {
 }
 
 func TestAgentAppConfig_Retro(t *testing.T) {
-	cfg := AgentAppConfig("myorg", "retro")
+	cfg := AgentAppConfig("myorg", "retro", "fullsend")
 
 	assert.Equal(t, "fullsend-retro", cfg.Name)
 	assert.Equal(t, "read", cfg.Permissions.Actions)
@@ -103,7 +103,7 @@ func TestAgentAppConfig_Retro(t *testing.T) {
 }
 
 func TestAgentAppConfig_UnknownRole(t *testing.T) {
-	cfg := AgentAppConfig("myorg", "custom-bot")
+	cfg := AgentAppConfig("myorg", "custom-bot", "fullsend")
 
 	assert.Equal(t, "fullsend-custom-bot", cfg.Name)
 	assert.Equal(t, "read", cfg.Permissions.Issues)
@@ -113,8 +113,24 @@ func TestAgentAppConfig_UnknownRole(t *testing.T) {
 	assert.Contains(t, cfg.Events, "issues")
 }
 
+func TestAgentAppConfig_CustomAppSet(t *testing.T) {
+	cfg := AgentAppConfig("myorg", "coder", "fullsend-ai")
+	assert.Equal(t, "fullsend-ai-coder", cfg.Name)
+
+	cfg = AgentAppConfig("myorg", "fullsend", "fullsend-ai")
+	assert.Equal(t, "fullsend-ai-fullsend", cfg.Name)
+}
+
+func TestAgentAppConfig_DefaultAppSet(t *testing.T) {
+	cfg := AgentAppConfig("myorg", "coder", "fullsend")
+	assert.Equal(t, "fullsend-coder", cfg.Name)
+
+	cfg = AgentAppConfig("myorg", "fullsend", "fullsend")
+	assert.Equal(t, "fullsend-fullsend", cfg.Name)
+}
+
 func TestAppConfig_RedirectURL_InJSON(t *testing.T) {
-	cfg := AgentAppConfig("myorg", "fullsend")
+	cfg := AgentAppConfig("myorg", "fullsend", "fullsend")
 	cfg.RedirectURL = "http://127.0.0.1:12345/callback"
 
 	data, err := json.Marshal(cfg)

@@ -138,6 +138,7 @@ type perRepoInstallConfig struct {
 	MintSourceDir       string
 	MintSkipDeploy      bool
 	SkipMintCheck       bool
+	AppSet              string
 }
 
 func validateMintURL(raw string) error {
@@ -208,6 +209,7 @@ func newInstallCmd() *cobra.Command {
 	var mintSkipDeploy bool
 	var skipMintCheck bool
 	var publicApps bool
+	var appSet string
 	// Per-repo flags.
 	var mintURL string
 
@@ -225,6 +227,10 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
   configuration directory. No config repo or cross-repo dispatch needed.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := appsetup.ValidateAppSet(appSet); err != nil {
+				return fmt.Errorf("invalid --app-set: %w", err)
+			}
+
 			arg := args[0]
 			if strings.Contains(arg, "/") {
 				for _, name := range perOrgOnlyFlags {
@@ -256,6 +262,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 					MintSourceDir:       mintSourceDir,
 					MintSkipDeploy:      mintSkipDeploy,
 					SkipMintCheck:       skipMintCheck,
+					AppSet:              appSet,
 				})
 			}
 
@@ -457,7 +464,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 				if err := ensureConfigRepoExists(ctx, client, printer, org); err != nil {
 					return err
 				}
-				creds, err := runAppSetup(ctx, client, printer, org, roles, mintProject, publicApps, sharedSlugs)
+				creds, err := runAppSetup(ctx, client, printer, org, roles, mintProject, publicApps, sharedSlugs, appSet)
 				if err != nil {
 					return err
 				}
@@ -484,6 +491,7 @@ Per-repo mode (argument is owner/repo, e.g. "acme/widget"):
 	cmd.Flags().BoolVar(&mintSkipDeploy, "skip-mint-deploy", false, "skip Cloud Function deployment, reuse existing mint URL")
 	cmd.Flags().BoolVar(&skipMintCheck, "skip-mint-check", false, "skip mint validation, GCP provisioning, and app setup; requires --mint-url")
 	cmd.Flags().BoolVar(&publicApps, "public", false, "create public (unlisted) GitHub Apps installable by other orgs")
+	cmd.Flags().StringVar(&appSet, "app-set", appsetup.DefaultAppSet, "app set name prefix for GitHub Apps (e.g., fullsend-ai creates fullsend-ai-fullsend, fullsend-ai-coder)")
 	// Shared flags.
 	cmd.Flags().StringVar(&mintURL, "mint-url", "", "token mint URL for OIDC token exchange")
 
@@ -784,7 +792,7 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 			sharedSlugs = slugs
 		}
 
-		creds, credErr := runAppSetup(ctx, client, printer, owner, roles, mintProject, publicApps, sharedSlugs)
+		creds, credErr := runAppSetup(ctx, client, printer, owner, roles, mintProject, publicApps, sharedSlugs, c.AppSet)
 		if credErr != nil {
 			return credErr
 		}
@@ -963,6 +971,7 @@ func vendorFullsendBinary(ctx context.Context, client forge.Client, printer *ui.
 
 func newUninstallCmd() *cobra.Command {
 	var yolo bool
+	var appSet string
 
 	cmd := &cobra.Command{
 		Use:   "uninstall <org>",
@@ -973,6 +982,9 @@ func newUninstallCmd() *cobra.Command {
 			org := args[0]
 			if err := validateOrgName(org); err != nil {
 				return err
+			}
+			if err := appsetup.ValidateAppSet(appSet); err != nil {
+				return fmt.Errorf("invalid --app-set: %w", err)
 			}
 
 			token, err := resolveToken()
@@ -1001,11 +1013,12 @@ func newUninstallCmd() *cobra.Command {
 				}
 			}
 
-			return runUninstall(ctx, client, printer, org)
+			return runUninstall(ctx, client, printer, org, appSet)
 		},
 	}
 
 	cmd.Flags().BoolVar(&yolo, "yolo", false, "skip confirmation prompt")
+	cmd.Flags().StringVar(&appSet, "app-set", appsetup.DefaultAppSet, "app set name prefix for GitHub Apps (used for fallback slug generation when config is unavailable)")
 
 	return cmd
 }
@@ -1231,12 +1244,13 @@ func copySharedAppPEMs(ctx context.Context, client forge.Client, printer *ui.Pri
 // runAppSetup creates or reuses GitHub Apps for each role. When mintProject is
 // non-empty, PEMs are also stored in GCP Secret Manager during app creation so
 // they survive partial provisioning failures.
-func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject string, publicApps bool, sharedSlugs map[string]string) ([]layers.AgentCredentials, error) {
+func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject string, publicApps bool, sharedSlugs map[string]string, appSet string) ([]layers.AgentCredentials, error) {
 	printer.Header("Setting up GitHub Apps")
 	printer.Blank()
 
 	setup := appsetup.NewSetup(client, appsetup.StdinPrompter{}, appsetup.DefaultBrowser{}, printer).
-		WithPublicApps(publicApps)
+		WithPublicApps(publicApps).
+		WithAppSet(appSet)
 
 	// Merge known slugs: config-based first, then shared app overrides.
 	knownSlugs := loadKnownSlugs(ctx, client, org)
@@ -1488,7 +1502,7 @@ func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, o
 }
 
 // runUninstall tears down the fullsend installation.
-func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer, org string) error {
+func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer, org, appSet string) error {
 	// Try to load agent slugs from existing config. If the .fullsend repo
 	// is already gone (e.g., previous partial uninstall), fall back to the
 	// default naming convention so we can still guide the user to delete
@@ -1510,7 +1524,7 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 	if len(agentSlugs) == 0 {
 		// Config unavailable — assume default app naming convention.
 		for _, role := range config.DefaultAgentRoles() {
-			agentSlugs = append(agentSlugs, appsetup.AppSlug(role))
+			agentSlugs = append(agentSlugs, appsetup.AppSlug(appSet, role))
 		}
 		if err != nil {
 			printer.StepInfo("Config repo unavailable; using default app names")

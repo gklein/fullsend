@@ -110,6 +110,20 @@ func TestInstallCmd_Flags(t *testing.T) {
 
 	skipMintDeployFlag := cmd.Flags().Lookup("skip-mint-deploy")
 	require.NotNil(t, skipMintDeployFlag, "expected --skip-mint-deploy flag")
+
+	appSetFlag := cmd.Flags().Lookup("app-set")
+	require.NotNil(t, appSetFlag, "expected --app-set flag")
+	assert.Equal(t, "fullsend", appSetFlag.DefValue)
+}
+
+func TestInstallCmd_InvalidAppSet(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "myorg",
+		"--inference-project", "proj", "--mint-project", "proj",
+		"--app-set", "INVALID"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid --app-set")
 }
 
 func TestInstallCmd_PerRepoRequiresMintProject(t *testing.T) {
@@ -198,6 +212,7 @@ func TestInstallCmd_PerRepoAcceptsSharedFlags(t *testing.T) {
 		{"mint-provider", "gcf"},
 		{"mint-source-dir", "/tmp/src"},
 		{"skip-mint-deploy", ""},
+		{"app-set", "custom-prefix"},
 	}
 	for _, tc := range sharedFlags {
 		t.Run(tc.flag, func(t *testing.T) {
@@ -282,6 +297,10 @@ func TestUninstallCmd_Flags(t *testing.T) {
 
 	yoloFlag := cmd.Flags().Lookup("yolo")
 	require.NotNil(t, yoloFlag, "expected --yolo flag")
+
+	appSetFlag := cmd.Flags().Lookup("app-set")
+	require.NotNil(t, appSetFlag, "expected --app-set flag")
+	assert.Equal(t, "fullsend", appSetFlag.DefValue)
 }
 
 func TestAnalyzeCmd_RequiresOrg(t *testing.T) {
