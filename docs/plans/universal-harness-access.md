@@ -902,6 +902,7 @@ func CachePut(workspaceRoot, url string, content []byte) error {
     if err != nil {
         return fmt.Errorf("marshaling cache metadata: %w", err)
     }
+    // TODO: implement atomic writes (write to temp, then rename) before Phase 1 ships
     if err := os.WriteFile(filepath.Join(dir, "metadata.json"), metaData, 0600); err != nil {
         return err
     }
@@ -1070,10 +1071,10 @@ func resolveResourceWithLimits(ctx context.Context, workspaceRoot, ref string, a
 // allowed_remote_resources entries to prevent prefix confusion attacks
 // (e.g., "https://github.com/org/library-evil/" won't match prefix
 // "https://github.com/org/library/"). See ADR-0037 security analysis.
-// Note: url.Parse only decodes percent-encoding once (e.g., %2F → /), so
-// double-encoded attacks (%252F → %2F → /) are not handled. Production
-// implementations should document this boundary or apply recursive decoding
-// with a depth limit if GitHub or other URL sources exhibit double-encoding.
+// TODO: url.Parse only decodes percent-encoding once (e.g., %2F → /), so
+// double-encoded attacks (%252F → %2F → /) are not handled. This must be
+// addressed before Phase 1 ships - either apply recursive decoding with a
+// depth limit or document the boundary and accept the risk for known URL sources.
 func matchesAllowedPrefix(rawURL string, allowedPrefixes []string) bool {
     // Parse and canonicalize the URL to prevent percent-encoding bypass
     u, err := url.Parse(rawURL)
