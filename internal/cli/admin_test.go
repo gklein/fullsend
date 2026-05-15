@@ -115,7 +115,7 @@ func TestInstallCmd_PerRepoRequiresMintProject(t *testing.T) {
 
 func TestInstallCmd_PerRepoRequiresInferenceProject(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint.example.com"})
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://mint-test-abc123.run.app"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--inference-project is required for per-repo installation")
@@ -123,7 +123,7 @@ func TestInstallCmd_PerRepoRequiresInferenceProject(t *testing.T) {
 
 func TestInstallCmd_PerRepoRejectsInvalidFormat(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/", "--mint-url", "https://mint.example.com", "--inference-project", "my-project"})
+	cmd.SetArgs([]string{"admin", "install", "acme/", "--mint-url", "https://mint-test-abc123.run.app", "--inference-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "repo must be in owner/repo format")
@@ -131,7 +131,7 @@ func TestInstallCmd_PerRepoRejectsInvalidFormat(t *testing.T) {
 
 func TestInstallCmd_PerRepoRejectsMultiSlash(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/team/repo", "--mint-url", "https://mint.example.com", "--inference-project", "my-project"})
+	cmd.SetArgs([]string{"admin", "install", "acme/team/repo", "--mint-url", "https://mint-test-abc123.run.app", "--inference-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid repo name")
@@ -143,6 +143,14 @@ func TestInstallCmd_PerRepoRejectsNonHTTPSMintURL(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--mint-url must be a valid HTTPS URL")
+}
+
+func TestInstallCmd_PerRepoRejectsNonCloudRunMintURL(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", "https://evil.example.com", "--inference-project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--mint-url must be a Cloud Run URL")
 }
 
 func TestInstallCmd_PerRepoRejectsPerOrgFlags(t *testing.T) {
@@ -158,7 +166,7 @@ func TestInstallCmd_PerRepoRejectsPerOrgFlags(t *testing.T) {
 		t.Run(tc.flag, func(t *testing.T) {
 			cmd := newRootCmd()
 			args := []string{"admin", "install", "acme/widget",
-				"--mint-url", "https://mint.example.com",
+				"--mint-url", "https://mint-test-abc123.run.app",
 				"--inference-project", "my-project"}
 			if tc.value != "" {
 				args = append(args, "--"+tc.flag, tc.value)
@@ -188,7 +196,7 @@ func TestInstallCmd_PerRepoAcceptsSharedFlags(t *testing.T) {
 		t.Run(tc.flag, func(t *testing.T) {
 			cmd := newRootCmd()
 			args := []string{"admin", "install", "acme/widget",
-				"--mint-url", "https://mint.example.com",
+				"--mint-url", "https://mint-test-abc123.run.app",
 				"--inference-project", "my-project",
 				"--dry-run"}
 			if tc.value != "" {
@@ -218,7 +226,7 @@ func TestInstallCmd_ForceMintDeployFlagRemoved(t *testing.T) {
 func TestInstallCmd_PerRepoAcceptsMintRegion(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "acme/widget",
-		"--mint-url", "https://mint.example.com",
+		"--mint-url", "https://mint-test-abc123.run.app",
 		"--inference-region", "us-central1",
 		"--inference-project", "my-project",
 		"--mint-region", "europe-west1",
@@ -1133,7 +1141,7 @@ func TestInstallCmd_PerRepoRejectsInvalidRole(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "acme/widget",
 		"--agents", "triage,INVALID",
-		"--mint-url", "https://mint.example.com",
+		"--mint-url", "https://mint-test-abc123.run.app",
 		"--inference-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
@@ -1143,7 +1151,7 @@ func TestInstallCmd_PerRepoRejectsInvalidRole(t *testing.T) {
 func TestInstallCmd_PerRepoRejectsOwnerWithDots(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "my.org/widget",
-		"--mint-url", "https://mint.example.com",
+		"--mint-url", "https://mint-test-abc123.run.app",
 		"--inference-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
@@ -1163,7 +1171,7 @@ func TestInstallCmd_PerRepoRejectsURL(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := newRootCmd()
 			cmd.SetArgs([]string{"admin", "install", tc.input,
-				"--mint-url", "https://mint.example.com",
+				"--mint-url", "https://mint-test-abc123.run.app",
 				"--inference-project", "my-project"})
 			err := cmd.Execute()
 			require.Error(t, err)

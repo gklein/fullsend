@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -132,6 +131,10 @@ func validateMintURL(raw string) error {
 			scheme = parsed.Scheme
 		}
 		return fmt.Errorf("--mint-url must be a valid HTTPS URL (got scheme=%q)", scheme)
+	}
+	if !strings.HasSuffix(parsed.Host, ".run.app") &&
+		!strings.HasSuffix(parsed.Host, ".cloudfunctions.net") {
+		return fmt.Errorf("--mint-url must be a Cloud Run URL (.run.app or .cloudfunctions.net), got host %q", parsed.Host)
 	}
 	return nil
 }
@@ -569,7 +572,8 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 	if mintURL != "" {
 		mintFound = true
 		// Mint URL provided — still discover role IDs from the function
-		// to resolve existing apps (skip in dry-run since no changes are made).
+		// to resolve existing apps. Skipped in dry-run to avoid requiring
+		// GCP credentials for preview-only invocations.
 		if mintProject != "" && !dryRun {
 			printer.StepStart("Resolving app IDs from mint")
 			discovery, discoverErr := discoverer.DiscoverMint(ctx)
@@ -578,8 +582,10 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 					printer.StepFail("Failed to read mint state")
 					return fmt.Errorf("reading mint state: %w", discoverErr)
 				}
+				printer.StepDone("Mint function not found in project — will discover apps from setup")
 			} else {
 				existingIDs = discovery.RoleAppIDs
+				printer.StepDone("Resolved app IDs from mint")
 			}
 		}
 	} else if mintProject != "" {
@@ -603,7 +609,7 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 	if mintFound && existingIDs != nil {
 		roleAppIDs, resolveErr := resolveSharedRoleAppIDs(ctx, client, existingIDs, owner, roles)
 		if resolveErr != nil {
-			log.Printf("resolveSharedRoleAppIDs: %v (will attempt app creation)", resolveErr)
+			printer.StepWarn(fmt.Sprintf("Could not resolve shared app IDs: %v (will attempt app creation)", resolveErr))
 		} else {
 			agentAppIDs = make(map[string]string, len(roles))
 			appsFound = true

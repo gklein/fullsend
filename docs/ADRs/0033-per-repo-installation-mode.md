@@ -264,7 +264,7 @@ Per-org-only flags (`--vendor-fullsend-binary`, `--enroll-all`, `--enroll-none`)
 3. If no mint exists: deploys the token mint Cloud Function (same provisioner path as per-org).
 4. If a mint already exists: validates PEMs, registers the org, and sets up per-repo WIF.
 5. Auto-provisions inference WIF pool/provider if `--inference-wif-provider` is omitted.
-6. Generates scaffold files (`.github/workflows/fullsend.yml`, `.fullsend/config.yaml`, `.fullsend/customized/` directories).
+6. Generates scaffold files (`.github/workflows/fullsend.yaml`, `.fullsend/config.yaml`, `.fullsend/customized/` directories).
 7. Commits all scaffold files to the target repo via the GitHub API.
 8. Sets repository variables (`FULLSEND_MINT_URL`, `FULLSEND_GCP_REGION`, `FULLSEND_PER_REPO_INSTALL`).
 9. Sets repository secrets (`FULLSEND_GCP_PROJECT_ID`, WIF credentials).

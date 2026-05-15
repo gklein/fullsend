@@ -88,7 +88,8 @@ type Config struct {
 	AgentAppIDs map[string]string
 
 	// MintURL, if set, skips infrastructure deployment and uses the
-	// existing mint at this URL. Only PEMs are stored.
+	// existing mint at this URL for PEM storage, org registration,
+	// per-repo WIF, and PEM auto-copy.
 	MintURL string
 
 	// DeployMode controls function deployment: auto (default) or skip.
@@ -259,7 +260,9 @@ func (p *Provisioner) DiscoverMint(ctx context.Context) (*MintDiscovery, error) 
 	if fn.EnvVars != nil {
 		if raw := fn.EnvVars["ROLE_APP_IDS"]; raw != "" {
 			var m map[string]string
-			if err := json.Unmarshal([]byte(raw), &m); err == nil {
+			if err := json.Unmarshal([]byte(raw), &m); err != nil {
+				log.Printf("warning: malformed ROLE_APP_IDS in mint function: %v", err)
+			} else {
 				result.RoleAppIDs = m
 			}
 		}
@@ -544,6 +547,7 @@ func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string
 			// PEM doesn't exist — try to copy from another org that has the
 			// same app (matched by app ID) for this role.
 			copied := false
+			var lastCopyErr error
 			for _, key := range sortedStringMapKeys(existingIDs) {
 				parts := strings.SplitN(key, "/", 2)
 				if len(parts) != 2 || parts[1] != role || parts[0] == org {
@@ -558,10 +562,11 @@ func (p *Provisioner) provisionWithExistingMint(ctx context.Context) (map[string
 					break
 				} else {
 					log.Printf("failed to copy PEM for %s/%s from %s: %v", org, role, parts[0], copyErr)
+					lastCopyErr = copyErr
 				}
 			}
 			if !copied {
-				return nil, fmt.Errorf("role %q: no PEM provided and no existing PEM found to copy for %s", role, org)
+				return nil, fmt.Errorf("role %q: no PEM provided and no existing PEM found to copy for %s (last error: %v)", role, org, lastCopyErr)
 			}
 		}
 	}
