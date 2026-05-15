@@ -489,17 +489,12 @@ Inference authentication:
 			var sharedSlugs map[string]string
 			var perOrgStoredIDs map[string]string
 			if mintProject != "" && !skipAppSetup && !skipMintCheck {
-				slugs, err := copySharedAppPEMs(ctx, client, printer, org, roles, mintProject, mintRegion)
+				slugs, storedIDs, err := copySharedAppPEMs(ctx, client, printer, org, roles, mintProject, mintRegion)
 				if err != nil {
 					return err
 				}
 				sharedSlugs = slugs
-
-				prov := gcf.NewProvisioner(gcf.Config{
-					ProjectID:  mintProject,
-					GitHubOrgs: []string{org},
-				}, gcf.NewLiveGCFClient())
-				perOrgStoredIDs, _ = prov.GetExistingRoleAppIDs(ctx)
+				perOrgStoredIDs = storedIDs
 			}
 
 			// Collect agent credentials via app setup.
@@ -839,11 +834,14 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 	if needAppSetup {
 		var sharedSlugs map[string]string
 		if mintProject != "" {
-			slugs, slugErr := copySharedAppPEMs(ctx, client, printer, owner, roles, mintProject, mintRegion)
+			slugs, storedIDs, slugErr := copySharedAppPEMs(ctx, client, printer, owner, roles, mintProject, mintRegion)
 			if slugErr != nil {
 				return slugErr
 			}
 			sharedSlugs = slugs
+			if existingIDs == nil {
+				existingIDs = storedIDs
+			}
 		}
 
 		creds, credErr := runAppSetup(ctx, client, printer, owner, roles, mintProject, publicApps, sharedSlugs, c.AppSet, existingIDs)
@@ -1237,9 +1235,10 @@ func resolveSharedRoleAppIDs(ctx context.Context, client forge.Client, existingI
 // their PEM secrets to the target org's naming convention. This runs before
 // app setup so that handleExistingApp finds the PEM and returns credentials
 // without trying to generate a new key.
-// Returns a role → app-slug mapping for detected shared apps so callers
-// can pass them as known slugs to app setup.
-func copySharedAppPEMs(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject, mintRegion string) (map[string]string, error) {
+// Returns a role → app-slug mapping for detected shared apps and the full
+// ROLE_APP_IDS map (org/role → app_id) so callers can pass it to app setup
+// without a redundant GCP API call.
+func copySharedAppPEMs(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject, mintRegion string) (map[string]string, map[string]string, error) {
 	prov := gcf.NewProvisioner(gcf.Config{
 		ProjectID:  mintProject,
 		Region:     mintRegion,
@@ -1247,13 +1246,17 @@ func copySharedAppPEMs(ctx context.Context, client forge.Client, printer *ui.Pri
 	}, gcf.NewLiveGCFClient())
 
 	existingIDs, err := prov.GetExistingRoleAppIDs(ctx)
-	if err != nil || len(existingIDs) == 0 {
-		return nil, nil
+	if err != nil {
+		printer.StepWarn(fmt.Sprintf("Could not read ROLE_APP_IDS: %v", err))
+		return nil, nil, nil
+	}
+	if len(existingIDs) == 0 {
+		return nil, nil, nil
 	}
 
 	installations, err := client.ListOrgInstallations(ctx, org)
 	if err != nil {
-		return nil, nil
+		return nil, existingIDs, nil
 	}
 
 	roleSet := make(map[string]bool, len(roles))
@@ -1286,13 +1289,13 @@ func copySharedAppPEMs(ctx context.Context, client forge.Client, printer *ui.Pri
 
 			printer.StepStart(fmt.Sprintf("Shared app detected: %s (app %d) — copying PEM from %s", role, inst.AppID, srcOrg))
 			if err := prov.CopyAgentPEM(ctx, srcOrg, org, role); err != nil {
-				return nil, fmt.Errorf("copying shared PEM for %s: %w", role, err)
+				return nil, nil, fmt.Errorf("copying shared PEM for %s: %w", role, err)
 			}
 			printer.StepDone(fmt.Sprintf("Copied shared %s PEM", role))
 			break
 		}
 	}
-	return sharedSlugs, nil
+	return sharedSlugs, existingIDs, nil
 }
 
 // runAppSetup creates or reuses GitHub Apps for each role. When mintProject is
