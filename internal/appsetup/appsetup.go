@@ -175,12 +175,15 @@ func (s *Setup) WithPublicApps(public bool) *Setup {
 var appSetPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // ValidateAppSet checks that an app set slug is well-formed.
+// The max length is 23 characters because the final GitHub App name is
+// "{appSet}-{role}" and GitHub limits app names to 34 characters.
+// The longest built-in role is "prioritize" (10 chars), so: 23 + 1 + 10 = 34.
 func ValidateAppSet(appSet string) error {
 	if appSet == "" {
 		return fmt.Errorf("app set must not be empty")
 	}
-	if len(appSet) > 39 {
-		return fmt.Errorf("app set %q exceeds max length of 39 characters", appSet)
+	if len(appSet) > 23 {
+		return fmt.Errorf("app set %q exceeds max length of 23 characters (GitHub App names are limited to 34 characters, and the role suffix is appended)", appSet)
 	}
 	if !appSetPattern.MatchString(appSet) {
 		return fmt.Errorf("app set %q must be lowercase alphanumeric with hyphens (e.g., fullsend-ai)", appSet)
@@ -190,8 +193,7 @@ func ValidateAppSet(appSet string) error {
 
 // WithAppSet sets the app set prefix for GitHub App naming.
 // Apps are named "{appSet}-{role}" (e.g., "fullsend-ai-coder").
-// The appSet must be non-empty and contain only lowercase alphanumeric
-// characters and hyphens.
+// Callers must validate appSet via ValidateAppSet before calling this method.
 func (s *Setup) WithAppSet(appSet string) *Setup {
 	s.appSet = appSet
 	return s

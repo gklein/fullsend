@@ -268,7 +268,7 @@ fullsend admin uninstall "$ORG_NAME" --app-set "$ORG_NAME"
 
 ### Constraints
 
-- App set names must be lowercase alphanumeric with optional hyphens (no leading/trailing hyphens, no consecutive hyphens), max 39 characters
+- App set names must be lowercase alphanumeric with optional hyphens (no leading/trailing hyphens, no consecutive hyphens), max 23 characters (GitHub App names are limited to 34 characters, and the role suffix is appended)
 - The app set prefix only affects GitHub App slugs — GCP secret naming (`fullsend-{org}--{role}-app-pem`) and mint `ROLE_APP_IDS` keys (`{org}/{role}`) are independent of the app set
 
 ---

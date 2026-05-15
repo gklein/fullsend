@@ -91,8 +91,8 @@ func TestValidateAppSet(t *testing.T) {
 		{"underscore", "full_send", true},
 		{"space", "full send", true},
 		{"special chars", "special!chars", true},
-		{"too long", "a23456789012345678901234567890123456789x", true},
-		{"max length ok", "a2345678901234567890123456789012345678x", false},
+		{"too long", "a2345678901234567890123x", true},
+		{"max length ok", "a234567890123456789012x", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
