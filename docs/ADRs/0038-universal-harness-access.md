@@ -12,7 +12,7 @@ topics:
   - remote-resources
 ---
 
-<!-- Note: Numbered 0038 instead of 0037 to avoid collision with PR #980 (cross-org-token-minting) which uses ADR-0037 -->
+<!-- Note: Numbered 0038 instead of 0037 to avoid collision with PR #980 which uses ADR-0037 "Cross-org token minting for issue proposals" -->
 
 # 38. Universal harness access via URLs and paths
 
