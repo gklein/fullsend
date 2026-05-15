@@ -538,6 +538,11 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 
 		// 9d. Extract target repo back to host. SafeDownload removes symlinks
 		// and .git/hooks/ after download to prevent sandbox escape.
+		if iteration > 1 {
+			if err := os.RemoveAll(repoSrc); err != nil {
+				printer.StepWarn("clear local repo: " + err.Error())
+			}
+		}
 		repoExtractStart := time.Now()
 		printer.StepStart("Extracting target repo")
 		if err := sandbox.SafeDownload(sandboxName, repoDir, repoSrc); err != nil {
