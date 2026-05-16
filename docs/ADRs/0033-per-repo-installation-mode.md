@@ -229,9 +229,10 @@ Apps ([ADR 0007](0007-per-role-github-apps.md)), but user-owned. The user
 deploys their own mint and creates their own Apps via `fullsend admin
 install owner/repo --mint-project=my-proj`.
 
-The mint's `job_workflow_ref` validation accepts both patterns:
-- `{org}/.fullsend/.github/workflows/*.yml@*` (per-org)
-- `fullsend-ai/fullsend/.github/workflows/reusable-*.yml@*` (per-repo)
+The mint's `job_workflow_ref` validation accepts three patterns:
+- `{org}/.fullsend/.github/workflows/*.yml@*` (per-org shim workflows)
+- `fullsend-ai/fullsend/.github/workflows/reusable-*.yml@*` (upstream reusable workflows called via `workflow_call`)
+- `{owner}/{repo}/.github/workflows/*.yml@*` where `{owner}/{repo}` is registered in `PER_REPO_WIF_REPOS` (per-repo workflows running directly via `workflow_dispatch`)
 
 The `repository_owner` claim scopes tokens to the calling org/user.
 `ALLOWED_ORGS` on the mint controls which orgs may request tokens.
