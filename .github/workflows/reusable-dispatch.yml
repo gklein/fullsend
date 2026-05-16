@@ -78,6 +78,7 @@ jobs:
           TRIGGERING_LABEL: ${{ github.event.label.name }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_USER_LOGIN: ${{ github.event.pull_request.user.login }}
           ORG_NAME: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
@@ -114,18 +115,18 @@ jobs:
           case "${EVENT_NAME}" in
             issue_comment)
               case "${COMMAND}" in
-                /fs-triage)
+                /triage)
                   STAGE="triage"
                   ;;
-                /fs-code)
+                /code)
                   if [[ "${ISSUE_HAS_PR}" == "false" ]]; then
                     STAGE="code"
                   fi
                   ;;
-                /fs-review)
+                /review)
                   STAGE="review"
                   ;;
-                /fs-fix)
+                /fix)
                   if [[ "${ISSUE_HAS_PR}" == "true" ]]; then
                     if [[ "${COMMENT_USER_TYPE}" != "Bot" ]] && is_authorized; then
                       STAGE="fix"
@@ -133,9 +134,16 @@ jobs:
                     fi
                   fi
                   ;;
-                /fs-retro)
+                /retro|/fullsend)
                   if [[ "${COMMENT_USER_TYPE}" != "Bot" ]] && is_authorized; then
-                    STAGE="retro"
+                    if [[ "${COMMAND}" == "/fullsend" ]]; then
+                      SECOND_WORD="$(printf '%s\n' "${COMMENT_BODY}" | head -1 | awk '{print $2}')"
+                      if [[ "${SECOND_WORD}" == "retro" ]]; then
+                        STAGE="retro"
+                      fi
+                    else
+                      STAGE="retro"
+                    fi
                   fi
                   ;;
                 *)
@@ -178,8 +186,14 @@ jobs:
                   if [[ -n "${PR_HEAD_REPO}" && -n "${PR_BASE_REPO}" ]]; then
                     if [[ "${PR_HEAD_REPO}" == "${PR_BASE_REPO}" ]]; then
                       if ! has_label "fullsend-no-fix" "${PR_LABELS}"; then
-                        STAGE="fix"
-                        TRIGGER_SOURCE="${REVIEW_USER_LOGIN}"
+                        # Human PRs require the fullsend-fix label to auto-trigger
+                        # the fix agent. The /fs-fix slash command (line ~129)
+                        # intentionally bypasses this gate — authorized users can
+                        # always trigger fix manually regardless of labels.
+                        if [[ "${PR_USER_LOGIN}" =~ \[bot\]$ ]] || has_label "fullsend-fix" "${PR_LABELS}"; then
+                          STAGE="fix"
+                          TRIGGER_SOURCE="${REVIEW_USER_LOGIN}"
+                        fi
                       fi
                     fi
                   fi
@@ -242,7 +256,8 @@ jobs:
           fi
           STAGE_ROLE="$STAGE"
           case "$STAGE" in
-            code|fix) STAGE_ROLE="coder" ;;
+            code) STAGE_ROLE="coder" ;;
+            retro|prioritize) STAGE_ROLE="fullsend" ;;
           esac
           ROLES=$(yq '.roles[]' .fullsend/config.yaml 2>/dev/null || echo "")
           if [[ -n "$ROLES" ]] && ! echo "$ROLES" | grep -Fqx "$STAGE_ROLE"; then
