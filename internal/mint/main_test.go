@@ -598,6 +598,74 @@ func TestHandler_OIDCPrevalidation_BadJobWorkflowRef(t *testing.T) {
 	}
 }
 
+func TestHandler_OIDCPrevalidation_PerRepoWorkflowRef(t *testing.T) {
+	setMintEnv(t)
+	t.Setenv("PER_REPO_WIF_REPOS", "test-org/my-service")
+	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
+
+	oidcToken := makeTestOIDCToken(
+		"https://token.actions.githubusercontent.com",
+		"fullsend-mint",
+		"test-org/my-service",
+		"test-org",
+		"test-org/my-service/.github/workflows/gh-classify.yml@refs/heads/main",
+		time.Now().Add(10*time.Minute).Unix(),
+	)
+
+	claims, err := h.prevalidateOIDCToken(oidcToken)
+	if err != nil {
+		t.Fatalf("prevalidation should accept registered per-repo workflow ref: %v", err)
+	}
+	if claims.Repository != "test-org/my-service" {
+		t.Fatalf("expected repository test-org/my-service, got %s", claims.Repository)
+	}
+}
+
+func TestHandler_OIDCPrevalidation_PerRepoUnregistered(t *testing.T) {
+	setMintEnv(t)
+	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
+
+	oidcToken := makeTestOIDCToken(
+		"https://token.actions.githubusercontent.com",
+		"fullsend-mint",
+		"test-org/unregistered-repo",
+		"test-org",
+		"test-org/unregistered-repo/.github/workflows/steal-tokens.yml@refs/heads/main",
+		time.Now().Add(10*time.Minute).Unix(),
+	)
+
+	_, err := h.prevalidateOIDCToken(oidcToken)
+	if err == nil {
+		t.Fatal("prevalidation should reject unregistered per-repo workflow ref")
+	}
+	if !strings.Contains(err.Error(), "registered per-repo repo") {
+		t.Fatalf("expected per-repo rejection error, got: %v", err)
+	}
+}
+
+func TestHandler_OIDCPrevalidation_PerRepoNonWorkflowPath(t *testing.T) {
+	setMintEnv(t)
+	t.Setenv("PER_REPO_WIF_REPOS", "test-org/my-service")
+	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
+
+	oidcToken := makeTestOIDCToken(
+		"https://token.actions.githubusercontent.com",
+		"fullsend-mint",
+		"test-org/my-service",
+		"test-org",
+		"test-org/my-service/scripts/evil.sh@refs/heads/main",
+		time.Now().Add(10*time.Minute).Unix(),
+	)
+
+	_, err := h.prevalidateOIDCToken(oidcToken)
+	if err == nil {
+		t.Fatal("prevalidation should reject per-repo non-workflow path")
+	}
+	if !strings.Contains(err.Error(), "does not reference a workflow file") {
+		t.Fatalf("expected workflow file error, got: %v", err)
+	}
+}
+
 func TestHandler_OIDCPrevalidation_NonWorkflowPath(t *testing.T) {
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 
