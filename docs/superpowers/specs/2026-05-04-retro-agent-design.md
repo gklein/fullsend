@@ -184,7 +184,7 @@ A standard dispatch workflow that runs `fullsend run retro` with the provided in
 - **Credential isolation (ADR 0017):** Write credentials (`gh` token with issue-create and comment permissions) are held only by the post-script, outside the sandbox.
 - **Unidirectional control flow (ADR 0016):** The retro agent proposes changes via issues. Changes go through standard review (CODEOWNERS, human approval) and take effect in future invocations, never the current one.
 - **Adversarial feedback risk:** A malicious reviewer could post `/fs-retro` with misleading context to bias the retro agent's proposals. The mitigation is the same human approval gate on the resulting issues — a proposal only takes effect if a maintainer approves and merges the change.
-- **Per-role GitHub App (ADR 0007):** The retro agent gets its own GitHub App with scoped permissions: read access to repos, issues, PRs, workflow runs, and artifacts; write access limited to creating issues and posting comments.
+- **Per-role GitHub App (ADR 0007):** The retro agent gets its own GitHub App with scoped permissions: read access to repos, PRs, workflow runs, and artifacts; write access to issues only. The post-script uses the REST Issues API (`POST /repos/{owner}/{repo}/issues/{number}/comments`) to comment on PRs, which requires only `issues: write` — avoiding `pull_requests: write` and the broader capabilities it grants.
 
 ## Architectural Constraints
 
