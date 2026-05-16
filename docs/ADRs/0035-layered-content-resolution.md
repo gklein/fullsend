@@ -47,11 +47,12 @@ Three coordinated changes, applied uniformly to both installation modes
 `harness/`, `policies/`, `scripts/`, `env/`) containing `.gitkeep` files. The
 location differs by install mode:
 
-- **Per-org** (`fullsend admin install`): `customized/` in the org-level
+- **Per-org** (`fullsend admin install <org>`): `customized/` in the org-level
   `<org>/.fullsend` repo. Orgs add overrides here that apply to all enrolled
   repos.
-- **Per-repo** (`fullsend admin install --repo`): `.fullsend/customized/` in
-  the target repo itself. The repo adds overrides that apply only to that repo.
+- **Per-repo** (`fullsend admin install <owner/repo>`): `.fullsend/customized/`
+  in the target repo itself. The repo adds overrides that apply only to that
+  repo.
 
 In both cases the main dirs (`agents/`, `skills/`, etc.) are not committed —
 they are populated at runtime from upstream.
