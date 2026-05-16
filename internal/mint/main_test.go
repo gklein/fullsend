@@ -666,6 +666,49 @@ func TestHandler_OIDCPrevalidation_PerRepoNonWorkflowPath(t *testing.T) {
 	}
 }
 
+func TestHandler_OIDCPrevalidation_PerRepoCrossRepoRef(t *testing.T) {
+	setMintEnv(t)
+	t.Setenv("PER_REPO_WIF_REPOS", "test-org/my-service,test-org/other-repo")
+	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
+
+	oidcToken := makeTestOIDCToken(
+		"https://token.actions.githubusercontent.com",
+		"fullsend-mint",
+		"test-org/my-service",
+		"test-org",
+		"test-org/other-repo/.github/workflows/evil.yml@refs/heads/main",
+		time.Now().Add(10*time.Minute).Unix(),
+	)
+
+	_, err := h.prevalidateOIDCToken(oidcToken)
+	if err == nil {
+		t.Fatal("prevalidation should reject per-repo token with cross-repo job_workflow_ref")
+	}
+}
+
+func TestHandler_OIDCPrevalidation_PerRepoMixedCase(t *testing.T) {
+	setMintEnv(t)
+	t.Setenv("PER_REPO_WIF_REPOS", "Test-Org/My-Service")
+	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
+
+	oidcToken := makeTestOIDCToken(
+		"https://token.actions.githubusercontent.com",
+		"fullsend-mint",
+		"test-org/my-service",
+		"test-org",
+		"test-org/my-service/.github/workflows/gh-classify.yml@refs/heads/main",
+		time.Now().Add(10*time.Minute).Unix(),
+	)
+
+	claims, err := h.prevalidateOIDCToken(oidcToken)
+	if err != nil {
+		t.Fatalf("prevalidation should accept per-repo ref with case-insensitive matching: %v", err)
+	}
+	if claims.Repository != "test-org/my-service" {
+		t.Fatalf("expected repository test-org/my-service, got %s", claims.Repository)
+	}
+}
+
 func TestHandler_OIDCPrevalidation_NonWorkflowPath(t *testing.T) {
 	h := NewHandler(&fakePEMAccessor{}, &fakeTokenValidator{})
 
@@ -1364,6 +1407,42 @@ func TestServeHTTP_PerRepoProvider(t *testing.T) {
 
 	// The fake validator succeeds, so the request proceeds to minting.
 	// We verify the correct provider was resolved.
+	want := buildRepoProviderID("test-org", "integration-service")
+	if tv.lastProvider != want {
+		t.Fatalf("expected provider %q, got %q", want, tv.lastProvider)
+	}
+}
+
+func TestServeHTTP_PerRepoDirectWorkflow(t *testing.T) {
+	setMintEnv(t)
+	t.Setenv("PER_REPO_WIF_REPOS", "test-org/integration-service")
+	pemData, err := generateTestRSAKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tv := &fakeTokenValidator{}
+	h := NewHandler(
+		&fakePEMAccessor{pems: map[string][]byte{"test-org/coder": pemData}},
+		tv,
+	)
+
+	// Token from a per-repo workflow_dispatch — job_workflow_ref references the
+	// target repo itself, not .fullsend or fullsend-ai/fullsend.
+	oidcToken := makeTestOIDCToken(
+		"https://token.actions.githubusercontent.com",
+		"fullsend-mint",
+		"test-org/integration-service",
+		"test-org",
+		"test-org/integration-service/.github/workflows/gh-classify.yml@refs/heads/main",
+		time.Now().Add(10*time.Minute).Unix(),
+	)
+
+	body := `{"role":"coder","repos":["test-repo"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/token", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+oidcToken)
+	h.ServeHTTP(rec, req)
+
 	want := buildRepoProviderID("test-org", "integration-service")
 	if tv.lastProvider != want {
 		t.Fatalf("expected provider %q, got %q", want, tv.lastProvider)

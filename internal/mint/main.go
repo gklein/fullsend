@@ -601,8 +601,9 @@ func (h *Handler) prevalidateOIDCToken(token string) (*oidcClaims, error) {
 		relPath = strings.TrimPrefix(ref, upstreamPrefix)
 	default:
 		repoKey := strings.ToLower(claims.Repository)
-		if h.perRepoWIFRepos[repoKey] {
-			relPath = strings.TrimPrefix(ref, repoKey+"/")
+		repoPrefix := repoKey + "/"
+		if h.perRepoWIFRepos[repoKey] && strings.HasPrefix(ref, repoPrefix) {
+			relPath = strings.TrimPrefix(ref, repoPrefix)
 		} else {
 			return nil, fmt.Errorf("job_workflow_ref does not reference .fullsend, upstream repo, or registered per-repo repo")
 		}
