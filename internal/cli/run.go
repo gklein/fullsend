@@ -31,6 +31,15 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
+const (
+	claudeDebugLog = "claude-debug.log"
+
+	// maxContextScanDepth is the maximum directory depth for scanning context
+	// files. Shared between host-side (scanRepoContextFiles) and sandbox-side
+	// (buildScanContextCommand) scans to ensure parity.
+	maxContextScanDepth = 5
+)
+
 func newRunCmd() *cobra.Command {
 	var fullsendDir string
 	var outputBase string
@@ -1107,11 +1116,11 @@ func buildClaudeCommand(agentName, model, repoDir string, pluginDirs []string, d
 	}
 
 	debugFlags := ""
-	if debug == "*" {
-		debugFlags = fmt.Sprintf("--debug-file %s/%s ", sandbox.SandboxWorkspace, claudeDebugLog)
-	} else if debug != "" {
-		debugFlags = fmt.Sprintf("--debug-file %s/%s --debug '%s' ",
-			sandbox.SandboxWorkspace, claudeDebugLog, strings.ReplaceAll(debug, "'", "'\\''"))
+	if debug != "" {
+		debugFlags = fmt.Sprintf("--debug-file '%s/%s' ", sandbox.SandboxWorkspace, claudeDebugLog)
+		if debug != "*" {
+			debugFlags += fmt.Sprintf("--debug '%s' ", strings.ReplaceAll(debug, "'", "'\\''"))
+		}
 	}
 
 	return fmt.Sprintf(
@@ -1122,13 +1131,6 @@ func buildClaudeCommand(agentName, model, repoDir string, pluginDirs []string, d
 		repoDir, envFile, debugFlags, modelFlag, pluginDirFlags, safe,
 	)
 }
-
-const claudeDebugLog = "claude-debug.log"
-
-// maxContextScanDepth is the maximum directory depth for scanning context
-// files. Shared between host-side (scanRepoContextFiles) and sandbox-side
-// (buildScanContextCommand) scans to ensure parity.
-const maxContextScanDepth = 5
 
 // buildScanContextCommand builds the command to run `fullsend scan context`
 // inside the sandbox. It finds known context files (including SKILL.md in

@@ -126,13 +126,13 @@ func TestBuildClaudeCommand_NoPlugins(t *testing.T) {
 
 func TestBuildClaudeCommand_DebugAll(t *testing.T) {
 	cmd := buildClaudeCommand("agent", "", "/tmp/workspace/repo", nil, "*")
-	assert.Contains(t, cmd, "--debug-file /tmp/workspace/claude-debug.log")
+	assert.Contains(t, cmd, "--debug-file '/tmp/workspace/claude-debug.log'")
 	assert.NotContains(t, cmd, "--debug '")
 }
 
 func TestBuildClaudeCommand_DebugFiltered(t *testing.T) {
 	cmd := buildClaudeCommand("agent", "", "/tmp/workspace/repo", nil, "api,hooks")
-	assert.Contains(t, cmd, "--debug-file /tmp/workspace/claude-debug.log")
+	assert.Contains(t, cmd, "--debug-file '/tmp/workspace/claude-debug.log'")
 	assert.Contains(t, cmd, "--debug 'api,hooks'")
 }
 
@@ -140,6 +140,11 @@ func TestBuildClaudeCommand_DebugDisabled(t *testing.T) {
 	cmd := buildClaudeCommand("agent", "", "/tmp/workspace/repo", nil, "")
 	assert.NotContains(t, cmd, "--debug-file")
 	assert.NotContains(t, cmd, "--debug")
+}
+
+func TestBuildClaudeCommand_DebugEscapesQuotes(t *testing.T) {
+	cmd := buildClaudeCommand("agent", "", "/tmp/workspace/repo", nil, "api'hooks")
+	assert.Contains(t, cmd, "--debug 'api'\\''hooks'")
 }
 
 func TestBuildPluginConfigs_SinglePlugin(t *testing.T) {
