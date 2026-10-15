@@ -125,6 +125,15 @@ repos:
         files: ^(pkg/behaviourtest/drivers/ci/driver\.go|docs/guides/dev/behaviour-drivers\.md)$
         pass_filenames: false
 
+      # Runs on every commit, not a files: filter: its sweep must see a new
+      # hardcoded OpenShell version in any file. It is a few greps.
+      - id: lint-openshell-pin-sync
+        name: lint openshell pin sync
+        entry: ./hack/lint-openshell-pin-sync
+        language: script
+        always_run: true
+        pass_filenames: false
+
       - id: lint-adr-status
         name: lint ADR statuses
         entry: ./hack/lint-adr-status

@@ -1,0 +1,101 @@
+#!/bin/bash
+
+# lint-openshell-pin-sync — Verify every hardcoded copy of the OpenShell
+# version matches the pin in .github/scripts/openshell-version.sh (#4808).
+#
+# Renovate bumps these copies in the same openshell group PR as the pin
+# (see the customManagers in renovate.json). This check catches the cases
+# Renovate cannot: a manual pin bump that skips a copy, a reworded line the
+# Renovate regex no longer matches, and a new copy nobody registered.
+#
+# To add a copy: list it in COPIES below and in the matching customManager's
+# managerFilePatterns in renovate.json.
+#
+# REPO_ROOT may be overridden (used by lint-openshell-pin-sync_test.sh).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
+PIN_FILE=".github/scripts/openshell-version.sh"
+VERSION_RE='[0-9]+\.[0-9]+\.[0-9]+'
+
+# file|ERE prefix that precedes the version. Keep the prefixes in step with
+# the matchStrings of the renovate.json customManager.
+COPIES=(
+    "docs/guides/user/running-agents-locally.md|export OPENSHELL_VERSION="
+    "docs/guides/user/running-agents-locally.md|ghcr\.io/nvidia/openshell/supervisor:"
+    "hack/gitlab-runner-vm/create-gcp-vm.sh|OPENSHELL_VERSION:-"
+    "hack/gitlab-runner-vm/create-openshift-vm.sh|OPENSHELL_VERSION:-"
+    "hack/gitlab-runner-vm/setup.sh|OPENSHELL_VERSION:-"
+)
+
+if [[ ! -f "$REPO_ROOT/$PIN_FILE" ]]; then
+    echo "ERROR: pin file not found: $PIN_FILE" >&2
+    exit 1
+fi
+
+pin_lines=$(grep -E "^OPENSHELL_VERSION=${VERSION_RE}\$" "$REPO_ROOT/$PIN_FILE" || true)
+if [[ -z "$pin_lines" || "$(printf '%s\n' "$pin_lines" | wc -l | tr -d '[:space:]')" -ne 1 ]]; then
+    echo "ERROR: expected exactly one 'OPENSHELL_VERSION=X.Y.Z' line in $PIN_FILE" >&2
+    exit 1
+fi
+pin="${pin_lines#OPENSHELL_VERSION=}"
+
+rc=0
+allowed=""
+
+for entry in "${COPIES[@]}"; do
+    file="${entry%%|*}"
+    prefix="${entry#*|}"
+    if [[ ! -f "$REPO_ROOT/$file" ]]; then
+        echo "ERROR: $file not found; update COPIES in hack/lint-openshell-pin-sync and renovate.json" >&2
+        rc=1
+        continue
+    fi
+    matches=$(grep -noE "${prefix}${VERSION_RE}" "$REPO_ROOT/$file" || true)
+    count=0
+    [[ -n "$matches" ]] && count=$(printf '%s\n' "$matches" | wc -l | tr -d '[:space:]')
+    if [[ "$count" -ne 1 ]]; then
+        echo "DESYNC: $file: expected exactly one '${prefix}X.Y.Z', found $count (reworded lines silently drop out of Renovate tracking)" >&2
+        rc=1
+        continue
+    fi
+    line="${matches%%:*}"
+    got=$(printf '%s\n' "$matches" | grep -oE "${VERSION_RE}\$")
+    if [[ "$got" != "$pin" ]]; then
+        echo "DESYNC: $file:$line has OpenShell $got, pin in $PIN_FILE is $pin" >&2
+        rc=1
+    fi
+    allowed="${allowed}${file}:${line}"$'\n'
+done
+
+# Any other literal OpenShell version is an unregistered copy. Test fixtures
+# use made-up versions on purpose and are skipped. Submodules (experiments/)
+# are another repo Renovate does not scan here, and CI does not check them
+# out, so a user-level submodule.recurse=true must not pull them in. git grep
+# exits 1 on no match; anything higher is an error and must not pass as "clean".
+grep_rc=0
+hits=$(git -C "$REPO_ROOT" -c submodule.recurse=false grep -nE \
+    "OPENSHELL_VERSION(=|:-)v?[0-9]|openshell/supervisor:v?[0-9]" \
+    -- . ":!$PIN_FILE" ":!*_test.sh" ":!*_test.go" ":!*_test.py" ":!*.test.*") || grep_rc=$?
+if [[ $grep_rc -gt 1 ]]; then
+    echo "ERROR: git grep failed in $REPO_ROOT (exit $grep_rc)" >&2
+    exit 1
+fi
+
+while IFS= read -r hit; do
+    [[ -z "$hit" ]] && continue
+    loc=$(printf '%s\n' "$hit" | cut -d: -f1-2)
+    if ! printf '%s' "$allowed" | grep -qxF "$loc"; then
+        echo "UNTRACKED: $hit" >&2
+        echo "  hardcoded OpenShell version outside COPIES; source $PIN_FILE instead, or register it in COPIES and renovate.json" >&2
+        rc=1
+    fi
+done <<< "$hits"
+
+if [[ $rc -eq 0 ]]; then
+    echo "OK: OpenShell version copies match pin $pin"
+fi
+exit $rc
